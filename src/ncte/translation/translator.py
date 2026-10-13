@@ -21,6 +21,7 @@ from ..config import Config
 from ..epub.units import InlineSpec
 from ..errors import ContentBlockedError, ModelOutputError, RequestRejectedError
 from ..llm.base import LLMClient, LLMRequest, LLMResponse, StructuredMode
+from ..llm.cost import estimate_tokens
 from ..llm.prompt_loader import Prompt, load_prompt
 from ..llm.schemas import SCHEMAS, TranslationBatchOutput, strict_json_schema
 from ..qa.rules import Finding, check_batch, check_translation
@@ -108,6 +109,18 @@ def parse_json_output(content: str, model: type[BaseModel]) -> tuple[BaseModel, 
         raise ModelOutputError(f"schema validation failed: {str(exc)[:400]}") from exc
 
 
+AUTO_MAX_TOKENS_FLOOR = 16384
+AUTO_MAX_TOKENS_CEIL = 65536
+
+
+def auto_max_tokens(user_content: str) -> int:
+    """Output cap when the config sets none. Without one OpenRouter reserves credit for the model's full
+    output limit (65,536 for Gemini Flash), which a key with a low spending limit cannot afford even when
+    the real answer is a few thousand tokens. Output (translation + reasoning) stays well under 4× the
+    payload, which already includes the context; a truncated answer is retried once with a doubled cap."""
+    return max(AUTO_MAX_TOKENS_FLOOR, min(AUTO_MAX_TOKENS_CEIL, 4 * estimate_tokens(user_content)))
+
+
 def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model: str, prompt: Prompt,
                     payload: dict[str, Any], mode: StructuredMode, cfg: Config, unit_ids: list[str],
                     est_cost: float, correction: str | None = None,
@@ -120,11 +133,15 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
     current: StructuredMode = mode
+    max_tokens = cfg.openrouter.max_output_tokens
+    auto_cap = max_tokens is None
+    if auto_cap:
+        max_tokens = auto_max_tokens(messages[1]["content"])
     while True:
         req = LLMRequest(stage=stage, model=model, messages=messages, schema_name=f"ncte_{stage.split(':')[0]}",
                          json_schema=strict_json_schema(schema_model) if current == "json_schema" else None,
                          structured_mode=current, temperature=cfg.openrouter.temperature,
-                         max_tokens=cfg.openrouter.max_output_tokens, prompt_version=prompt.version_id,
+                         max_tokens=max_tokens, prompt_version=prompt.version_id,
                          extra={"reasoning": {"effort": cfg.openrouter.reasoning_effort}}
                          if cfg.openrouter.reasoning_effort else {})
         rid = recorder.start(req, unit_ids, est_cost)
@@ -144,6 +161,9 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
             raise
         if resp.finish_reason == "length":
             recorder.success(rid, resp, "truncated")
+            if auto_cap and max_tokens is not None and max_tokens < AUTO_MAX_TOKENS_CEIL:
+                max_tokens = min(AUTO_MAX_TOKENS_CEIL, max_tokens * 2)
+                continue
             raise ModelOutputError("output truncated (finish_reason=length)")
         try:
             parsed, status = parse_json_output(resp.content, schema_model)

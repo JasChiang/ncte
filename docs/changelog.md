@@ -245,3 +245,5 @@ open workspace/eval/<timestamp>/report.html
 - 實書（兩集的電撃文庫系列）：書名「〇〇 (電撃文庫)」「〇〇2 (電撃文庫)」偵測失敗 → 新增去除書名後的文庫／版本標註（`clean_title`）與「集數緊接在日文書名後」的規則；新系列名稱也去除標註。第 2 集以 `--series auto` 正確加入第 1 集的系列。
 - 試算的「以實際花費校正」改為參考書庫中所有系列的歷史請求（每個系列一個資料庫後，新系列原本沒有校正資料）。212 passed。
 - 實書（第 1 集，context／low，US$2.96，2,639 段全數翻譯）：Google AI Studio 偶發回傳 HTTP 400「User location is not supported for the API use」（FAILED_PRECONDITION），導致 1 個場景分析與 3 段審稿未完成。這是上游路由的暫時問題，改為以 backoff 自動重試（`is_transient_rejection`）。213 passed。
+- 第 1 集匯出：EPUBCheck 30 個錯誤全部是原檔既有（原檔另有 5,357 個 EPUB 2 不允許的 ruby 錯誤，譯文平坦化 ruby 後消失）。
+- 第 2 集在 57/66 場景時金鑰達到 US$10 上限（剩 US$0.24）而以 402 停止：未設定輸出上限時 OpenRouter 依模型最大輸出（65,536 tokens）預扣額度。新增 `auto_max_tokens`：設定檔未指定 `max_output_tokens` 時，以請求內容 4 倍 tokens 為上限（16,384～65,536），被截斷（`finish_reason=length`）時加倍重試；使用者自行設定的上限不變。216 passed。

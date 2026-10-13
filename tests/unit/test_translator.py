@@ -75,3 +75,41 @@ def test_strict_parse():
         parse_json_output('{"translations": [{"unit_id": "a"}]}', TranslationBatchOutput)
     obj, st = parse_json_output('```json\n{"translations": []}\n```', TranslationBatchOutput)
     assert st == "repaired_fence"
+
+
+class _CapClient:
+    """Answers through FakeLLM but reports truncation until max_tokens reaches ``need``."""
+
+    name = "fake"
+
+    def __init__(self, need):
+        self.inner, self.need, self.seen = FakeLLM(), need, []
+
+    def complete(self, req):
+        self.seen.append(req.max_tokens)
+        resp = self.inner.complete(req)
+        if req.max_tokens < self.need:
+            resp.finish_reason = "length"
+        return resp
+
+
+def test_auto_max_tokens_bounds():
+    from ncte.translation.translator import AUTO_MAX_TOKENS_CEIL, AUTO_MAX_TOKENS_FLOOR, auto_max_tokens
+
+    assert auto_max_tokens("短い") == AUTO_MAX_TOKENS_FLOOR
+    assert auto_max_tokens("あ" * 10_000) == 40_004
+    assert auto_max_tokens("あ" * 100_000) == AUTO_MAX_TOKENS_CEIL
+
+
+def test_auto_cap_is_sent_and_doubled_on_truncation():
+    client = _CapClient(need=30_000)
+    r = tr(client).translate(units(), {})
+    assert not r.failed and client.seen == [16384, 32768]
+
+
+def test_configured_cap_is_not_raised():
+    cfg = Config()
+    cfg.openrouter.max_output_tokens = 1000
+    client = _CapClient(need=30_000)
+    tr(client, cfg).translate(units(), {})
+    assert set(client.seen) == {1000}
