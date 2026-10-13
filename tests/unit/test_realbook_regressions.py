@@ -71,7 +71,8 @@ def test_dry_run_calibration(conn, cfg, fixtures):
 def test_generic_terms_are_not_glossary_terms():
     from ncte.lexicon import acceptable_glossary_term
 
-    assert not any(acceptable_glossary_term(t) for t in ["男", "母", "姫", "先生", "お客さん", "スタッフ"])
+    assert not any(acceptable_glossary_term(t) for t in ["男", "母", "姫", "先生", "お客さん", "スタッフ",
+                                                       "おねえちゃん", "姉ちゃん", "ママ"])
     assert acceptable_glossary_term("ソラっち") and acceptable_glossary_term("天野ソラ")
 
 

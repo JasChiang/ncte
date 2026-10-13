@@ -247,3 +247,8 @@ open workspace/eval/<timestamp>/report.html
 - 實書（第 1 集，context／low，US$2.96，2,639 段全數翻譯）：Google AI Studio 偶發回傳 HTTP 400「User location is not supported for the API use」（FAILED_PRECONDITION），導致 1 個場景分析與 3 段審稿未完成。這是上游路由的暫時問題，改為以 backoff 自動重試（`is_transient_rejection`）。213 passed。
 - 第 1 集匯出：EPUBCheck 30 個錯誤全部是原檔既有（原檔另有 5,357 個 EPUB 2 不允許的 ruby 錯誤，譯文平坦化 ruby 後消失）。
 - 第 2 集在 57/66 場景時金鑰達到 US$10 上限（剩 US$0.24）而以 402 停止：未設定輸出上限時 OpenRouter 依模型最大輸出（65,536 tokens）預扣額度。新增 `auto_max_tokens`：設定檔未指定 `max_output_tokens` 時，以請求內容 4 倍 tokens 為上限（16,384～65,536），被截斷（`finish_reason=length`）時加倍重試；使用者自行設定的上限不變。216 passed。
+- 第 2 集（`ncte resume`）完成：US$2.80，2,447 段全數翻譯；1 個場景分析被 Gemini 內容過濾擋下（譯文不受影響，只少了該場景的說話者判定與記憶）。第 1 集補完失敗的場景分析與 3 段審稿（「User location」重試生效）。兩集 EPUBCheck 剩餘錯誤皆為原檔既有。系列合計約 US$5.80。
+- 審稿意見落實為人工修正 2 段（叫名字到一半改口的「あだ……」→「安……」；被動句不補人名）。
+- QA：口語親屬稱謂（おねえちゃん、姉ちゃん、ママ…）列入 `GENERIC_REFERENTS`，不再當作人名（誤報）；術語比對先去除 placeholder（「株式會社⟦2⟧KADOKAWA⟦/2⟧」）。
+- 實體卡：「しまちゃん」是姊妹兩人共用的小名，模型先後連到兩人，`merge_into` 把整張卡一起搬走，結果把妹妹的稱呼併進島村，島村的實體卡也以妹妹的稱呼命名。修正：自動（llm/pattern）連結若會合併兩個各有多個稱呼的實體，只記為待確認候選，由人決定；實體名稱與類型改由正式稱呼決定（`refresh_entity`）；`unlink` 修正實體 id 撞號（實體以該稱呼命名時原本不會真的拆開），並只從原實體的角色移除別名。實書資料已修正（備份 `ncte.before-sisterfix.db`）。
+- 人物關係圖：Mermaid 宣告所有被事實邊引用的節點（沒有出場計數的角色原本沒有標籤）。220 passed。

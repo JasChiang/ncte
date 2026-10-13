@@ -40,3 +40,10 @@ def test_codex_cli(tmp_path, fixtures):
         out = r.invoke(app, ["-w", str(ws), *args])
         assert out.exit_code == 0, out.output
     assert list((ws / "reports").rglob("relations.html")) and list((ws / "reports").rglob("index.md"))
+
+
+def test_mermaid_declares_every_node_an_edge_uses():
+    rel = {"labels": {"a": "島村", "b": "安達", "c": "島村妹妹"}, "nodes": [{"id": "a", "label": "島村", "scenes": 3}],
+           "co_appearance": [], "relations": [{"subject": "a", "predicate": "姐姐", "targets": ["c"]}]}
+    out = relations_mermaid(rel)
+    assert 'C2["島村妹妹"]' in out and "C0 -.->|姐姐| C2" in out and "C1" not in out

@@ -78,6 +78,34 @@ def backfill_entities(conn: sqlite3.Connection, book_id: str) -> int:
     return n
 
 
+def _entity_of(conn: sqlite3.Connection, book_id: str, term: str) -> str | None:
+    row = conn.execute(f"SELECT entity_id FROM glossary WHERE {SERIES_SCOPE} AND source_term=?", (book_id, term)).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+def _form_count(conn: sqlite3.Connection, book_id: str, eid: str) -> int:
+    return int(conn.execute(f"SELECT count(*) FROM glossary WHERE {SERIES_SCOPE} AND entity_id=?", (book_id, eid))
+               .fetchone()[0])
+
+
+def _joins_two_entities(conn: sqlite3.Connection, book_id: str, term: str, target: str) -> bool:
+    """True when linking would fuse two entities that each already have several forms."""
+    s_eid, t_eid = _entity_of(conn, book_id, term), _entity_of(conn, book_id, target)
+    return (s_eid is not None and t_eid is not None and s_eid != t_eid
+            and _form_count(conn, book_id, s_eid) > 1 and _form_count(conn, book_id, t_eid) > 1)
+
+
+def refresh_entity(conn: sqlite3.Connection, book_id: str, eid: str) -> None:
+    """Label an entity by its official form (else its earliest form) and make it a character entity when any
+    form is a character name, so the first form that happened to be linked does not name it forever."""
+    forms = conn.execute(f"SELECT source_term, category, form_type FROM glossary WHERE {SERIES_SCOPE} AND entity_id=? "
+                         "ORDER BY form_type!='official', category!='character', id", (book_id, eid)).fetchall()
+    if not forms:
+        return
+    kind = "character" if any(f[1] == "character" for f in forms) else forms[0][1]
+    conn.execute("UPDATE entities SET label_ja=?, kind=?, updated_at=? WHERE id=?", (forms[0][0], kind, utcnow(), eid))
+
+
 def merge_into(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_type: str,
                note: str | None = None) -> int:
     """Attach form ``term`` (and every other form of its current entity) to ``target``'s entity."""
@@ -92,6 +120,7 @@ def merge_into(conn: sqlite3.Connection, book_id: str, term: str, target: str, f
         conn.execute("DELETE FROM entities WHERE id=?", (s_eid,))
     conn.execute(f"UPDATE glossary SET form_type=?, form_note=COALESCE(?, form_note) WHERE {SERIES_SCOPE} AND source_term=?",
                  (form_type, note, book_id, term))
+    refresh_entity(conn, book_id, t_eid)
     return 1
 
 
@@ -99,10 +128,40 @@ def unlink(conn: sqlite3.Connection, book_id: str, term: str) -> None:
     row = conn.execute(f"SELECT * FROM glossary WHERE {SERIES_SCOPE} AND source_term=?", (book_id, term)).fetchone()
     if row is None:
         raise KeyError(term)
-    eid = _new_entity(conn, book_id, term, row["category"], None)
+    old_eid = row["entity_id"]
+    old_forms = [r[0] for r in conn.execute(f"SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND entity_id=? "
+                                            "AND source_term!=?", (book_id, old_eid, term))] if old_eid else []
+    label = term
+    n = 1
+    while entity_id_for(book_id, label) == old_eid:  # the entity may have been named after this very form
+        n += 1
+        label = f"{term}#{n}"
+    eid = _new_entity(conn, book_id, label, row["category"], None)
+    if label != term:
+        conn.execute("UPDATE entities SET label_ja=? WHERE id=?", (term, eid))
     conn.execute("UPDATE glossary SET entity_id=?, form_type='official' WHERE id=?", (eid, row["id"]))
     conn.execute(f"UPDATE entity_links SET status='rejected' WHERE {SERIES_SCOPE} AND term=? AND status='accepted'",
                  (book_id, term))
+    if old_eid and old_eid != eid:
+        refresh_entity(conn, book_id, old_eid)
+        _drop_alias(conn, book_id, term, old_forms)
+
+
+def _drop_alias(conn: sqlite3.Connection, book_id: str, term: str, entity_forms: list[str]) -> None:
+    """A detached form is no longer an alias of the character of the entity it was merged into (other
+    characters that legitimately list it keep it)."""
+    import json
+
+    if not entity_forms:
+        return
+    for cid, aliases_json in conn.execute(
+            f"SELECT id, aliases_json FROM characters WHERE {SERIES_SCOPE} AND canonical_name IN "
+            f"({','.join('?' * len(entity_forms))})", (book_id, *entity_forms)).fetchall():
+        aliases = json.loads(aliases_json)
+        if term in aliases:
+            aliases.remove(term)
+            conn.execute("UPDATE characters SET aliases_json=?, updated_at=? WHERE id=?",
+                         (json.dumps(aliases, ensure_ascii=False), utcnow(), cid))
 
 
 def record_link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_type: str, *, origin: str,
@@ -123,6 +182,12 @@ def link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_ty
     known = {r[0] for r in conn.execute(f"SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND source_term IN (?,?)",
                                         (book_id, term, target))}
     if term in known and target in known:
+        if origin != "human" and _joins_two_entities(conn, book_id, term, target):
+            # An ambiguous form (「しまちゃん」 was used for both sisters) must not fuse two established
+            # entities – merge_into moves every form of the term's entity. A human decides (ncte names link).
+            record_link(conn, book_id, term, target, form_type, origin=origin, status="candidate", unit_id=unit_id,
+                        quote=quote, ordinal=ordinal)
+            return "candidate"
         merge_into(conn, book_id, term, target, form_type, note)
         record_link(conn, book_id, term, target, form_type, origin=origin, status="accepted", unit_id=unit_id,
                     quote=quote, ordinal=ordinal)

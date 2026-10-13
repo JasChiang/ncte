@@ -263,12 +263,13 @@ def relations_html(rel: dict[str, Any], labels: dict[float, str], title: str, sc
 def relations_mermaid(rel: dict[str, Any], max_edges: int = 40) -> str:
     lab = rel["labels"]
     ids = {cid: f"C{i}" for i, cid in enumerate(lab)}
-    lines = ["graph LR"]
-    for cid in {n["id"] for n in rel["nodes"]}:
-        lines.append(f'  {ids[cid]}["{lab[cid]}"]')
+    edges = []
+    used = [n["id"] for n in rel["nodes"]]
     for e in rel["co_appearance"][:max_edges]:
-        lines.append(f"  {ids[e['a']]} ---|同場{e['shared_scenes']}| {ids[e['b']]}")
+        edges.append(f"  {ids[e['a']]} ---|同場{e['shared_scenes']}| {ids[e['b']]}")
     for f in rel["relations"][:max_edges]:
         for t in f["targets"]:
-            lines.append(f"  {ids[f['subject']]} -.->|{f['predicate'][:12]}| {ids[t]}")
+            edges.append(f"  {ids[f['subject']]} -.->|{f['predicate'][:12]}| {ids[t]}")
+            used += [f["subject"], t]  # a fact may name someone with no counted scene: still needs a label
+    lines = ["graph LR", *(f'  {ids[cid]}["{lab[cid]}"]' for cid in dict.fromkeys(used)), *edges]
     return "\n".join(lines) + "\n"

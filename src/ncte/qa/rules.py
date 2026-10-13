@@ -120,6 +120,7 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
         add("non_taiwan_glyph", "medium", f"simplified/Japanese glyphs: {''.join(bad)}")
 
     gl = list(glossary)
+    flat = PH_RE.sub("", text)  # 「株式會社⟦2⟧KADOKAWA⟦/2⟧」 still contains 株式會社KADOKAWA
     for w in OFFENSIVE_ZH:
         if w in vis and w not in vis_src:
             add("offensive_term", "high", f"「{w}」 is a slur/derogatory word in Chinese – choose a different rendering")
@@ -137,17 +138,17 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
         if not ja or not zh:
             continue
         in_src = in_source(g)
-        if in_src and zh not in text:
+        if in_src and zh not in flat:
             sev = "high" if g.get("verified") else "low"
             add("glossary_mismatch", sev, f"{ja} → expected 「{zh}」")
             # another name form of the same entity used instead (the official name rendered with the nickname's rendering)
             for other in entities.get(str(g.get("entity_id") or ""), []):
                 ozh = other.get("target_term") or ""
-                if other is not g and ozh and ozh != zh and ozh not in zh and zh not in ozh and ozh in text \
+                if other is not g and ozh and ozh != zh and ozh not in zh and zh not in ozh and ozh in flat \
                         and not in_source(other):
                     add("name_form_substitution", "high",
                         f"source uses {ja} (→「{zh}」) but translation uses 「{ozh}」 ({other.get('form_type')} {other['source_term']})")
-        elif (not in_src and g.get("category") == "character" and len(zh) >= 2 and zh in text
+        elif (not in_src and g.get("category") == "character" and len(zh) >= 2 and zh in flat
               and ja not in GENERIC_REFERENTS):
             # justified if any other entry whose rendering contains this name is present in the source
             # (ソラ / ソラっち / 天野ソラ → 索拉 …)

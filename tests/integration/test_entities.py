@@ -149,3 +149,43 @@ def test_linking_name_forms_merges_characters(conn, cfg, fixtures):
     assert conn.execute("SELECT speaker_id_nullable FROM utterances WHERE id='q1'").fetchone()[0] == short
     assert conn.execute("SELECT character_id FROM speech_examples").fetchone()[0] == short
     assert reconcile_characters(conn, book.id) == 0  # idempotent
+
+
+def test_ambiguous_form_does_not_fuse_two_people(conn, cfg, fixtures):
+    """Real book: 「しまちゃん」 was both sisters' nickname; an automatic link must not merge the two entities."""
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    for ja, zh in [("島村", "島村"), ("しまむら", "島村"), ("しまむら妹", "島村妹妹"), ("しょーさん", "小小姐"),
+                   ("しまちゃん", "小島")]:
+        ensure_glossary(conn, book.id, ja, zh, category="character", origin="memory_update", first_unit_id=None)
+    assert link(conn, book.id, "しまむら", "島村", "nickname", origin="llm") == "accepted"
+    assert link(conn, book.id, "しょーさん", "しまむら妹", "nickname", origin="llm") == "accepted"
+    assert link(conn, book.id, "しまちゃん", "島村", "nickname", origin="llm") == "accepted"
+    # the same form now claimed for the sister: two established entities → only a candidate
+    assert link(conn, book.id, "しまちゃん", "しまむら妹", "nickname", origin="llm") == "candidate"
+    groups = sorted(sorted(f["ja"] for f in fs) for fs in entity_forms(conn, book.id).values())
+    assert sorted(["しまむら", "しまちゃん", "島村"]) in groups and sorted(["しまむら妹", "しょーさん"]) in groups
+    # a human may still merge
+    assert link(conn, book.id, "しまむら妹", "島村", "alias", origin="human") == "accepted"
+
+
+def test_entity_label_follows_official_form_and_unlink_drops_alias(conn, cfg, fixtures):
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    ensure_glossary(conn, book.id, "しまむら（妹）", "島村（妹妹）", category="term", origin="memory_update",
+                    first_unit_id=None)
+    ensure_glossary(conn, book.id, "島村", "島村", category="character", origin="memory_update", first_unit_id=None)
+    link(conn, book.id, "島村", "しまむら（妹）", "official", origin="llm")  # wrong direction, as in the real book
+    eid = conn.execute("SELECT entity_id FROM glossary WHERE source_term='島村'").fetchone()[0]
+    assert tuple(conn.execute("SELECT label_ja, kind FROM entities WHERE id=?", (eid,)).fetchone()) == ("島村", "character")
+    conn.execute("INSERT INTO characters(id, book_id, canonical_name, display_name_zh, aliases_json, "
+                 "known_from_ordinal, origin, created_at, updated_at) VALUES ('c_s', ?, '島村', '島村', ?, 0, 'llm', '', '')",
+                 (book.id, json.dumps(["しまむら（妹）"], ensure_ascii=False)))
+    conn.execute("INSERT INTO characters(id, book_id, canonical_name, display_name_zh, aliases_json, "
+                 "known_from_ordinal, origin, created_at, updated_at) VALUES ('c_m', ?, '妹', '妹妹', ?, 0, 'llm', '', '')",
+                 (book.id, json.dumps(["しまむら（妹）"], ensure_ascii=False)))
+    from ncte.memory.entities import unlink
+
+    unlink(conn, book.id, "しまむら（妹）")
+    assert json.loads(conn.execute("SELECT aliases_json FROM characters WHERE id='c_s'").fetchone()[0]) == []
+    # the sister's own character (not part of 島村's entity) keeps the alias
+    assert json.loads(conn.execute("SELECT aliases_json FROM characters WHERE id='c_m'").fetchone()[0]) == ["しまむら（妹）"]
+    assert conn.execute("SELECT entity_id FROM glossary WHERE source_term='しまむら（妹）'").fetchone()[0] != eid
