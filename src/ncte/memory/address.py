@@ -27,6 +27,7 @@ from .db import utcnow
 HONORIFICS = ("ちゃん", "さん", "くん", "君", "様", "さま", "先輩", "せんぱい", "先生", "せんせい", "殿", "氏", "たん",
               "っち", "ちゃま", "にゃん")
 _HONORIFIC_RE = re.compile("(" + "|".join(sorted(map(re.escape, HONORIFICS), key=len, reverse=True)) + ")")
+_HONORIFIC_END = re.compile("(" + "|".join(map(re.escape, HONORIFICS)) + ")$")
 RESOLVED = ("explicit", "inferred", "human_verified")
 _PRONOUNS = {"私", "わたし", "僕", "ぼく", "俺", "おれ", "あたし", "うち", "あなた", "君", "きみ", "お前", "おまえ",
              "彼", "彼女", "あいつ", "こいつ", "そいつ"}
@@ -41,7 +42,8 @@ def name_forms(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, str], 
     claims: dict[str, set[str]] = {}
 
     def claim(form: str | None, cid: str) -> None:
-        if form and len(form) >= 2 and form not in GENERIC_REFERENTS and form not in _PRONOUNS:
+        base = _HONORIFIC_END.sub("", form or "")  # 「店員さん」 is still the generic 「店員」
+        if form and len(form) >= 2 and not {form, base} & (GENERIC_REFERENTS | _PRONOUNS):
             claims.setdefault(form, set()).add(cid)
 
     by_name: dict[str, str] = {}
@@ -162,9 +164,9 @@ def harvest_book(conn: sqlite3.Connection, book_id: str) -> int:
 
 
 def visible_terms(conn: sqlite3.Connection, book_id: str, horizon: int, text: str | None = None,
-                  speakers: set[str] | None = None) -> list[sqlite3.Row]:
+                  speakers: set[str] | None = None, present: set[str] | None = None) -> list[sqlite3.Row]:
     """Address terms first used before story position (book, ``horizon``); optionally only forms in ``text``
-    or used by ``speakers``. Sorted by first use (a change of form shows as a later row)."""
+    or used by ``speakers`` for someone ``present``. Sorted by first use (a change of form shows as a later row)."""
     hz = pos(conn, book_id, horizon)
     vols = volumes(conn)
     t = match_text(text) if text is not None else None
@@ -172,18 +174,20 @@ def visible_terms(conn: sqlite3.Connection, book_id: str, horizon: int, text: st
     for r in conn.execute(f"SELECT * FROM address_terms WHERE {SERIES_SCOPE}", (book_id,)):
         if (vols.get(r["book_id"], 1.0), r["first_ordinal"]) >= hz:
             continue
-        if t is not None and r["form_ja"] not in t and not (speakers and r["speaker_id"] in speakers):
+        if t is not None and r["form_ja"] not in t and not (
+                speakers and r["speaker_id"] in speakers and present is not None and r["addressee_id"] in present):
             continue
         out.append(r)
     return sorted(out, key=lambda r: (vols.get(r["book_id"], 1.0), r["first_ordinal"]))
 
 
 def context_items(conn: sqlite3.Connection, book_id: str, horizon: int, text: str, speakers: set[str],
-                  names: dict[str, str], limit: int = 24) -> list[dict[str, Any]]:
-    """Translation payload: forms occurring in the batch, plus the established forms of this batch's speakers."""
+                  names: dict[str, str], present: set[str] | None = None, limit: int = 12) -> list[dict[str, Any]]:
+    """Translation payload: forms occurring in the batch, plus how this batch's speakers usually call the
+    characters present in the scene (the form they would use if they named them)."""
     vols = volumes(conn)
     out = []
-    for r in visible_terms(conn, book_id, horizon, text, speakers):
+    for r in visible_terms(conn, book_id, horizon, text, speakers, present or set()):
         if r["speaker_id"] not in names or r["addressee_id"] not in names:
             continue
         item: dict[str, Any] = {"speaker": names[r["speaker_id"]],

@@ -15,6 +15,18 @@ def rows(conn):
             for r in conn.execute("SELECT * FROM address_terms")}
 
 
+def test_generic_role_with_honorific_is_not_a_name(conn, cfg, fixtures):
+    from ncte.library import import_book
+    from ncte.memory.address import name_forms
+    from ncte.memory.repository import upsert_character
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    upsert_character(conn, book.id, "店員さん", name_zh="店員", aliases=[], unit_id="u", ordinal=1, origin="t")
+    upsert_character(conn, book.id, "ミナ", name_zh="米娜", aliases=["ミナさん"], unit_id="u", ordinal=1, origin="t")
+    fmap, _ = name_forms(conn, book.id)
+    assert "店員さん" not in fmap and {"ミナ", "ミナさん"} <= set(fmap)
+
+
 def test_find_forms_longest_match_and_honorifics():
     forms = {"島村": "c1", "しまむら": "c1", "しまむらちゃん": "c1", "安達": "c2"}
     assert find_forms("「島村さん、安達は？」", forms) == [("島村さん", "c1"), ("安達", "c2")]

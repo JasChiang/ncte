@@ -127,7 +127,7 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
                                     if set(x.get("unit_ids", [])) & batch_ids]},
         "memory": mem,
     }
-    address = context_items(conn, book_id, horizon, batch_text, batch_speakers, all_names)
+    address = context_items(conn, book_id, horizon, batch_text, batch_speakers, all_names, present_ids)
     if address:
         out["address_terms"] = address
     return out
