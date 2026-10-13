@@ -244,3 +244,4 @@ open workspace/eval/<timestamp>/report.html
 - 測試：23 個（書名格式、反例、兩種 metadata、CLI 建議與 auto 加入）；206 passed。
 - 實書（兩集的電撃文庫系列）：書名「〇〇 (電撃文庫)」「〇〇2 (電撃文庫)」偵測失敗 → 新增去除書名後的文庫／版本標註（`clean_title`）與「集數緊接在日文書名後」的規則；新系列名稱也去除標註。第 2 集以 `--series auto` 正確加入第 1 集的系列。
 - 試算的「以實際花費校正」改為參考書庫中所有系列的歷史請求（每個系列一個資料庫後，新系列原本沒有校正資料）。212 passed。
+- 實書（第 1 集，context／low，US$2.96，2,639 段全數翻譯）：Google AI Studio 偶發回傳 HTTP 400「User location is not supported for the API use」（FAILED_PRECONDITION），導致 1 個場景分析與 3 段審稿未完成。這是上游路由的暫時問題，改為以 backoff 自動重試（`is_transient_rejection`）。213 passed。

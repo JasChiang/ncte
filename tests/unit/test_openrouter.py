@@ -169,3 +169,18 @@ def test_provider_400_keeps_upstream_details():
         make(lambda r: httpx.Response(400, json={"error": {"message": "Provider returned error",
                                                            "metadata": {"raw": "invalid argument"}}})).complete(req())
     assert "invalid argument" in str(ei.value)
+
+
+def test_provider_location_error_is_retried():
+    """Real-book regression: Google AI Studio intermittently answered «User location is not supported»."""
+    calls = {"n": 0}
+    body = {"error": {"message": "Provider returned error", "code": 400, "metadata": {
+        "raw": '{"error": {"code": 400, "message": "User location is not supported for the API use.", '
+               '"status": "FAILED_PRECONDITION"}}', "provider_name": "Google AI Studio"}}}
+
+    def h(request):
+        calls["n"] += 1
+        return httpx.Response(400, json=body) if calls["n"] == 1 else httpx.Response(200, json=ok_body("{}"))
+
+    make(h).complete(req())
+    assert calls["n"] == 2

@@ -35,6 +35,18 @@ def _error_obj(body: object) -> dict[str, object]:
     return {}
 
 
+# Upstream routing problems reported as HTTP 400 that succeed when retried (another provider node / region),
+# e.g. Google AI Studio «User location is not supported for the API use» (FAILED_PRECONDITION).
+_TRANSIENT_400 = ("location is not supported", "failed_precondition", "overloaded", "temporarily unavailable")
+
+
+def is_transient_rejection(err: dict[str, object]) -> bool:
+    meta = err.get("metadata")
+    values = list(meta.values()) if isinstance(meta, dict) else []
+    blob = " ".join(str(x) for x in (err.get("message"), *values)).lower()
+    return any(m in blob for m in _TRANSIENT_400)
+
+
 def is_content_block(err: dict[str, object]) -> bool:
     meta = err.get("metadata")
     values = list(meta.values()) if isinstance(meta, dict) else []
@@ -179,6 +191,11 @@ class OpenRouterClient:
                         404: "model or endpoint not found"}[status]
                 raise FatalAPIError(f"HTTP {status} ({hint}): {text}")
             if status in REJECTED:
+                if is_transient_rejection(self._err_obj(resp)):
+                    last_exc = RetryableAPIError(f"HTTP {status} (transient upstream routing): {text}")
+                    if attempt < self.max_attempts:
+                        self.sleep(self._backoff(attempt, resp.headers.get("retry-after")))
+                    continue
                 raise RequestRejectedError(f"HTTP {status}: {text}")
             if status in RETRYABLE or status >= 500:
                 last_exc = RetryableAPIError(f"HTTP {status}: {text}")
