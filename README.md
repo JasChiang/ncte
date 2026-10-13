@@ -85,7 +85,9 @@ ncte import 第1集.epub --series "作品名" --volume 1
 ncte import 第3集.epub --series "作品名" --volume 3 --label 第3集   # 可以先翻後面的集數
 ncte series list
 ncte series set-volume 外傳.epub 2.5                               # 調整閱讀順序
+ncte import 第4集.epub --series auto                              # 套用自動偵測的系列與集數
 ```
+匯入時會從 EPUB 3 系列欄位（`belongs-to-collection`）、Calibre 欄位（`calibre:series`）、書名（「〇〇 2」「〇〇（3）」「第4巻」「Ⅱ」「上／下」…）偵測系列與集數並提示，但**不會自動加入**（放錯系列會混到角色與譯名）；確認後用 `--series auto` 或 `ncte series move` 加入。`ncte inspect` 也會顯示偵測結果。
 每個系列一個資料夾（`workspace/series/<作品名>/`）。第 N 集看得到前面集數的記憶；較早的集數（即使較晚才翻）看不到後面集數才揭露的內容，但會沿用已決定的譯名。
 
 ### 稱呼與實體卡（正式名稱、全名、暱稱、通稱…）

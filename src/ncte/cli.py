@@ -107,12 +107,21 @@ def _book(ref: str, *, auto_import: bool = False) -> Book:
 
 @app.command("import")
 def import_cmd(epub: Annotated[Path, typer.Argument(help="Source EPUB (DRM-free)")],
-               series: Annotated[str | None, typer.Option("--series", help="Series title or id (created if new); "
+               series: Annotated[str | None, typer.Option("--series", help="Series title or id (created if new), or "
+                                                          "'auto' to apply the detected series/volume; "
                                                           "default: a new series named after the book")] = None,
                volume: Annotated[float | None, typer.Option("--volume", help="Volume number in the series "
                                                             "(e.g. 1, 2, 2.5); default: next")] = None,
                label: Annotated[str | None, typer.Option("--label", help="Display label, e.g. 第3集")] = None) -> None:
-    """Validate an EPUB and build the local unit index (no LLM calls)."""
+    """Validate an EPUB and build the local unit index (no LLM calls).
+
+    Without --series the book becomes its own series; a detected series/volume is suggested (never applied
+    silently). --series auto applies the suggestion."""
+    from .epub.parser import load_epub
+
+    suggestion = None
+    if series is None and state.ws.find_book(epub) is None:
+        suggestion = state.ws.suggest_series(load_epub(epub))
     conn, book, created = state.ws.import_book(epub, series=series, volume=volume, label=label)
     state._conn = conn
     n = conn.execute("SELECT COUNT(*), SUM(translatable) FROM units WHERE book_id=?", (book.id,)).fetchone()
@@ -123,6 +132,18 @@ def import_cmd(epub: Annotated[Path, typer.Argument(help="Source EPUB (DRM-free)
     typer.echo(f"series: «{b[0]}» volume {b[1]:g}")
     typer.echo(f"units: {n[0]} ({n[1]} translatable), scenes: {s}")
     typer.echo(f"workspace: {state.cfg.workspace}")
+    if suggestion and (suggestion["series_id"] or suggestion["guess"]["confidence"] in ("high", "medium")):
+        g = suggestion["guess"]
+        target = suggestion["series_title"] or g["title"]
+        vol = suggestion["volume"]
+        typer.echo("\n偵測到可能的系列資訊（未套用）：")
+        typer.echo(f"  系列：{target}" + ("（書庫中已有此系列）" if suggestion["series_id"] else "（新系列）"))
+        typer.echo(f"  集數：{vol:g}" if vol is not None else "  集數：未知")
+        typer.echo(f"  依據：{g['evidence']}（可靠度 {g['confidence']}）")
+        typer.echo(f"  要加入請執行：ncte series move \"{epub}\" --to \"{target}\"" + (f" --volume {vol:g}" if vol else ""))
+    elif suggestion and suggestion["guess"]["confidence"] == "low":
+        g = suggestion["guess"]
+        typer.echo(f"\n（弱線索：{g['evidence']} → 可能是第 {g['volume']:g} 集；如屬系列請用 --series/--volume 指定）")
 
 
 @app.command()
@@ -148,6 +169,7 @@ def inspect(epub: Annotated[Path, typer.Argument()],
         "japanese_chars": sum(len(u.plain_text) for _, u in units if u.translatable),
         "units_by_kind": kinds, "ruby_units": sum(1 for _, u in units if u.ruby_count),
         "unsafe_units_kept_original": unsafe, "warnings": pkg.warnings,
+        "series_suggestion": state.ws.suggest_series(pkg),
     }
     found = state.ws.find_book(epub)
     info["imported_as"] = found[1] if found else None

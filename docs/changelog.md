@@ -237,3 +237,8 @@ open workspace/eval/<timestamp>/report.html
 - `ncte series move BOOK --to SERIES`：連同譯文、執行紀錄、記憶搬到另一系列，重複的譯名與角色合併（人工確認者優先），空的來源系列資料夾改名保留。
 - ADR-021：連結稱呼時同步合併角色；`ncte names sync`。實書合併 3 筆（全名、愛稱併入本名角色）。
 - 測試：183 passed；ruff、mypy 通過。
+
+## 系列與集數偵測（2026-10-13）
+- `epub/series_meta.py`：依序檢查 EPUB 3 `belongs-to-collection`／`group-position`（高）、Calibre `calibre:series`／`series_index`（高）、書名格式（中：「〇〇 2」「〇〇（3）」「第4巻」「Vol.5」「Ⅱ」「③」「上／下」「〇〇 2 ―副題―」「2.5」）、Calibre `title_sort` 結尾數字（低）。並比對書庫中已有的系列（正規化書名）。
+- `ncte import` 不指定 `--series` 時照舊自成系列，但會顯示偵測結果與加入指令；`--series auto` 直接套用；`ncte inspect` 顯示 `series_suggestion`。
+- 測試：23 個（書名格式、反例、兩種 metadata、CLI 建議與 auto 加入）；206 passed。

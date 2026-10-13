@@ -17,6 +17,7 @@ import shutil
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from .config import Config
 from .epub.parser import load_epub, sha256_file
@@ -118,6 +119,26 @@ class Workspace:
         conn = self.series_conn(found[0])
         return conn, resolve_book(conn, found[1])
 
+    def suggest_series(self, pkg: Any) -> dict[str, Any]:
+        """Series/volume suggestion for a package: metadata/title guess + matching series already in the library."""
+        from .epub.series_meta import detect_series, guess_from_title, normalize_title
+
+        g = detect_series(pkg)
+        out: dict[str, Any] = {"guess": g.to_dict(), "series_id": None, "series_title": None, "volume": g.volume}
+        keys = {normalize_title(x) for x in (g.title, pkg.title) if x}
+        for s in self.lib.execute("SELECT * FROM series").fetchall():
+            names = {normalize_title(s["title"])}
+            for b in self.lib.execute("SELECT title FROM library_books WHERE series_id=?", (s["id"],)):
+                if b[0]:
+                    names.add(normalize_title(b[0]))
+                    tg = guess_from_title(b[0])
+                    if tg:
+                        names.add(normalize_title(tg[0]))
+            if keys & names:
+                out["series_id"], out["series_title"] = s["id"], s["title"]
+                break
+        return out
+
     def import_book(self, path: str | Path, *, series: str | None = None, volume: float | None = None,
                     label: str | None = None) -> tuple[sqlite3.Connection, Book, bool]:
         found = self.find_book(path)
@@ -125,6 +146,13 @@ class Workspace:
             conn, book = self.open_book(path)
             return conn, book, False
         pkg = load_epub(path)  # safety checks before anything is created
+        if series == "auto":
+            sug = self.suggest_series(pkg)
+            if not sug["series_id"] and not sug["guess"]["title"]:
+                raise NCTEError("no series information detected; give --series NAME (and --volume N)")
+            series = sug["series_id"] or sug["guess"]["title"]
+            if volume is None and sug["volume"] is not None:
+                volume = float(sug["volume"])
         if series:
             row = self.find_series(series)
             sid = row["id"] if row else self.create_series(series)

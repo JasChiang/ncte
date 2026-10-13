@@ -77,6 +77,7 @@ class BookSpec:
     opf_name: str = "content.opf"
     extra_files: dict[str, bytes] = field(default_factory=dict)  # zip path -> bytes
     layout_fixed: bool = False
+    extra_meta: str = ""  # raw XML inserted into <metadata> (series metadata tests)
 
 
 def _media_type(href: str) -> str:
@@ -119,6 +120,7 @@ def write_book(spec: BookSpec, path: str | Path) -> Path:
 <dc:creator>NCTE Test Author</dc:creator>
 <meta property="dcterms:modified">2026-10-01T00:00:00Z</meta>
 {layout}
+{spec.extra_meta}
 </metadata>
 <manifest>
 {chr(10).join(manifest)}
