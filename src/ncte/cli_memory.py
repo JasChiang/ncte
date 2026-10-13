@@ -649,6 +649,77 @@ def names_address_set(epub: Annotated[str, typer.Argument()],
                "use `ncte retranslate` for specific units)")
 
 
+# --------------------------------------------------------------------------- series style guide (ADR-022)
+
+style_app = typer.Typer(help="Series style guide: honorifics, house rules, character voices (all volumes).",
+                        no_args_is_help=True)
+app.add_typer(style_app, name="style")
+
+
+def _print_style(style: Any) -> None:
+    from .memory.style import HONORIFICS_ZH
+
+    typer.echo(f"honorifics: {style.honorifics} — {HONORIFICS_ZH[style.honorifics]}")
+    for i, r in enumerate(style.rules, 1):
+        typer.echo(f"rule {i}: {r}")
+    for k, v in style.voices.items():
+        typer.echo(f"voice {k}: {v}")
+
+
+@style_app.command("show")
+def style_show(epub: Annotated[str, typer.Argument()],
+               as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
+    """Show the series style guide."""
+    from .memory.style import load_style
+
+    book = _book(epub)  # selects the series database: read state.conn only afterwards
+    style = load_style(state.conn, book.id)
+    if as_json:
+        echo_json(style.model_dump())
+    else:
+        _print_style(style)
+
+
+@style_app.command("set")
+def style_set(epub: Annotated[str, typer.Argument()],
+              honorifics: Annotated[str | None, typer.Option("--honorifics", help="natural | explicit | omit")] = None,
+              rule: Annotated[list[str] | None, typer.Option("--rule", help="add a house rule (repeatable)")] = None,
+              remove_rule: Annotated[list[int] | None, typer.Option("--remove-rule", help="rule number to remove")] = None,
+              voice: Annotated[list[str] | None, typer.Option("--voice", help="NAME=how they sound (repeatable)")] = None,
+              remove_voice: Annotated[list[str] | None, typer.Option("--remove-voice")] = None) -> None:
+    """Change the series style guide. New translations follow it; existing ones are kept until retranslated."""
+    from pydantic import ValidationError
+
+    from .memory.style import load_style, save_style
+
+    book = _book(epub)
+    conn = state.conn
+    style = load_style(conn, book.id)
+    data = style.model_dump()
+    if honorifics:
+        data["honorifics"] = honorifics
+    drop = {n - 1 for n in remove_rule or []}
+    if any(n < 0 or n >= len(data["rules"]) for n in drop):
+        raise NCTEError(f"--remove-rule must be between 1 and {len(data['rules'])}")
+    data["rules"] = [r for i, r in enumerate(data["rules"]) if i not in drop] + [r.strip() for r in rule or [] if r.strip()]
+    for v in voice or []:
+        name, sep, note = v.partition("=")
+        if not sep or not name.strip() or not note.strip():
+            raise NCTEError("--voice takes NAME=description")
+        data["voices"][name.strip()] = note.strip()
+    for name in remove_voice or []:
+        data["voices"].pop(name, None)
+    try:
+        new = type(style).model_validate(data)
+    except ValidationError as exc:
+        raise NCTEError(f"invalid style: {exc.errors()[0]['msg']}") from exc
+    with Transaction(conn):
+        save_style(conn, book.id, new)
+    _print_style(new)
+    typer.echo("applies to every volume of the series for new translations; existing translations are kept "
+               "(retranslate units or run translate --force to apply it).")
+
+
 # --------------------------------------------------------------------------- series (ADR-020)
 
 series_app = typer.Typer(help="Series: several volumes sharing names, characters and plot memory.",

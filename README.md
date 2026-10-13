@@ -95,7 +95,17 @@ ncte import 第4集.epub --series auto                              # 套用自�
 ncte names list 書.epub                     # 每個人物／團體的所有稱呼與譯名、警告
 ncte names detect 書.epub                   # 從原文「〜。通称〜」等句型自動連結
 ncte names link 書.epub ソラっち --to ソラ --type nickname --zh 小索拉
+ncte names link 書.epub しまちゃん --to しまむら妹 --shared   # 兩個人共用的稱呼（不合併，翻譯時依上下文判斷）
+ncte names address 書.epub --character 安達                   # 誰怎麼稱呼誰（含敬稱、譯法、使用次數、首次出現）
+ncte names address-set 書.epub --speaker 日野 --to 安達 --ja あだっち --zh 小安達
 ```
+
+### 系列翻譯風格（每一集都適用）
+```bash
+ncte style show 書.epub
+ncte style set 書.epub --honorifics omit --rule "先輩一律譯「學姊」" --voice "安達=話少、句子短、常結巴"
+```
+敬稱處理有 `natural`（預設，依語氣自然處理）、`explicit`（固定譯出）、`omit`（原則省略）。設定只影響之後的翻譯；既有譯文要重翻才會套用。
 
 ### 有上下文的翻譯（劇情記憶、說話者分析）
 ```bash

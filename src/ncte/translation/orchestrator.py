@@ -32,6 +32,7 @@ from ..llm.base import LLMClient, LLMRequest, LLMResponse, StructuredMode
 from ..llm.cost import Pricing, estimate_request_cost, find_model, latest_snapshot, save_snapshot
 from ..llm.prompt_loader import load_prompt
 from ..memory.db import Transaction, utcnow
+from ..memory.style import load_style, style_payload
 from ..qa.rules import Finding, worst
 from .cache import glossary_entries, glossary_hash, is_cached, latest_translation, relevant_glossary
 from .context_builder import BODY_KINDS, META_KINDS, glossary_payload, heading_hints, neighbor_context
@@ -379,6 +380,10 @@ class Orchestrator:
                 text += " " + " ".join(c["source"] for c in ctx["context_before"] + ctx["context_after"])
             ctx["glossary"] = glossary_payload(self.glossary, text, upto=(self.volume, batch.rows[-1]["ordinal"]),
                                                revealed=self.link_revealed)
+            if not batch.meta:
+                style = style_payload(load_style(self.conn, self.book.id), text)
+                if style:
+                    ctx["style"] = style
             return ctx
 
     def qa_glossary(self) -> list[dict[str, Any]]:

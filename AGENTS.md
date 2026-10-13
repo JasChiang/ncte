@@ -26,5 +26,5 @@ EPUBCheck 測試會在找到 `epubcheck`（PATH）、`EPUBCHECK_JAR` 或 `worksp
 - `llm/` 介面、OpenRouter adapter、FakeLLM、schema、prompt 載入、費用
 - `translation/` orchestrator（jobs/預算/續譯）、translator（對齊/QA/切批）、context builder、dry-run
 - `analysis/` 場景切分、對話偵測、說話者歸屬、記憶更新驗證
-- `memory/` SQLite migrations、repository、檢索（FTS5）、可見性
+- `memory/` SQLite migrations、repository、檢索（FTS5）、可見性、實體卡（entities）、稱呼表（address）、系列風格（style）
 - `qa/` 程式 QA 規則；`reports/` 成本／QA／HTML；`eval/` A/B 評測

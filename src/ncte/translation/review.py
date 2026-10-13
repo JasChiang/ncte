@@ -94,6 +94,9 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
                    "context": ctx.get("context_before", []) + ctx.get("context_after", []),
                    "characters": ctx.get("characters", []), "scene": ctx.get("scene", {}),
                    "glossary": ctx.get("glossary", [])}
+        for key in ("address_terms", "style"):
+            if ctx.get(key):
+                payload[key] = ctx[key]
         est = orch._estimate(payload, sum(len(x["source"]) for x in items) // 2)
         orch.check_budget(est)
         try:

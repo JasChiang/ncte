@@ -176,6 +176,13 @@ class ContextOrchestrator(Orchestrator):
             mem = memory_context(self.conn, self.book.id, scene=scene, batch_rows=batch.rows,
                                  max_evidence=self.cfg.memory.max_retrieved_evidence)
         ctx.update(mem)
+        if "style" in ctx:  # voice notes also for characters present in the scene but not named in the batch
+            from ..memory.style import load_style, style_payload
+
+            names = [n for c in mem.get("characters", []) for n in (c["name_ja"], c.get("name_zh") or "")]
+            with self.lock:
+                style = load_style(self.conn, self.book.id)
+            ctx["style"] = style_payload(style, " ".join(r["plain_text"] for r in batch.rows), names) or ctx["style"]
         return ctx
 
     def target_units(self) -> list[sqlite3.Row]:
