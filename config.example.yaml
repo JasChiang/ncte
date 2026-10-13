@@ -1,0 +1,39 @@
+# NCTE configuration example. Copy to ./ncte.yaml (auto-loaded) or pass --config.
+# The API key is NOT configured here: use the OPENROUTER_API_KEY env var or ./.env
+app:
+  workspace: "./workspace"
+  language: "zh-TW"
+  mode: "baseline"          # baseline | context
+  lookahead_scope: "current_scene"
+openrouter:
+  base_url: "https://openrouter.ai/api/v1"
+  model: "google/gemini-3.8-flash"   # verified against GET /models before every run
+  review_model: null        # null = same as model
+  fallback_models: []       # only used if listed here; never switches silently
+  timeout_seconds: 120
+  max_concurrency: 2        # baseline only; context mode is sequential per scene
+  max_attempts: 4
+  per_book_budget_usd: 5.0  # default --budget-usd for a run
+  require_schema: true
+  temperature: 0.3
+translation:
+  style: "natural_traditional_taiwan"
+  unit_target_japanese_chars: 1400
+  unit_hard_max_japanese_chars: 2500
+  include_previous_units: 2
+  include_next_units: 1
+  preserve_ambiguity: true
+  skip_already_translated: true
+review:
+  automatic_review: "flagged_only"   # off | flagged_only | all
+  maximum_review_passes: 1
+memory:
+  fts_enabled: true
+  vector_rag_enabled: false
+  max_retrieved_evidence: 8
+  future_knowledge_policy: "up_to_current_scene"
+  max_scene_units: 80
+export:
+  translate_nav_titles: true
+  preserve_assets: true
+  epubcheck_path: null      # e.g. ./workspace/tools/epubcheck-5.4.0/epubcheck.jar

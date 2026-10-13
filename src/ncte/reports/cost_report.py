@@ -1,0 +1,90 @@
+"""Cost / usage aggregation (spec §1.2-6, §11 metrics)."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from datetime import datetime
+from typing import Any
+
+
+def _ts(s: str | None) -> datetime | None:
+    return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ") if s else None
+
+
+def cost_report(conn: sqlite3.Connection, *, run_id: str | None = None, book_id: str | None = None) -> dict[str, Any]:
+    where, params = [], []
+    if run_id:
+        where.append("run_id=?")
+        params.append(run_id)
+    if book_id:
+        where.append("book_id=?")
+        params.append(book_id)
+    w = (" WHERE " + " AND ".join(where)) if where else ""
+    rows = conn.execute(f"SELECT * FROM llm_requests{w} ORDER BY id", params).fetchall()
+    tot: dict[str, Any] = {"requests": len(rows), "cost_reported_usd": 0.0, "cost_estimated_usd": 0.0,
+                           "cost_unknown_estimate_usd": 0.0, "prompt_tokens": 0, "completion_tokens": 0,
+                           "reasoning_tokens": 0, "cached_tokens": 0, "failed_requests": 0,
+                           "requests_with_retries": 0, "latency_ms_total": 0}
+    by_stage: dict[str, dict[str, Any]] = {}
+    by_model: dict[str, dict[str, Any]] = {}
+    by_cost_status: dict[str, int] = {}
+    structured: dict[str, int] = {}
+    for r in rows:
+        u = json.loads(r["usage_json"] or "{}")
+        pt, ct = int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
+        rt = int((u.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
+        cached = int((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+        tot["prompt_tokens"] += pt
+        tot["completion_tokens"] += ct
+        tot["reasoning_tokens"] += rt
+        tot["cached_tokens"] += cached
+        tot["latency_ms_total"] += int(r["latency_ms"] or 0)
+        cs = r["cost_status"]
+        by_cost_status[cs] = by_cost_status.get(cs, 0) + 1
+        structured[r["structured_mode"] or "?"] = structured.get(r["structured_mode"] or "?", 0) + 1
+        cost = 0.0
+        if cs in ("reported", "reported_generation"):
+            cost = float(r["cost_usd"] or 0)
+            tot["cost_reported_usd"] += cost
+        elif cs == "estimated_from_tokens":
+            cost = float(r["cost_usd"] or 0)
+            tot["cost_estimated_usd"] += cost
+        elif cs in ("unknown", "pending"):
+            cost = float(r["est_cost_usd"] or 0)
+            tot["cost_unknown_estimate_usd"] += cost
+        if r["status"] not in ("succeeded",):
+            tot["failed_requests"] += 1
+        if (r["attempts"] or 0) > 1:
+            tot["requests_with_retries"] += 1
+        for key, bucket in ((r["stage"], by_stage), (r["model"], by_model)):
+            b = bucket.setdefault(key, {"requests": 0, "cost_usd": 0.0, "prompt_tokens": 0, "completion_tokens": 0})
+            b["requests"] += 1
+            b["cost_usd"] += cost
+            b["prompt_tokens"] += pt
+            b["completion_tokens"] += ct
+    tot["total_cost_upper_usd"] = round(tot["cost_reported_usd"] + tot["cost_estimated_usd"]
+                                        + tot["cost_unknown_estimate_usd"], 6)
+    for k in ("cost_reported_usd", "cost_estimated_usd", "cost_unknown_estimate_usd"):
+        tot[k] = round(tot[k], 6)
+    out: dict[str, Any] = {"totals": tot, "by_stage": by_stage, "by_model": by_model,
+                           "by_cost_status": by_cost_status, "structured_modes": structured}
+    if run_id:
+        run = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
+        if run:
+            chars = conn.execute(
+                "SELECT COALESCE(SUM(LENGTH(u.plain_text)),0), COUNT(*) FROM translations t JOIN units u ON "
+                "u.id=t.unit_id WHERE t.run_id=?", (run_id,)).fetchone()
+            ja_chars, units = int(chars[0]), int(chars[1])
+            start, end = _ts(run["started_at"]), _ts(run["finished_at"])
+            minutes = ((end - start).total_seconds() / 60) if start and end else None
+            out["run"] = {"id": run_id, "status": run["status"], "mode": run["mode"], "model": run["model"],
+                          "budget_usd": run["budget_usd"], "started_at": run["started_at"],
+                          "finished_at": run["finished_at"]}
+            out["metrics"] = {
+                "japanese_chars_translated": ja_chars, "units_translated": units,
+                "usd_per_10k_ja_chars": round(tot["total_cost_upper_usd"] / ja_chars * 10000, 6) if ja_chars else None,
+                "units_per_minute": round(units / minutes, 2) if minutes else None,
+                "retries_per_100_units": round(tot["requests_with_retries"] / units * 100, 2) if units else None,
+            }
+    return out

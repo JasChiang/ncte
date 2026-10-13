@@ -1,0 +1,127 @@
+"""Memory retrieval for the context builder + FTS5 search (spec §5.6). All results are horizon-filtered."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from typing import Any
+
+from ..epub.units import match_text
+from ..series import INF_POS, pos, scope_clause, volumes
+from ..translation.cache import latest_translation
+from . import visibility as vis
+
+
+def search(conn: sqlite3.Connection, book_id: str, term: str, *, horizon: int | None = None,
+           limit: int = 10) -> list[dict[str, Any]]:
+    """Keyword search over book text and visible memory. Trigram FTS for ≥3 chars, LIKE otherwise."""
+    term = term.strip()
+    if not term:
+        return []
+    hz = pos(conn, book_id, horizon) if horizon is not None else INF_POS
+    where, ids = scope_clause(conn, book_id)
+    if len(term) >= 3:
+        q = '"' + term.replace('"', '""') + '"'
+        rows = conn.execute(f"SELECT kind, ref_id, ordinal, text, book_id FROM memory_fts WHERE memory_fts MATCH ? "
+                            f"AND {where}", (q, *ids)).fetchall()
+    else:
+        rows = conn.execute(f"SELECT kind, ref_id, ordinal, text, book_id FROM memory_fts WHERE {where} AND text LIKE ?",
+                            (*ids, f"%{term}%")).fetchall()
+    vols = volumes(conn)
+    hits = [(vols.get(r["book_id"], 1.0), int(r["ordinal"]), r) for r in rows]
+    hits = sorted((h for h in hits if (h[0], h[1]) < hz), key=lambda h: (h[0], h[1]))[:limit]
+    return [{"kind": r["kind"], "ref_id": r["ref_id"], "ordinal": o, "volume": v, "book_id": r["book_id"],
+             "text": r["text"]} for v, o, r in hits]
+
+
+def index_memory(conn: sqlite3.Connection, book_id: str, kind: str, ref_id: str, ordinal: int, text: str) -> None:
+    conn.execute("INSERT INTO memory_fts(text, kind, ref_id, book_id, ordinal) VALUES (?,?,?,?,?)",
+                 (text, kind, ref_id, book_id, ordinal))
+
+
+def _cap(items: list[Any], n: int) -> list[Any]:
+    return items[-n:] if n >= 0 else items
+
+
+def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row, batch_rows: list[sqlite3.Row],
+                   max_evidence: int = 8, chars_budget: int = 2400) -> dict[str, Any]:
+    """Characters, scene state, summaries, facts and props visible at this scene."""
+    horizon = scene["start_ordinal"]
+    upto = batch_rows[-1]["ordinal"]
+    scene_text = " ".join(match_text(r["plain_text"]) for r in conn.execute(
+        "SELECT plain_text FROM units WHERE book_id=? AND scene_id=? AND ordinal <= ? ORDER BY ordinal",
+        (book_id, scene["id"], upto)))
+    state = json.loads(scene["state_json"] or "{}")
+    participants = {p["character_id"] for p in state.get("participants", [])}
+    chars = vis.visible_characters(conn, book_id, upto)
+    names = {c["id"]: (c["display_name_zh"] or c["canonical_name"]) for c in chars}
+    present = []
+    for c in chars:
+        aliases = [c["canonical_name"], *json.loads(c["aliases_json"])]
+        if c["id"] not in participants and not any(a in scene_text for a in aliases):
+            continue
+        prof = json.loads(c["speech_profile_json"] or "{}")
+        examples = []
+        for e in vis.visible_examples(conn, c["id"], horizon, book_id=book_id):
+            item = {"ja": e["raw_text"]}
+            tr = latest_translation(conn, e["unit_id"], conn.execute(
+                "SELECT source_hash FROM units WHERE id=?", (e["unit_id"],)).fetchone()[0])
+            if tr is not None:
+                item["unit_translation"] = tr["text"]
+            examples.append(item)
+        present.append({"character_id": c["id"], "name_ja": c["canonical_name"], "name_zh": c["display_name_zh"],
+                        "aliases_ja": json.loads(c["aliases_json"]), "speech_profile": prof,
+                        "verified_examples": examples})
+    batch_ids = {r["id"] for r in batch_rows}
+    utts = []
+    for u in conn.execute("SELECT * FROM utterances WHERE book_id=? AND scene_id=? ORDER BY unit_id, quote_index",
+                          (book_id, scene["id"])):
+        if u["unit_id"] not in batch_ids:
+            continue
+        sid = u["speaker_id_nullable"]
+        utts.append({"unit_id": u["unit_id"], "quote_index": u["quote_index"], "quote": u["quote_text"][:60],
+                     "speaker": names.get(sid) if sid else None, "status": u["status"]})
+    actions = [a for a in state.get("actions", []) if a.get("unit_id") in batch_ids]
+    for a in actions:
+        a["subject_candidates"] = [names.get(x, x) for x in a.get("subject_candidates", [])]
+        a["object_candidates"] = [names.get(x, x) for x in a.get("object_candidates", [])]
+    summaries = vis.visible_summaries(conn, book_id, horizon)
+    here = (book_id, scene_chapter(conn, scene))
+    same_ch = [s["summary"] for s in summaries if (s["book_id"], s["chapter_ref"]) == here]
+    prev_ch = [s["summary"] for s in summaries if (s["book_id"], s["chapter_ref"]) != here]
+    present_ids = {p["character_id"] for p in present}
+    facts = []
+    for f in vis.visible_facts(conn, book_id, horizon):
+        if f["subject"] in present_ids or any(p["name_ja"] in (f["subject"] + f["object"]) for p in present) \
+                or f["subject"] in scene_text:
+            facts.append({"subject": names.get(f["subject"], f["subject"]), "predicate": f["predicate"],
+                          "object": f["object"], "type": f["fact_type"], "certainty": f["certainty"],
+                          "viewpoint": f["source_viewpoint"]})
+    props = [{"item": p["name_ja"], "holder": names.get(p["holder_character_id"]) if p["holder_character_id"] else None}
+             for p in vis.visible_props(conn, book_id, horizon) if p["name_ja"] in scene_text]
+    mem: dict[str, Any] = {
+        "note": "Only information revealed before this scene. 'inferred'/'unknown' items are NOT facts.",
+        "previous_chapter_summary": prev_ch[-2:],
+        "this_chapter_so_far": _cap(same_ch, 4),
+        "facts": _cap(facts, max_evidence),
+        "props": props,
+    }
+    # keep the memory block within a character budget (drop oldest facts/summaries first)
+    while len(json.dumps(mem, ensure_ascii=False)) > chars_budget and (mem["facts"] or mem["this_chapter_so_far"]):
+        if mem["facts"]:
+            mem["facts"].pop(0)
+        else:
+            mem["this_chapter_so_far"].pop(0)
+    return {
+        "characters": present,
+        "scene": {"scene_id": scene["id"], "pov": state.get("pov"), "location": state.get("location"),
+                  "utterances": utts, "omitted_arguments": actions,
+                  "uncertainties": [x for x in state.get("uncertainties", [])
+                                    if set(x.get("unit_ids", [])) & batch_ids]},
+        "memory": mem,
+    }
+
+
+def scene_chapter(conn: sqlite3.Connection, scene: sqlite3.Row) -> str:
+    row = conn.execute("SELECT resource_href FROM units WHERE id=?", (scene["start_unit_id"],)).fetchone()
+    return row[0] if row else ""

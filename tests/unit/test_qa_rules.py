@@ -1,0 +1,74 @@
+from ncte.epub.units import InlineSpec
+from ncte.qa.rules import check_batch, check_translation
+
+EM = {1: InlineSpec(1, "element", "{http://www.w3.org/1999/xhtml}em", {}, False, 0)}
+
+
+def run(src, text, *, imap=None, glossary=(), kind="text", ruby=0):
+    plain = src.replace("⟦1⟧", "").replace("⟦/1⟧", "")
+    return {(f.type, f.severity) for f in check_translation(unit_id="u", kind=kind, source_text=src, plain_text=plain,
+                                                            inline_map=imap or {}, ruby_count=ruby, text=text,
+                                                            glossary=glossary)}
+
+
+def test_clean_translation():
+    assert run("「⟦1⟧なぜ⟦/1⟧だ」と彼は言った。", "「⟦1⟧為什麼⟦/1⟧？」他說道。", imap=EM) == set()
+
+
+def test_errors():
+    assert ("empty_translation", "error") in run("あいう", "  ")
+    assert ("placeholder_error", "error") in run("⟦1⟧あ⟦/1⟧", "啊", imap=EM)
+    assert ("untranslated", "error") in run("こんにちは", "こんにちは")
+    assert ("japanese_residue", "error") in run("こんにちはこんにちは", "你好こんにちはこんにちは")
+    assert ("placeholder_error", "error") in run("タイトル", "⟦1⟧標題⟦/1⟧", kind="ncx")
+
+
+def test_warnings():
+    assert ("too_short", "high") in run("あ" * 40, "啊")
+    assert ("quote_mismatch", "medium") in run("「あいうえお、かきくけこ」", "啊咿嗚欸喔，咖嘰咕")
+    assert ("non_taiwan_glyph", "medium") in run("これは国です", "这是国家")
+    assert ("number_mismatch", "low") in run("１２歳の春だった", "那是十二歲的春天")
+    assert ("ruby_notation_leak", "medium") in run("強敵《とも》だ", "強敵《とも》啊", ruby=1)
+
+
+def test_glossary_checks():
+    g = [{"source_term": "ミナ", "target_term": "米娜", "verified": True, "category": "character"}]
+    assert ("glossary_mismatch", "high") in run("ミナは笑った。", "米奈笑了。", glossary=g)
+    assert run("ミナは笑った。", "米娜笑了。", glossary=g) == set()
+    assert ("possible_added_name", "high") in run("彼女は笑った。", "米娜笑了。", glossary=g)
+
+
+def test_batch_duplicates():
+    f = check_batch({"a": "完全相同的翻譯文字", "b": "完全相同的翻譯文字"}, {"a": "一つ目の文です", "b": "二つ目の文です"})
+    assert [x.type for x in f] == ["duplicate_translation"]
+
+
+def test_middle_dot_and_long_vowel_are_not_kana():
+    # real-book regression: a song spelled out syllable by syllable (・) was rejected as untranslated
+    src = "「やったー───！　る・ん・る・ん・た・の・し・い・なー♪」"
+    assert run(src, "「太好了───！　好・開・心・好・快・樂・喔～♪」") == set()
+    assert ("japanese_residue", "error") in run(src, "「太好了　るんるんたのしいな♪」")
+
+
+def test_added_name_heuristic_regressions():
+    g = [{"source_term": "ソラっち", "target_term": "索拉", "category": "character", "verified": False},
+         {"source_term": "ソラ", "target_term": "索拉", "category": "character", "verified": False},
+         {"source_term": "黒崎レン", "target_term": "黑崎蓮", "category": "character", "verified": False, "aliases": ["レン様"]},
+         {"source_term": "赤ちゃん", "target_term": "嬰兒", "category": "character", "verified": False}]
+    assert run("ソラが笑った。", "索拉笑了。", glossary=g) == set()  # another entry with the same rendering
+    assert run("レン様が来た。", "黑崎蓮來了。", glossary=g) == set()  # alias in source
+    assert run("ベビーが泣いた。", "嬰兒哭了。", glossary=g) == set()  # generic referent
+    assert ("possible_added_name", "high") in run("彼女が笑った。", "索拉笑了。", glossary=g)
+
+
+def test_cantonese_is_rejected_but_interjection_is_fine():
+    src = "　──百円やったら、明日でええやん。気にせんとき。"  # Kansai-ben
+    assert ("cantonese", "error") in run(src, "　──一百円嘅話，聽日先啦。唔使理佢㗎。")
+    assert ("cantonese", "error") not in run(src, "　──才一百日圓的話，明天再說就好啦。別放在心上。")
+    assert run("「うーん……」", "「唔～嗯……」") == set()
+    assert ("non_taiwan_glyph", "medium") in run(src, "　──才一百円的話，明天再說就好啦。別放在心上。")
+
+
+def test_cantonese_rule_ignores_mandarin_substrings():
+    for zh in ("那邊有什麼嗎？", "聽日本人說過。", "這是重點解釋。", "在那邊度過了夏天。"):
+        assert ("cantonese", "error") not in run("そちらには何が？", zh)

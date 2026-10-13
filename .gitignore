@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+dist/
+build/
+.env
+workspace/
+*.epub
+!tests/fixtures/**/*.epub
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+logs/
+.DS_Store
+
+# private design notes (not published)
+EPUB_翻譯引擎_開發規格.md

@@ -1,0 +1,213 @@
+{
+  "name": "ncte-eval-v1",
+  "version": 1,
+  "description": "NCTE 自製的人工標註小型評測集（全部文本為本專案自行撰寫）。行號 line 為 0 起算；speaker 為 null 代表『原文資訊不足，正解是未知』。",
+  "characters": [
+    {"name_ja": "ミナ", "allowed_zh": ["米娜", "美奈", "蜜娜"]},
+    {"name_ja": "カイト", "allowed_zh": ["海斗", "凱特", "凱斗"]},
+    {"name_ja": "ソラ", "allowed_zh": ["索拉", "蒼空", "空"]},
+    {"name_ja": "レオン", "allowed_zh": ["雷恩", "里昂", "萊昂"]}
+  ],
+  "items": [
+    {
+      "id": "two_person_unmarked",
+      "category": "兩人無標記對話",
+      "lines": [
+        "　駅前の広場で、二人は待ち合わせていた。",
+        "「カイト、遅いですよ」とミナは言った。",
+        "「悪い、寝坊した」",
+        "「もう……次は気をつけてくださいね」",
+        "「わかってるって」",
+        "　カイトは頭をかいた。"
+      ],
+      "gold": {
+        "utterances": [
+          {"line": 1, "quote_index": 0, "speaker": "ミナ", "explicit": true},
+          {"line": 2, "quote_index": 0, "speaker": "カイト", "explicit": false},
+          {"line": 3, "quote_index": 0, "speaker": "ミナ", "explicit": false},
+          {"line": 4, "quote_index": 0, "speaker": "カイト", "explicit": false}
+        ],
+        "units": [
+          {"line": 2, "forbidden": ["米娜", "美奈"], "required_any": [["睡過頭", "賴床", "睡過了", "起晚", "睡晚"]]}
+        ]
+      }
+    },
+    {
+      "id": "multi_person",
+      "category": "多人無標記對話",
+      "lines": [
+        "　教室には三人が残っていた。",
+        "「ボクはもう帰るよ」とソラが言った。",
+        "「待てよ、まだ話は終わってねえ」",
+        "「二人とも、落ち着いてください」とミナが言った。",
+        "「誰か、窓を閉めてくれない？」",
+        "　廊下の奥から、知らない声が聞こえた。"
+      ],
+      "gold": {
+        "utterances": [
+          {"line": 1, "quote_index": 0, "speaker": "ソラ", "explicit": true},
+          {"line": 2, "quote_index": 0, "speaker": "カイト", "explicit": false},
+          {"line": 3, "quote_index": 0, "speaker": "ミナ", "explicit": true},
+          {"line": 4, "quote_index": 0, "speaker": null, "explicit": false}
+        ],
+        "units": [
+          {"line": 4, "forbidden": ["米娜", "海斗", "索拉", "美奈", "凱特"], "required_any": [["窗"]]}
+        ]
+      }
+    },
+    {
+      "id": "same_speaker_consecutive",
+      "category": "一人連續說兩句以上",
+      "lines": [
+        "「今日は私が案内します」とミナは言った。",
+        "「まずは図書館。それから、食堂にも行きましょう」",
+        "「この学校、広いですから。迷子にならないでくださいね」",
+        "「へいへい」とカイトは答えた。"
+      ],
+      "gold": {
+        "utterances": [
+          {"line": 0, "quote_index": 0, "speaker": "ミナ", "explicit": true},
+          {"line": 1, "quote_index": 0, "speaker": "ミナ", "explicit": false},
+          {"line": 2, "quote_index": 0, "speaker": "ミナ", "explicit": false},
+          {"line": 3, "quote_index": 0, "speaker": "カイト", "explicit": true}
+        ],
+        "units": [
+          {"line": 1, "forbidden": ["海斗"], "required_any": [["圖書館"], ["餐廳", "食堂"]]}
+        ]
+      }
+    },
+    {
+      "id": "verbal_tic_only",
+      "category": "只有口癖能暗示說話者",
+      "lines": [
+        "「今日の実験は成功なのだ」とソラは胸を張った。",
+        "「本当ですか？」とミナが尋ねた。",
+        "　しばらく沈黙が続いた。",
+        "「次はもっと大きな装置を作るのだ」"
+      ],
+      "gold": {
+        "utterances": [
+          {"line": 0, "quote_index": 0, "speaker": "ソラ", "explicit": false},
+          {"line": 1, "quote_index": 0, "speaker": "ミナ", "explicit": true},
+          {"line": 3, "quote_index": 0, "speaker": "ソラ", "explicit": false, "weak_only": true}
+        ],
+        "units": [
+          {"line": 3, "forbidden": ["索拉說", "米娜說"], "required_any": [["裝置"]]}
+        ]
+      }
+    },
+    {
+      "id": "imitation",
+      "category": "故意模仿他人口吻",
+      "lines": [
+        "「俺様に任せとけって！」",
+        "　ミナはカイトの口調を真似て、胸をどんと叩いた。",
+        "「似てねえよ」とカイトは笑った。"
+      ],
+      "gold": {
+        "utterances": [
+          {"line": 0, "quote_index": 0, "speaker": "ミナ", "explicit": false},
+          {"line": 2, "quote_index": 0, "speaker": "カイト", "explicit": true}
+        ],
+        "units": [
+          {"line": 0, "forbidden": ["海斗"], "required_any": [["交給"]]}
+        ]
+      }
+    },
+    {
+      "id": "omitted_arguments",
+      "category": "主語及賓語省略",
+      "lines": [
+        "　夕方、扉が静かに開いた。",
+        "　黙って一通の手紙を差し出した。",
+        "　受け取ると、震える手で封を切った。",
+        "「……読まなければよかった」"
+      ],
+      "gold": {
+        "utterances": [
+          {"line": 3, "quote_index": 0, "speaker": null, "explicit": false}
+        ],
+        "units": [
+          {"line": 1, "forbidden": ["他", "她", "米娜", "海斗"], "required_any": [["信"]]},
+          {"line": 2, "forbidden": ["他", "她", "米娜", "海斗"], "required_any": [["拆", "撕", "打開"]]},
+          {"line": 3, "forbidden": ["米娜", "海斗", "她說", "他說"], "required_any": [["讀", "看"]]}
+        ]
+      }
+    },
+    {
+      "id": "honorifics",
+      "category": "人稱與敬語變化",
+      "lines": [
+        "「先生、おはようございます」とミナは丁寧に頭を下げた。",
+        "「先生、宿題忘れた」とカイトはぶっきらぼうに言った。",
+        "「カイト君、また？」と先生はため息をついた。"
+      ],
+      "gold": {
+        "utterances": [
+          {"line": 0, "quote_index": 0, "speaker": "ミナ", "explicit": false},
+          {"line": 1, "quote_index": 0, "speaker": "カイト", "explicit": true},
+          {"line": 2, "quote_index": 0, "speaker": "先生", "explicit": false}
+        ],
+        "units": [
+          {"line": 0, "forbidden": [], "required_any": [["老師"], ["早安", "您好", "早"]]},
+          {"line": 1, "forbidden": [], "required_any": [["老師"], ["作業"]]}
+        ]
+      }
+    },
+    {
+      "id": "late_reveal",
+      "category": "身分直到後文才揭露",
+      "lines": [
+        "　仮面の騎士は、何も言わずに剣を収めた。",
+        "「あなたは、いったい誰なの？」とミナが尋ねた。",
+        "　騎士は答えず、夜の闇に消えた。",
+        "<p class=\"sep\">＊　＊　＊</p>",
+        "　仮面の騎士の正体は、ミナの兄レオンだった。"
+      ],
+      "gold": {
+        "utterances": [
+          {"line": 1, "quote_index": 0, "speaker": "ミナ", "explicit": true}
+        ],
+        "units": [
+          {"line": 4, "forbidden": [], "required_any": [["哥哥", "兄長", "兄"]]}
+        ],
+        "spoiler": {"before_line": 3, "terms": ["雷恩", "里昂", "萊昂", "レオン", "哥哥", "兄長"]}
+      }
+    },
+    {
+      "id": "prop_movement",
+      "category": "同物件跨段移動",
+      "lines": [
+        "　カイトは銀の鍵をミナに手渡した。",
+        "　ミナはその鍵を、さらにソラへ渡した。",
+        "　ソラは大事そうに鍵をポケットにしまった。",
+        "　それから、ポケットを何度も確かめた。"
+      ],
+      "gold": {
+        "utterances": [],
+        "units": [
+          {"line": 1, "forbidden": [], "required_any": [["鑰"]]},
+          {"line": 3, "forbidden": ["米娜", "海斗", "美奈", "凱特"], "required_any": [["口袋"]]}
+        ]
+      }
+    },
+    {
+      "id": "markup",
+      "category": "ruby、斜體、超連結、註腳",
+      "lines": [
+        "<p>　<ruby>強敵<rt>とも</rt></ruby>と呼べる相手は、<em>たった一人</em>だった。</p>",
+        "<p>「<a href=\"#note-a\" id=\"ref-a\">約束</a>だぞ」とカイトは言った。</p>",
+        "<p id=\"note-a\">　約束：<a href=\"#ref-a\">幼い頃の約束</a>のこと。</p>"
+      ],
+      "gold": {
+        "utterances": [
+          {"line": 1, "quote_index": 0, "speaker": "カイト", "explicit": true}
+        ],
+        "units": [
+          {"line": 0, "forbidden": ["とも"], "required_any": [["一個人", "一人", "唯一"]]},
+          {"line": 1, "forbidden": [], "required_any": [["約定", "約好", "說好"]]}
+        ]
+      }
+    }
+  ]
+}
