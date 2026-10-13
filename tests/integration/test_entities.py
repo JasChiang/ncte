@@ -52,6 +52,7 @@ def test_translation_payload_shows_forms_only_after_reveal(conn, cfg, fixtures):
     assert "same_entity_as" not in before[0]  # the nickname is not revealed yet
     assert after[0]["form"] == "nickname" and after[0]["note"] == "the fans' nickname"
     assert after[0]["same_entity_as"] == [{"ja": "クロガネ", "zh": "黑鐵", "form": "official"}]
+    assert "may_refer_to" not in after[0]
 
 
 def test_qa_form_substitution_and_offensive(conn, cfg, fixtures):
@@ -110,6 +111,13 @@ def test_names_cli(tmp_path, fixtures):
     assert forms["ミナっち"] == ("nickname", "小米娜") and forms["ミナ"] == ("official", "米娜")
     assert r.invoke(app, ["-w", str(ws), "names", "unlink", epub, "ミナっち"]).exit_code == 0
     assert r.invoke(app, ["-w", str(ws), "names", "detect", epub]).exit_code == 0
+    # a nickname two people share
+    assert r.invoke(app, ["-w", str(ws), "glossary", "set", epub, "カイト", "海斗", "--category", "character"]).exit_code == 0
+    out = r.invoke(app, ["-w", str(ws), "names", "link", epub, "ミナっち", "--to", "カイト", "--shared",
+                         "--note", "both were called that"])
+    assert out.exit_code == 0, out.output
+    data = json.loads(r.invoke(app, ["-w", str(ws), "names", "list", epub, "--json", "--all"]).output)
+    assert [x["term"] for e in data["entities"] for x in e["shared"]] == ["ミナっち"]
 
 
 def test_backfill_groups_character_aliases(conn, cfg, fixtures):
@@ -160,12 +168,24 @@ def test_ambiguous_form_does_not_fuse_two_people(conn, cfg, fixtures):
     assert link(conn, book.id, "しまむら", "島村", "nickname", origin="llm") == "accepted"
     assert link(conn, book.id, "しょーさん", "しまむら妹", "nickname", origin="llm") == "accepted"
     assert link(conn, book.id, "しまちゃん", "島村", "nickname", origin="llm") == "accepted"
-    # the same form now claimed for the sister: two established entities → only a candidate
-    assert link(conn, book.id, "しまちゃん", "しまむら妹", "nickname", origin="llm") == "candidate"
+    # the same form now claimed for the sister: two established entities → a shared form, not a merge
+    assert link(conn, book.id, "しまちゃん", "しまむら妹", "nickname", origin="llm", ordinal=40) == "shared"
     groups = sorted(sorted(f["ja"] for f in fs) for fs in entity_forms(conn, book.id).values())
     assert sorted(["しまむら", "しまちゃん", "島村"]) in groups and sorted(["しまむら妹", "しょーさん"]) in groups
-    # a human may still merge
+    # the translation is told who it may refer to – once that use has been revealed
+    gl = glossary_entries(conn, book.id)
+    early = glossary_payload(gl, "しまちゃん", upto=(1.0, 10))
+    late = glossary_payload(gl, "しまちゃん", upto=(1.0, 50))
+    assert "may_refer_to" not in early[0]
+    assert late[0]["may_refer_to"] == [{"ja": "島村", "zh": "島村"}, {"ja": "しまむら妹", "zh": "島村妹妹"}]
+    # the form is ambiguous for address-term attribution
+    from ncte.memory.address import name_forms
+
+    fmap, ambiguous = name_forms(conn, book.id)
+    assert "しまちゃん" in ambiguous and "しまちゃん" not in fmap
+    # a human may still merge; the sense then points into the form's own entity and disappears
     assert link(conn, book.id, "しまむら妹", "島村", "alias", origin="human") == "accepted"
+    assert conn.execute("SELECT count(*) FROM form_senses").fetchone()[0] == 0
 
 
 def test_entity_label_follows_official_form_and_unlink_drops_alias(conn, cfg, fixtures):

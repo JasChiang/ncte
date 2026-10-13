@@ -463,10 +463,11 @@ def names_list(epub: Annotated[str, typer.Argument()],
                all_: Annotated[bool, typer.Option("--all", help="Include single-form entities")] = False,
                as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
     """Show entities with their name forms, renderings, warnings and pending link suggestions."""
-    from .memory.entities import entity_forms
+    from .memory.entities import entity_forms, senses
 
     book = _book(epub)
     conn = state.conn
+    shared = senses(conn, book.id)
     ents = conn.execute(f"SELECT * FROM entities WHERE {SERIES_SCOPE} ORDER BY label_ja", (book.id,)).fetchall()
     forms = entity_forms(conn, book.id)
     data = []
@@ -474,7 +475,10 @@ def names_list(epub: Annotated[str, typer.Argument()],
         fs = sorted(forms.get(e["id"], []), key=lambda f: (f["form"] != "official", f["first_ordinal"] or 0))
         if not fs or (len(fs) == 1 and not all_ and not _name_warnings(fs)):
             continue
-        data.append({"entity_id": e["id"], "kind": e["kind"], "forms": fs, "warnings": _name_warnings(fs)})
+        data.append({"entity_id": e["id"], "kind": e["kind"], "forms": fs, "warnings": _name_warnings(fs),
+                     "shared": [{"term": t, "also_refers_to": x["entity_id"], "note": x["note"]}
+                                for t, xs in shared.items() for x in xs
+                                if any(f["ja"] == t for f in fs)]})
     cands = [dict(r) for r in conn.execute("SELECT term, target_term, form_type, origin, evidence_quote FROM entity_links "
                                            f"WHERE {SERIES_SCOPE} AND status='candidate'", (book.id,))]
     if as_json:
@@ -486,6 +490,10 @@ def names_list(epub: Annotated[str, typer.Argument()],
         for f in d["forms"]:
             typer.echo(f"    {f['ja']:<16} {f['form']:<9} → {f['zh']}{'  ✔' if f['verified'] else ''}"
                        + (f"   ({f['note']})" if f["note"] else ""))
+        for x in d["shared"]:
+            other = conn.execute("SELECT label_ja FROM entities WHERE id=?", (x["also_refers_to"],)).fetchone()
+            typer.echo(f"    ↔ {x['term']} may also refer to {other[0] if other else x['also_refers_to']}"
+                       + (f"   ({x['note']})" if x["note"] else ""))
         for w in d["warnings"]:
             typer.echo(f"    ⚠ {w}")
     if cands:
@@ -499,15 +507,26 @@ def names_link(epub: Annotated[str, typer.Argument()], term: Annotated[str, type
                to: Annotated[str, typer.Option("--to", help="another form of the same entity")],
                form: Annotated[str, typer.Option("--type", help="nickname|short|full|alias|title|official")] = "nickname",
                zh: Annotated[str | None, typer.Option("--zh", help="(new) rendering for TERM; marks it verified")] = None,
-               note: Annotated[str | None, typer.Option("--note")] = None) -> None:
+               note: Annotated[str | None, typer.Option("--note")] = None,
+               shared: Annotated[bool, typer.Option("--shared", help="TERM keeps its entity but may ALSO refer to "
+                                                    "--to's (a name two people share)")] = False) -> None:
     """Declare that TERM names the same entity as --to (human decision)."""
-    from .memory.entities import FORM_TYPES, link
+    from .memory.entities import FORM_TYPES, add_sense, link
     from .memory.repository import set_glossary
 
     book = _book(epub)
     if form not in FORM_TYPES:
         raise NCTEError(f"--type must be one of {', '.join(FORM_TYPES)}")
     conn = state.conn
+    if shared:
+        with Transaction(conn):
+            ok = add_sense(conn, book.id, term, to, origin="human", note=note)
+            conn.execute(f"UPDATE entity_links SET status='superseded' WHERE {SERIES_SCOPE} AND term=? AND "
+                         "target_term=? AND status='candidate'", (book.id, term, to))
+        if not ok:
+            raise NCTEError(f"{term} and {to} need renderings and must belong to different entities")
+        typer.echo(f"{term} may now refer to {to}'s entity as well (translations are told to decide from context)")
+        return
     with Transaction(conn):
         if zh:
             cat = conn.execute(f"SELECT category FROM glossary WHERE {SERIES_SCOPE} AND source_term=?", (book.id, to)).fetchone()

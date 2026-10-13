@@ -78,8 +78,18 @@ def glossary_payload(entries: list[dict[str, Any]], text: str, *, upto: tuple[fl
                 item["note"] = g["form_note"]
             item["same_entity_as"] = [{"ja": o["source_term"], "zh": o["target_term"],
                                        "form": o.get("form_type") or "official"} for o in siblings]
+        others = [x for x in g.get("senses") or [] if x["entity_id"] in by_entity
+                  and (upto is None or x["pos"] is None or x["pos"] <= upto)]
+        if others:  # a shared form (ADR-022): say who it may refer to, never which one
+            item["may_refer_to"] = [_entity_name(by_entity.get(g.get("entity_id") or "", [g]))] + \
+                [_entity_name(by_entity[x["entity_id"]]) for x in others]
         out.append(item)
     return out
+
+
+def _entity_name(forms: list[dict[str, Any]]) -> dict[str, str]:
+    head = next((f for f in forms if f.get("form_type") == "official"), forms[0])
+    return {"ja": head["source_term"], "zh": head["target_term"]}
 
 
 def heading_hints(conn: sqlite3.Connection, book_id: str) -> list[dict[str, str]]:

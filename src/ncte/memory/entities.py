@@ -95,6 +95,30 @@ def _joins_two_entities(conn: sqlite3.Connection, book_id: str, term: str, targe
             and _form_count(conn, book_id, s_eid) > 1 and _form_count(conn, book_id, t_eid) > 1)
 
 
+def add_sense(conn: sqlite3.Connection, book_id: str, term: str, target: str, *, origin: str, note: str | None = None,
+              unit_id: str | None = None, quote: str | None = None, ordinal: int | None = None) -> bool:
+    """``term`` (keeping its own entity) may also refer to ``target``'s entity: a shared name form (ADR-022)."""
+    s_eid, t_eid = _entity_of(conn, book_id, term), ensure_entity(conn, book_id, target)
+    if s_eid is None or t_eid is None or s_eid == t_eid:
+        return False
+    conn.execute("INSERT OR IGNORE INTO form_senses(book_id, term, entity_id, note, origin, evidence_unit_id, "
+                 "evidence_quote, revealed_ordinal, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                 (book_id, term, t_eid, note, origin, unit_id, (quote or "")[:300] or None, ordinal, utcnow()))
+    return True
+
+
+def senses(conn: sqlite3.Connection, book_id: str) -> dict[str, list[dict[str, Any]]]:
+    """term → the *other* entities a shared form may refer to (with the story position it became known)."""
+    vols = volumes(conn)
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in conn.execute(f"SELECT * FROM form_senses WHERE {SERIES_SCOPE}", (book_id,)):
+        out.setdefault(r["term"], []).append(
+            {"entity_id": r["entity_id"], "note": r["note"], "origin": r["origin"],
+             "pos": (vols.get(r["book_id"], 1.0), int(r["revealed_ordinal"])) if r["revealed_ordinal"] is not None
+             else None})
+    return out
+
+
 def refresh_entity(conn: sqlite3.Connection, book_id: str, eid: str) -> None:
     """Label an entity by its official form (else its earliest form) and make it a character entity when any
     form is a character name, so the first form that happened to be linked does not name it forever."""
@@ -117,7 +141,12 @@ def merge_into(conn: sqlite3.Connection, book_id: str, term: str, target: str, f
         return 0
     if s_eid != t_eid:
         conn.execute(f"UPDATE glossary SET entity_id=? WHERE {SERIES_SCOPE} AND entity_id=?", (t_eid, book_id, s_eid))
+        conn.execute(f"UPDATE OR IGNORE form_senses SET entity_id=? WHERE {SERIES_SCOPE} AND entity_id=?",
+                     (t_eid, book_id, s_eid))
         conn.execute("DELETE FROM entities WHERE id=?", (s_eid,))
+    # a sense pointing at the entity the form now belongs to is no longer "another" referent
+    conn.execute(f"DELETE FROM form_senses WHERE {SERIES_SCOPE} AND (entity_id=? AND term IN (SELECT source_term FROM "
+                 f"glossary WHERE entity_id=?) OR entity_id=?)", (book_id, t_eid, t_eid, s_eid))
     conn.execute(f"UPDATE glossary SET form_type=?, form_note=COALESCE(?, form_note) WHERE {SERIES_SCOPE} AND source_term=?",
                  (form_type, note, book_id, term))
     refresh_entity(conn, book_id, t_eid)
@@ -178,16 +207,20 @@ def record_link(conn: sqlite3.Connection, book_id: str, term: str, target: str, 
 def link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_type: str, *, origin: str,
          unit_id: str | None = None, quote: str | None = None, ordinal: int | None = None,
          note: str | None = None) -> str:
-    """Link two forms. Returns 'accepted' or 'candidate' (when one side has no glossary entry yet)."""
+    """Link two forms. Returns 'accepted', 'shared' (an automatic link that would fuse two established entities:
+    the form is recorded as possibly referring to either) or 'candidate' (one side has no glossary entry yet)."""
     known = {r[0] for r in conn.execute(f"SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND source_term IN (?,?)",
                                         (book_id, term, target))}
     if term in known and target in known:
         if origin != "human" and _joins_two_entities(conn, book_id, term, target):
             # An ambiguous form (「しまちゃん」 was used for both sisters) must not fuse two established
-            # entities – merge_into moves every form of the term's entity. A human decides (ncte names link).
+            # entities – merge_into moves every form of the term's entity. The form is recorded as *shared*
+            # (it may refer to either); merging stays a human decision (ncte names link).
+            add_sense(conn, book_id, term, target, origin=origin, note=note, unit_id=unit_id, quote=quote,
+                      ordinal=ordinal)
             record_link(conn, book_id, term, target, form_type, origin=origin, status="candidate", unit_id=unit_id,
                         quote=quote, ordinal=ordinal)
-            return "candidate"
+            return "shared"
         merge_into(conn, book_id, term, target, form_type, note)
         record_link(conn, book_id, term, target, form_type, origin=origin, status="accepted", unit_id=unit_id,
                     quote=quote, ordinal=ordinal)

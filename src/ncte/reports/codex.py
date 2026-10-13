@@ -15,7 +15,7 @@ from html import escape
 from typing import Any
 
 from ..epub.units import match_text
-from ..memory.entities import entity_forms
+from ..memory.entities import entity_forms, senses
 from ..series import INF_POS, SERIES_SCOPE, Pos, volumes
 
 KIND_ZH = {"character": "人物", "organization": "團體", "place": "地點", "item": "物品", "skill": "技能", "term": "用語"}
@@ -39,6 +39,22 @@ def build_index(conn: sqlite3.Connection, book_id: str, upto: Pos = INF_POS) -> 
     units = [u for u in _series_units(conn, book_id) if u[0] < upto]
     ents = {r["id"]: r for r in conn.execute(f"SELECT * FROM entities WHERE {SERIES_SCOPE}", (book_id,))}
     chars = {r["canonical_name"]: r for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,))}
+    cname = {r["id"]: r["display_name_zh"] or r["canonical_name"] for r in chars.values()}
+    vols = volumes(conn)
+    called: dict[str, list[dict[str, Any]]] = {}  # addressee id → forms others (or they themself) use
+    for a in conn.execute(f"SELECT * FROM address_terms WHERE {SERIES_SCOPE}", (book_id,)):
+        p = (vols.get(a["book_id"], 1.0), a["first_ordinal"])
+        if p < upto and a["speaker_id"] in cname:
+            called.setdefault(a["addressee_id"], []).append(
+                {"speaker": "（自稱）" if a["speaker_id"] == a["addressee_id"] else cname[a["speaker_id"]],
+                 "ja": a["form_ja"], "zh": a["form_zh"], "uses": a["uses"], "first": p})
+    shared_to: dict[str, list[str]] = {}  # entity id → forms of OTHER entities that may also mean it
+    shared_from: dict[str, list[str]] = {}  # term → note that it may also mean another entity
+    for t, xs in senses(conn, book_id).items():
+        for x in xs:
+            if x["pos"] is None or x["pos"] < upto:
+                shared_to.setdefault(x["entity_id"], []).append(t)
+                shared_from.setdefault(t, []).append(x["entity_id"])
     out: list[dict[str, Any]] = []
     for eid, forms in entity_forms(conn, book_id).items():
         entry_forms = []
@@ -63,6 +79,11 @@ def build_index(conn: sqlite3.Connection, book_id: str, upto: Pos = INF_POS) -> 
                                 "mentions_by_volume": dict(sorted(per_vol.items())),
                                 "mentions": sum(f["mentions"] for f in entry_forms)}
         ch = chars.get(entry_forms[0]["ja"]) or next((chars.get(f["ja"]) for f in entry_forms if f["ja"] in chars), None)
+        if shared_to.get(eid) or any(f["ja"] in shared_from for f in entry_forms):
+            item["shared_forms"] = sorted(set(shared_to.get(eid, []) + [f["ja"] for f in entry_forms
+                                                                       if f["ja"] in shared_from]))
+        if ch is not None and called.get(ch["id"]):
+            item["called"] = sorted(called[ch["id"]], key=lambda c: (-c["uses"], c["first"]))
         if ch is not None and kind == "character":
             prof = json.loads(ch["speech_profile_json"] or "{}")
             if prof.get("n_examples"):
@@ -155,6 +176,10 @@ def _pos_text(p: Pos, labels: dict[float, str]) -> str:
     return f"{labels.get(p[0], f'第{p[0]:g}集')} §{p[1]}"
 
 
+def _called_text(c: dict[str, Any]) -> str:
+    return f"{c['speaker']}→{c['ja']}" + (f"（{c['zh']}）" if c["zh"] else "") + f"×{c['uses']}"
+
+
 def index_markdown(idx: list[dict[str, Any]], labels: dict[float, str], title: str) -> str:
     lines = [f"# {title}：名詞索引", ""]
     kind = None
@@ -167,6 +192,10 @@ def index_markdown(idx: list[dict[str, Any]], labels: dict[float, str], title: s
         lines.append(f"- **{e['name_zh']}**（{e['name_ja']}）　{forms}　首次出現：{_pos_text(e['first'], labels)}"
                      f"　出現 {e['mentions']} 段" + (f"　注：{'；'.join(f['note'] for f in e['forms'] if f['note'])}"
                                                   if any(f["note"] for f in e["forms"]) else ""))
+        if e.get("called"):
+            lines.append("  - 被怎麼稱呼：" + "；".join(_called_text(c) for c in e["called"][:12]))
+        if e.get("shared_forms"):
+            lines.append("  - 與他人共用的稱呼：" + "、".join(e["shared_forms"]))
     return "\n".join(lines) + "\n"
 
 
@@ -199,6 +228,11 @@ def index_html(idx: list[dict[str, Any]], labels: dict[float, str], title: str, 
                          "<th>其他稱呼</th><th>首次出現</th><th>出現段數</th><th>附註</th></tr>")
         others = "<br>".join(f"{escape(f['ja'])} → {escape(f['zh'])} <span class='muted'>({escape(f['form'])})</span>"
                              for f in e["forms"][1:])
+        if e.get("called"):
+            others += ("<br>" if others else "") + "<span class='muted'>被怎麼稱呼：</span>" + "；".join(
+                escape(_called_text(c)) for c in e["called"][:12])
+        if e.get("shared_forms"):
+            others += ("<br>" if others else "") + "<span class='muted'>與他人共用：</span>" + escape("、".join(e["shared_forms"]))
         notes = "；".join(f["note"] for f in e["forms"] if f["note"])
         speech = e.get("speech")
         if speech:

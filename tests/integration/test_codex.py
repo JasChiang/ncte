@@ -27,6 +27,10 @@ def test_index_and_relations_respect_horizon(conn, cfg, fixtures):
     early_rel = build_relations(conn, book.id, (1.0, ch3), min_shared_scenes=1)
     assert "莉莉亞" not in early_rel["labels"].values()
     assert "米娜" in index_markdown(build_index(conn, book.id), {1.0: "第1集"}, "t")
+    kaito = next(e for e in build_index(conn, book.id) if e["name_ja"] == "カイト")
+    assert kaito["called"][0] | {"first": None} == {"speaker": "米娜", "ja": "カイト", "zh": "海斗", "uses": 1,
+                                                    "first": None}
+    assert "被怎麼稱呼：米娜→カイト（海斗）×1" in index_markdown(build_index(conn, book.id), {1.0: "第1集"}, "t")
     assert relations_mermaid(rel).startswith("graph LR")
 
 
