@@ -29,7 +29,7 @@ eval   ──► eval/runner (A/B/C/D in fresh workspaces) ──► eval/metric
 ## 資料流與交易邊界
 - 每批翻譯一個交易（譯文、QA 發現、job 狀態一起提交）；請求紀錄在送出前寫入（`sent`），回應後更新。
 - 場景分析、記憶更新、複查各自獨立交易與 job；任何一步失敗都不會回滾已提交的譯文。
-- 快取鍵：`source_hash` + prompt 版本（含檔案 hash）+ 模型 + 模式 + 相關術語 hash；`context_hash` 只記錄。
+- 快取鍵：`source_hash` + prompt 主版本（v1、v2…）+ 模型 + 模式 + 相關術語 hash（只算人工確認的術語）；`context_hash` 只記錄。同一主版本內修改 prompt 檔、自動發現的術語都不會讓舊譯文失效（ADR）；dry-run 會列出用舊修訂翻譯的段落數，要套用新 prompt 請用 `retranslate`／`translate --force`，做品質比較時每組用全新 workspace。
 - 匯出時每個單元取「人工 > 最新機器譯文（succeeded/needs_review）」，且 `source_hash` 必須相符。
 
 ## 證據分級
