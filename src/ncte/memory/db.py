@@ -377,6 +377,49 @@ CREATE TABLE library_books (
     added_at TEXT NOT NULL
 );
 """),
+    (7, "address terms (who calls whom what), shared name forms, series style guide", """
+CREATE TABLE address_terms (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id TEXT NOT NULL,
+    speaker_id TEXT NOT NULL,
+    addressee_id TEXT NOT NULL,
+    form_ja TEXT NOT NULL,
+    form_zh TEXT,
+    zh_origin TEXT,
+    note TEXT,
+    origin TEXT NOT NULL,
+    certainty TEXT NOT NULL,
+    first_unit_id TEXT,
+    first_ordinal INTEGER NOT NULL,
+    last_book_id TEXT,
+    last_ordinal INTEGER,
+    uses INTEGER NOT NULL DEFAULT 1,
+    evidence_quote TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(speaker_id, addressee_id, form_ja)
+);
+CREATE INDEX idx_address_pair ON address_terms(speaker_id, addressee_id);
+CREATE TABLE address_observations (
+    utterance_id TEXT NOT NULL,
+    address_id INTEGER NOT NULL,
+    PRIMARY KEY (utterance_id, address_id)
+);
+CREATE TABLE form_senses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id TEXT NOT NULL,
+    term TEXT NOT NULL,
+    entity_id TEXT NOT NULL,
+    note TEXT,
+    origin TEXT NOT NULL,
+    evidence_unit_id TEXT,
+    evidence_quote TEXT,
+    revealed_ordinal INTEGER,
+    created_at TEXT NOT NULL,
+    UNIQUE(term, entity_id)
+);
+ALTER TABLE series ADD COLUMN style_json TEXT NOT NULL DEFAULT '{}';
+"""),
 ]
 
 
@@ -422,7 +465,15 @@ def _assign_series(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE books SET series_id=?, volume_index=1 WHERE id=?", (sid, bid))
 
 
-POST_MIGRATION = {3: _reindex_units_fts, 4: _rehash_glossary_versions, 5: _group_entities, 6: _assign_series}
+def _harvest_address_terms(conn: sqlite3.Connection) -> None:
+    from .address import harvest_book
+
+    for (book_id,) in conn.execute("SELECT id FROM books").fetchall():
+        harvest_book(conn, book_id)
+
+
+POST_MIGRATION = {3: _reindex_units_fts, 4: _rehash_glossary_versions, 5: _group_entities, 6: _assign_series,
+                  7: _harvest_address_terms}
 
 
 def utcnow() -> str:

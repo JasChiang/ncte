@@ -161,6 +161,26 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
                 quote=nl.evidence_quote, ordinal=ordinal[first], note=nl.note[:200] or None) == "accepted":
             stats["name_links"] += 1
 
+    # who calls whom what, with the rendering the translation used (ADR-022)
+    from ..memory.address import upsert as upsert_address
+
+    stats["address_terms"] = 0
+    for at in parsed.address_terms:
+        ev = [u for u in at.evidence_unit_ids if u in text_of]
+        quote = _norm(at.evidence_quote)
+        if at.speaker_ref not in chars or at.addressee_ref not in chars:
+            rej(at.model_dump(), "address term: speaker/addressee must be known character ids")
+            continue
+        if not ev or len(quote) < 2 or quote not in _norm("".join(text_of[u] for u in ev)) \
+                or _norm(at.term) not in quote or not acceptable_glossary_term(at.term):
+            rej(at.model_dump(), "address term: term/evidence_quote not found verbatim")
+            continue
+        first = min(ev, key=lambda u: ordinal[u])
+        upsert_address(conn, book_id, at.speaker_ref, at.addressee_ref, clean(at.term).strip(), ordinal=ordinal[first],
+                       unit_id=first, origin="llm", certainty="inferred", form_zh=at.term_zh.strip()[:24] or None,
+                       quote=at.evidence_quote, note=at.note[:200] or None)
+        stats["address_terms"] += 1
+
     for p in parsed.prop_states:
         if p.name_ja not in "".join(clean(t) for t in text_of.values()):
             rej(p.model_dump(), "prop not mentioned in scene")

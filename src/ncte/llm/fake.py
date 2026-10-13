@@ -61,7 +61,7 @@ def default_scene_analyze(payload: dict[str, Any], req: LLMRequest) -> dict[str,
 def default_memory_update(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:
     n = len(payload.get("units", []))
     return {"scene_summary": f"（FakeLLM 摘要）本場景共 {n} 個單元。", "facts": [], "glossary_candidates": [],
-            "prop_states": [], "name_links": []}
+            "prop_states": [], "name_links": [], "address_terms": []}
 
 
 def default_review(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:

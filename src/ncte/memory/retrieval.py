@@ -112,7 +112,14 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             mem["facts"].pop(0)
         else:
             mem["this_chapter_so_far"].pop(0)
-    return {
+    from .address import context_items
+
+    batch_text = " ".join(r["plain_text"] for r in batch_rows)
+    batch_speakers = {u["speaker_id_nullable"] for u in conn.execute(
+        f"SELECT speaker_id_nullable FROM utterances WHERE unit_id IN ({','.join('?' * len(batch_ids))}) AND "
+        "speaker_id_nullable IS NOT NULL", list(batch_ids))}
+    all_names = {c["id"]: (c["display_name_zh"] or c["canonical_name"]) for c in chars}
+    out: dict[str, Any] = {
         "characters": present,
         "scene": {"scene_id": scene["id"], "pov": state.get("pov"), "location": state.get("location"),
                   "utterances": utts, "omitted_arguments": actions,
@@ -120,6 +127,10 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
                                     if set(x.get("unit_ids", [])) & batch_ids]},
         "memory": mem,
     }
+    address = context_items(conn, book_id, horizon, batch_text, batch_speakers, all_names)
+    if address:
+        out["address_terms"] = address
+    return out
 
 
 def scene_chapter(conn: sqlite3.Connection, scene: sqlite3.Row) -> str:

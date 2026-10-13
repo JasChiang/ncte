@@ -124,12 +124,23 @@ class NameLink(_M):
     evidence_quote: str
 
 
+class AddressTermOut(_M):
+    speaker_ref: str  # character_id of the one who says it
+    addressee_ref: str  # character_id of the one called / referred to (same as speaker_ref = refers to self)
+    term: str  # the form as written, including honorifics (「島村さん」「あだっち」)
+    term_zh: str  # the rendering used in this scene's translation
+    note: str
+    evidence_unit_ids: list[str]
+    evidence_quote: str
+
+
 class MemoryUpdateOutput(_M):
     scene_summary: str
     facts: list[FactOut]
     glossary_candidates: list[GlossaryCandidate]
     prop_states: list[PropState]
     name_links: list[NameLink] = Field(default_factory=list)
+    address_terms: list[AddressTermOut] = Field(default_factory=list)
 
 
 # ------------------------------------------------------------------ review

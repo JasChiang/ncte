@@ -11,7 +11,7 @@ GENERIC_REFERENTS = frozenset(
     # colloquial / kana kinship forms (「おねえちゃん」→「姐姐」 is a word, not a name)
     "姉ちゃん 兄ちゃん ねえちゃん にいちゃん おねえちゃん おにいちゃん おねーちゃん おにーちゃん お姉さん お兄さん "
     "おねえさん おにいさん 姉貴 兄貴 母ちゃん 父ちゃん かあさん とうさん おかあさん おとうさん ママ パパ "
-    "おじさん おばさん じいちゃん ばあちゃん".split())
+    "おじさん おばさん じいちゃん ばあちゃん 母親 父親 お袋 親父 両親".split())
 
 
 def acceptable_glossary_term(term: str) -> bool:

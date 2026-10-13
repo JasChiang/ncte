@@ -125,7 +125,9 @@ def set_speaker_human(conn: Any, utterance_id: str, character_id: str | None, *,
     if row is None:
         raise KeyError(f"unknown utterance {utterance_id}")
     if character_id is not None:
-        ch = conn.execute("SELECT id FROM characters WHERE id=? AND book_id=?", (character_id, row["book_id"])).fetchone()
+        from ..series import SERIES_SCOPE
+
+        ch = conn.execute(f"SELECT id FROM characters WHERE id=? AND {SERIES_SCOPE}", (character_id, row["book_id"])).fetchone()
         if ch is None:
             raise KeyError(f"unknown character {character_id}")
     chain = [row]
@@ -150,4 +152,8 @@ def set_speaker_human(conn: Any, utterance_id: str, character_id: str | None, *,
                          "(?,?,?,?,?,?)", (u["book_id"], u["unit_id"], "speaker_corrected", "high",
                                            f"{u['speaker_id_nullable']} → {character_id}: {reason}", utcnow()))
     repo.refresh_profiles(conn, row["book_id"])
+    from ..memory.address import reharvest_scene
+
+    for scene_id in {u["scene_id"] for u in chain if u["scene_id"]}:
+        reharvest_scene(conn, row["book_id"], scene_id)
     return {"utterances": [u["id"] for u in chain], "changed_units": changed_units}

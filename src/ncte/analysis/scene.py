@@ -309,6 +309,9 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     conn.execute("UPDATE scenes SET state_json=?, version=? WHERE book_id=? AND id=?",
                  (json.dumps(state, ensure_ascii=False), version, book_id, sid))
     repo.refresh_profiles(conn, book_id)
+    from ..memory.address import reharvest_scene
+
+    stats["address_terms"] = reharvest_scene(conn, book_id, sid)
     return stats
 
 

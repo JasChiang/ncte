@@ -556,6 +556,80 @@ def names_detect(epub: Annotated[str, typer.Argument()]) -> None:
     typer.echo(f"{len(found)} statements found")
 
 
+def _character(book_id: str, name: str) -> str:
+    """Character id from an id, a Japanese name / alias or the Chinese name."""
+    for r in state.conn.execute(f"SELECT id, canonical_name, display_name_zh, aliases_json FROM characters "
+                                f"WHERE {SERIES_SCOPE}", (book_id,)):
+        if name in (r["id"], r["canonical_name"], r["display_name_zh"]) or name in json.loads(r["aliases_json"]):
+            return str(r["id"])
+    raise NCTEError(f"unknown character {name!r} (see `ncte characters`)")
+
+
+@names_app.command("address")
+def names_address(epub: Annotated[str, typer.Argument()],
+                  character: Annotated[str | None, typer.Option("--character", help="only forms said by or to this character")] = None,
+                  as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
+    """Who calls whom what (address terms), in order of first use, with uses and the rendering kept."""
+    from .series import volumes
+
+    book = _book(epub)
+    conn = state.conn
+    names = {r[0]: r[1] or r[2] for r in conn.execute(
+        f"SELECT id, display_name_zh, canonical_name FROM characters WHERE {SERIES_SCOPE}", (book.id,))}
+    cid = _character(book.id, character) if character else None
+    vols = volumes(conn)
+    data = []
+    for r in conn.execute(f"SELECT * FROM address_terms WHERE {SERIES_SCOPE}", (book.id,)):
+        if cid and cid not in (r["speaker_id"], r["addressee_id"]):
+            continue
+        data.append({"id": r["id"], "speaker": names.get(r["speaker_id"], r["speaker_id"]),
+                     "to": "（自稱）" if r["speaker_id"] == r["addressee_id"] else names.get(r["addressee_id"], r["addressee_id"]),
+                     "ja": r["form_ja"], "zh": r["form_zh"], "zh_origin": r["zh_origin"], "uses": r["uses"],
+                     "certainty": r["certainty"], "first": (vols.get(r["book_id"], 1.0), r["first_ordinal"]),
+                     "note": r["note"]})
+    data.sort(key=lambda d: (d["speaker"], d["to"], d["first"]))
+    if as_json:
+        echo_json(data)
+        return
+    pair = None
+    for d in data:
+        if (d["speaker"], d["to"]) != pair:
+            pair = (d["speaker"], d["to"])
+            typer.echo(f"■ {d['speaker']} → {d['to']}")
+        mark = {"human": " ✔", "llm": "", "glossary": " (譯名表)", None: ""}.get(d["zh_origin"], "")
+        typer.echo(f"    {d['ja']:<14} → {d['zh'] or '?'}{mark}   ×{d['uses']}  第{d['first'][0]:g}集 §{d['first'][1]}"
+                   + ("  (推測說話者)" if d["certainty"] == "inferred" else "")
+                   + (f"   {d['note']}" if d["note"] else ""))
+
+
+@names_app.command("address-set")
+def names_address_set(epub: Annotated[str, typer.Argument()],
+                      speaker: Annotated[str, typer.Option("--speaker", help="character who says it")],
+                      to: Annotated[str, typer.Option("--to", help="character called (same as --speaker = refers to self)")],
+                      ja: Annotated[str, typer.Option("--ja", help="the form as written, with honorific")],
+                      zh: Annotated[str, typer.Option("--zh", help="rendering to keep")],
+                      note: Annotated[str | None, typer.Option("--note")] = None) -> None:
+    """Fix how one character's form of address for another is rendered (human decision; never overwritten)."""
+    from .memory.address import upsert
+
+    book = _book(epub)
+    conn = state.conn
+    sp, ad = _character(book.id, speaker), _character(book.id, to)
+    row = conn.execute("SELECT * FROM address_terms WHERE speaker_id=? AND addressee_id=? AND form_ja=?",
+                       (sp, ad, ja)).fetchone()
+    with Transaction(conn):
+        if row is None:
+            first = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? AND instr(plain_text, ?) > 0 "
+                                 "ORDER BY ordinal LIMIT 1", (book.id, ja)).fetchone()
+            upsert(conn, book.id, sp, ad, ja, ordinal=first[1] if first else 0, unit_id=first[0] if first else None,
+                   origin="human", certainty="human", form_zh=zh, note=note)
+        else:
+            conn.execute("UPDATE address_terms SET form_zh=?, zh_origin='human', note=COALESCE(?, note), updated_at=? "
+                         "WHERE id=?", (zh, note, utcnow(), row["id"]))
+    typer.echo(f"{speaker} → {to}: {ja} → {zh} (kept for later translations; existing ones are not changed — "
+               "use `ncte retranslate` for specific units)")
+
+
 # --------------------------------------------------------------------------- series (ADR-020)
 
 series_app = typer.Typer(help="Series: several volumes sharing names, characters and plot memory.",
