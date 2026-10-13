@@ -13,13 +13,16 @@ from ncte.samples import BookSpec, story_spec, write_book
     ("銀の鍵と王女 上", "銀の鍵と王女", 1), ("銀の鍵と王女（下）", "銀の鍵と王女", 2),
     ("銀の鍵と王女 2 ―星降る夜―", "銀の鍵と王女", 2), ("銀の鍵と王女 6 星降る夜", "銀の鍵と王女", 6),
     ("銀の鍵と王女 2.5", "銀の鍵と王女", 2.5),
+    ("銀の鍵と王女2 (電撃文庫)", "銀の鍵と王女", 2), ("銀の鍵と王女2", "銀の鍵と王女", 2),
+    ("銀の鍵と王女（3）（MF文庫J）", "銀の鍵と王女", 3), ("銀の鍵と王女 4【電子特典付き】", "銀の鍵と王女", 4),
 ])
 def test_title_patterns(title, base, vol):
     g = guess_from_title(title)
     assert g is not None and g[0] == base and g[1] == vol
 
 
-@pytest.mark.parametrize("title", ["超かぐや姫！", "86―エイティシックス―", "1Q84", "銀の鍵と王女", "Re:ゼロ"])
+@pytest.mark.parametrize("title", ["超かぐや姫！", "86―エイティシックス―", "1Q84", "銀の鍵と王女", "Re:ゼロ",
+                                   "銀の鍵と王女 (電撃文庫)"])
 def test_titles_without_volume(title):
     assert guess_from_title(title) is None
 
@@ -51,6 +54,13 @@ def test_title_and_title_sort(tmp_path):
     g = detect_series(_book(tmp_path, "c_04", extra_meta='<meta name="calibre:title_sort" content="ギンノカギ001"/>'))
     assert (g.volume, g.confidence) == (1.0, "low")
     assert detect_series(_book(tmp_path, "c_05")).source == "none"
+
+
+def test_clean_title():
+    from ncte.epub.series_meta import clean_title
+
+    assert clean_title("安達としまむら (電撃文庫)") == "安達としまむら"
+    assert clean_title("銀の鍵と王女（上）") == "銀の鍵と王女（上）"  # a volume marker is not a label
 
 
 def test_normalize_title():

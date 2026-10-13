@@ -260,7 +260,8 @@ def translate(
         from .translation.dryrun import dry_run as do_dry
 
         client = make_client(cfg, fake=fake, need_key=False)
-        plan = do_dry(state.conn, cfg, book, opts, client, log=typer.echo)
+        history = [state.ws.series_conn(r[0]) for r in state.ws.lib.execute("SELECT id FROM series").fetchall()]
+        plan = do_dry(state.conn, cfg, book, opts, client, log=typer.echo, history=history)
         if as_json:
             echo_json(plan.to_dict())
             return

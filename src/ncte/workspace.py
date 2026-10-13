@@ -157,7 +157,9 @@ class Workspace:
             row = self.find_series(series)
             sid = row["id"] if row else self.create_series(series)
         else:
-            sid = self.create_series(pkg.title or Path(path).stem)
+            from .epub.series_meta import clean_title
+
+            sid = self.create_series(clean_title(pkg.title or "") or Path(path).stem)
         srow = self.series_row(sid)
         if volume is None:
             last = self.lib.execute("SELECT MAX(volume_index) FROM library_books WHERE series_id=?", (sid,)).fetchone()[0]

@@ -48,8 +48,23 @@ def _num(s: str) -> float | None:
         return None
 
 
+_LABEL = re.compile(r"[\s　]*[（(\[【][^()（）\[\]【】]*(?:文庫|ノベル|ブックス|books|novels|新書|レーベル|コミックス|"
+                    r"版|特典|edition)[^()（）\[\]【】]*[)）\]】][\s　]*$", re.IGNORECASE)
+
+
+def clean_title(title: str) -> str:
+    """Remove trailing imprint / edition labels: 「安達としまむら2 (電撃文庫)」 → 「安達としまむら2」."""
+    t = title.strip()
+    while True:
+        new = _LABEL.sub("", t)
+        if new == t or not new:
+            return t
+        t = new
+
+
 def guess_from_title(title: str) -> tuple[str, float, str] | None:
     """(base title, volume, matched text) from a book title, or None."""
+    title = clean_title(title)
     t = unicodedata.normalize("NFKC", title).strip()
     raw = title.strip()
     patterns = [
@@ -58,6 +73,8 @@ def guess_from_title(title: str) -> tuple[str, float, str] | None:
         rf"^(?P<base>.+?)[\s　]+(?:Vol\.?|vol\.?|VOL\.?){_SEP}(?P<n>\d+(?:\.\d+)?){_SUB}$",
         rf"^(?P<base>.+?)[\s　]+(?P<n>\d{{1,3}}(?:\.\d+)?){_SUB}$",
         r"^(?P<base>.{2,}?)[\s　]+(?P<n>\d{1,3})[\s　]+(?P<sub>\D.*)$",  # 「〇〇 3 副題」
+        # number glued to Japanese/Chinese text: 「安達としまむら2」 (not 「Re:ゼロ2」 / 「1Q84」)
+        rf"^(?P<base>.*[぀-ヿ㐀-鿿々〆！？」』】])(?P<n>\d{{1,3}}(?:\.\d+)?){_SUB}$",
     ]
     for p in patterns:
         m = re.match(p, t)
@@ -113,5 +130,5 @@ def detect_series(pkg: EpubPackage) -> SeriesGuess:
 
 
 def normalize_title(t: str) -> str:
-    t = unicodedata.normalize("NFKC", t).lower()
+    t = unicodedata.normalize("NFKC", clean_title(t)).lower()
     return re.sub(r"[\s　!！?？・:：\-‐—―~〜～「」『』【】()（）\[\]]+", "", t)

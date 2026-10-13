@@ -48,7 +48,8 @@ class DryRunPlan:
 
 
 def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions, client: LLMClient,
-            log: Any = print) -> DryRunPlan:
+            log: Any = print, *, history: list[sqlite3.Connection] | None = None) -> DryRunPlan:
+    """``history``: databases whose real requests calibrate the estimate (default: ``conn`` only)."""
     pricing, source = resolve_pricing(conn, client, opts.model, allow_snapshot=True, log=log)
     from .orchestrator import check_reasoning_effort
 
@@ -107,7 +108,7 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
             stage_chars["scene_analyze"] = scene_chars
         if cfg.context.memory_update:
             stage_chars["memory_update"] = scene_chars
-    calib = calibrate(conn, opts.model, cfg.openrouter.reasoning_effort)
+    calib = calibrate(history or [conn], opts.model, cfg.openrouter.reasoning_effort)
     calibrated = None
     if all(s in calib for s in stage_chars):
         calibrated = round(sum(calib[s]["usd_per_char"] * n for s, n in stage_chars.items()), 4)
@@ -130,15 +131,21 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
         reasoning_effort=cfg.openrouter.reasoning_effort)
 
 
-def calibrate(conn: sqlite3.Connection, model: str, effort: str | None, *, min_requests: int = 3,
+def calibrate(conns: list[sqlite3.Connection], model: str, effort: str | None, *, min_requests: int = 3,
               min_chars: int = 500) -> dict[str, dict[str, Any]]:
     """Actual cost per source character, per stage, from earlier requests with the same model and
-    reasoning effort (any book). Only stages with enough samples are returned."""
+    reasoning effort (any book, any series). Only stages with enough samples are returned."""
+    agg: dict[str, list[float]] = {}  # stage → [requests, cost, chars]
+    for conn in conns:
+        _calibrate_one(conn, model, effort, agg)
+    return _calibration_result(agg, min_requests, min_chars)
+
+
+def _calibrate_one(conn: sqlite3.Connection, model: str, effort: str | None, agg: dict[str, list[float]]) -> None:
     rows = conn.execute(
         "SELECT stage, cost_usd, unit_ids_json FROM llm_requests WHERE model=? AND reasoning_effort IS ? AND "
         "status='succeeded' AND cost_status IN ('reported','reported_generation') AND cost_usd IS NOT NULL",
         (model, effort)).fetchall()
-    agg: dict[str, list[float]] = {}  # stage → [requests, cost, chars]
     for r in rows:
         ids = json.loads(r["unit_ids_json"])
         if not ids:
@@ -149,6 +156,9 @@ def calibrate(conn: sqlite3.Connection, model: str, effort: str | None, *, min_r
         a[0] += 1
         a[1] += float(r["cost_usd"])
         a[2] += chars
+
+
+def _calibration_result(agg: dict[str, list[float]], min_requests: int, min_chars: int) -> dict[str, dict[str, Any]]:
     out = {}
     for stage, (n, cost, nchars) in agg.items():
         if n >= min_requests and nchars >= min_chars:

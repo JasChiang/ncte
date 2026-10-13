@@ -242,3 +242,5 @@ open workspace/eval/<timestamp>/report.html
 - `epub/series_meta.py`：依序檢查 EPUB 3 `belongs-to-collection`／`group-position`（高）、Calibre `calibre:series`／`series_index`（高）、書名格式（中：「〇〇 2」「〇〇（3）」「第4巻」「Vol.5」「Ⅱ」「③」「上／下」「〇〇 2 ―副題―」「2.5」）、Calibre `title_sort` 結尾數字（低）。並比對書庫中已有的系列（正規化書名）。
 - `ncte import` 不指定 `--series` 時照舊自成系列，但會顯示偵測結果與加入指令；`--series auto` 直接套用；`ncte inspect` 顯示 `series_suggestion`。
 - 測試：23 個（書名格式、反例、兩種 metadata、CLI 建議與 auto 加入）；206 passed。
+- 實書（兩集的電撃文庫系列）：書名「〇〇 (電撃文庫)」「〇〇2 (電撃文庫)」偵測失敗 → 新增去除書名後的文庫／版本標註（`clean_title`）與「集數緊接在日文書名後」的規則；新系列名稱也去除標註。第 2 集以 `--series auto` 正確加入第 1 集的系列。
+- 試算的「以實際花費校正」改為參考書庫中所有系列的歷史請求（每個系列一個資料庫後，新系列原本沒有校正資料）。212 passed。
