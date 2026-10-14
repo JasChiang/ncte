@@ -140,6 +140,22 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
                 "UPDATE entities SET character_id=? WHERE character_id=?"):
         conn.execute(sql, (keep_id, drop_id))
     conn.execute("DELETE FROM speech_examples WHERE character_id=?", (drop_id,))
+    conn.execute("UPDATE prop_states SET holder_character_id=? WHERE holder_character_id=?", (keep_id, drop_id))
+    _merge_address(conn, keep_id, drop_id)
+    g_keep = conn.execute("SELECT 1 FROM character_gender WHERE character_id=?", (keep_id,)).fetchone()
+    g_drop = conn.execute("SELECT * FROM character_gender WHERE character_id=?", (drop_id,)).fetchone()
+    if g_drop is not None:
+        if g_keep is None:
+            conn.execute("UPDATE character_gender SET character_id=? WHERE character_id=?", (keep_id, drop_id))
+        else:
+            set_gender(conn, g_drop["book_id"], keep_id, g_drop["gender"], ordinal=g_drop["ordinal"],
+                       quote=g_drop["evidence_quote"], origin=g_drop["origin"])
+            conn.execute("DELETE FROM character_gender WHERE character_id=?", (drop_id,))
+    # scene states and naming proposals refer to characters by id
+    for rid, blob in conn.execute("SELECT rowid, state_json FROM scenes WHERE instr(state_json, ?) > 0",
+                                  (drop_id,)).fetchall():
+        conn.execute("UPDATE scenes SET state_json=? WHERE rowid=?", (blob.replace(drop_id, keep_id), rid))
+    conn.execute("UPDATE naming_proposals SET ref=? WHERE kind='character' AND ref=?", (keep_id, drop_id))
     aliases = json.loads(keep["aliases_json"])
     for a in [drop["canonical_name"], *json.loads(drop["aliases_json"])]:
         if a and a != keep["canonical_name"] and a not in aliases:
@@ -188,3 +204,22 @@ def gender_at(conn: sqlite3.Connection, character_id: str, hz: tuple[float, int]
     if row is None or row["gender"] not in ("female", "male") or pos(conn, row["book_id"], row["ordinal"]) > hz:
         return None
     return str(row["gender"])
+
+
+def _merge_address(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> None:
+    """Address terms of a merged character: moved, or folded into the same speaker/addressee/form row."""
+    for col in ("speaker_id", "addressee_id"):
+        for r in conn.execute(f"SELECT * FROM address_terms WHERE {col}=?", (drop_id,)).fetchall():
+            sp = keep_id if r["speaker_id"] == drop_id else r["speaker_id"]
+            ad = keep_id if r["addressee_id"] == drop_id else r["addressee_id"]
+            twin = conn.execute("SELECT * FROM address_terms WHERE speaker_id=? AND addressee_id=? AND form_ja=? AND id!=?",
+                                (sp, ad, r["form_ja"], r["id"])).fetchone()
+            if twin is None:
+                conn.execute("UPDATE address_terms SET speaker_id=?, addressee_id=? WHERE id=?", (sp, ad, r["id"]))
+                continue
+            conn.execute("UPDATE OR IGNORE address_observations SET address_id=? WHERE address_id=?", (twin["id"], r["id"]))
+            conn.execute("DELETE FROM address_observations WHERE address_id=?", (r["id"],))
+            conn.execute("UPDATE address_terms SET uses=uses+?, form_zh=COALESCE(form_zh, ?) WHERE id=?",
+                         (r["uses"], r["form_zh"], twin["id"]))
+            conn.execute("UPDATE naming_proposals SET status='superseded' WHERE kind='address' AND ref=?", (str(r["id"]),))
+            conn.execute("DELETE FROM address_terms WHERE id=?", (r["id"],))

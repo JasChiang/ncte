@@ -123,7 +123,8 @@ def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
     first, linked = form_positions(conn, book_id) if forms_at is None else forms_at
     known_from = pos(conn, c["book_id"], c["known_from_ordinal"])
     names = list(dict.fromkeys([c["canonical_name"], *json.loads(c["aliases_json"] or "[]")]))
-    at = {n: first.get(n, known_from) for n in names}
+    # a form with no recorded first appearance is known with the character — or from its link's reveal, if later
+    at = {n: first.get(n, max(known_from, linked.get(n, known_from))) for n in names}
     anchor = min(names, key=lambda n: at[n])
     shown = [n for n in names if at[n] <= hz and (n == anchor or linked.get(n, (0.0, 0)) <= hz)]
     if not shown:

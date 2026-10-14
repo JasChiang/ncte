@@ -157,6 +157,28 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
     }
 
 
+REVEAL_WINDOW = 400  # units: a description is matched to a revealed name only if it was introduced shortly before
+
+
+def _revealed(conn: sqlite3.Connection, book_id: str, known: list[Any], same_as: str | None, aliases: list[str],
+              ordinal: int) -> str | None:
+    """The known character a newly named one turns out to be: the model's ``same_as_ref`` (a known character of
+    this book), or else a known character whose name is one of the new aliases — only a specific description
+    («黒髪の女性», «学院長»), not a generic word (「少女」), held by no one else, introduced shortly before."""
+    from ..lexicon import GENERIC_REFERENTS
+
+    mine = {c["id"]: c for c in known if c["book_id"] == book_id}
+    if same_as in mine:
+        return same_as
+    hits = [c for c in mine.values() if c["canonical_name"] in aliases and c["canonical_name"] not in GENERIC_REFERENTS
+            and acceptable_glossary_term(c["canonical_name"]) and 0 <= ordinal - c["known_from_ordinal"] <= REVEAL_WINDOW]
+    if len(hits) != 1:
+        return None
+    term = hits[0]["canonical_name"]
+    shared = [c for c in known if c["id"] != hits[0]["id"] and term in json.loads(c["aliases_json"] or "[]")]
+    return None if shared else str(hits[0]["id"])
+
+
 def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row,
                          parsed: SceneAnalysisOutput | None, *, run_id: str | None = None) -> dict[str, int]:
     """Validate an analysis against the source and persist it. ``parsed=None`` → program-only analysis."""
@@ -177,6 +199,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
 
     if parsed is not None:
         existing_alias = repo.alias_map(repo.characters(conn, book_id))
+        reveals: list[tuple[str, str, str, Any, list[str]]] = []
         for nc in parsed.new_characters:
             name = nc.name_ja.strip()
             ev_ids = [u for u in nc.evidence_unit_ids if u in unit_text]
@@ -217,6 +240,29 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             ref_map[cid] = cid
             names_of[cid] = [name, *aliases]
             existing_alias[name] = cid
+            same = _revealed(conn, book_id, known, nc.same_as_ref, [a.strip() for a in nc.aliases_ja], first.ordinal)
+            if same and same != cid:
+                reveals.append((cid, same, name, first, nc.evidence_unit_ids))
+        # a name revealed for a character known so far only by a description: one character from here on.
+        # The link records where it was revealed, so the name is not shown before that point.
+        from ..memory.entities import record_link
+
+        for cid, same, name, first, _ev in reveals:
+            old = conn.execute("SELECT canonical_name FROM characters WHERE id=?", (same,)).fetchone()
+            if old is None:
+                continue
+            own = [name, *json.loads(conn.execute("SELECT aliases_json FROM characters WHERE id=?", (cid,)).fetchone()[0])]
+            repo.merge_characters(conn, cid, same)
+            # the new name and its own aliases (「王女」) are known from the reveal, not from the description's scene
+            # (the description itself stays known from its own scene)
+            for form in own:
+                record_link(conn, book_id, form, name, "alias" if form != name else "official", origin="scene_analysis",
+                            status="accepted", unit_id=first.id, quote=None, ordinal=first.ordinal)
+            for k, v in list(ref_map.items()):
+                if v == same:
+                    ref_map[k] = cid
+            names_of[cid] = [*names_of.get(cid, [name]), *names_of.pop(same, [])]
+            stats["merged"] = stats.get("merged", 0) + 1
 
     all_visible = vis.visible_characters(conn, book_id, scene["end_ordinal"])
     amap = repo.alias_map(all_visible)

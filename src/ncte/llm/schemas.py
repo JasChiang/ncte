@@ -40,6 +40,7 @@ class NewCharacter(_M):
     aliases_ja: list[str]
     proposed_name_zh: str
     evidence_unit_ids: list[str]
+    same_as_ref: str | None = None  # a known character (so far unnamed / described) this name now reveals
 
 
 class Participant(_M):

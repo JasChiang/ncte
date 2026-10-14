@@ -2,6 +2,7 @@
 
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from ncte.cli import app
@@ -209,3 +210,71 @@ def test_entity_label_follows_official_form_and_unlink_drops_alias(conn, cfg, fi
     # the sister's own character (not part of 島村's entity) keeps the alias
     assert json.loads(conn.execute("SELECT aliases_json FROM characters WHERE id='c_m'").fetchone()[0]) == ["しまむら（妹）"]
     assert conn.execute("SELECT entity_id FROM glossary WHERE source_term='しまむら（妹）'").fetchone()[0] != eid
+
+
+@pytest.mark.parametrize("by_model", [True, False])
+def test_revealed_name_merges_the_described_character(conn, cfg, fixtures, by_model):
+    from ncte.memory import visibility as vis
+
+    from ..scripted import known, scene_analyze, uid, utt
+
+    def analyze(payload, req):
+        out = scene_analyze(payload, req)
+        if uid(payload, "フードをかぶった少女が立っていた"):
+            out["new_characters"].append({"temp_id": "new_7", "name_ja": "フードをかぶった少女", "aliases_ja": [],
+                                          "proposed_name_zh": "戴兜帽的少女",
+                                          "evidence_unit_ids": [uid(payload, "フードをかぶった少女が立っていた")]})
+            u = utt(payload, "その鍵をどこで手に入れたの", "new_7", "inferred", ("action",), "フードをかぶった少女が立っていた")
+            out["utterances"] = [x for x in [*out["utterances"], u] if x]
+        hood = known(payload, "フードをかぶった少女")
+        for nc in out["new_characters"]:
+            if nc["name_ja"] == "リリア" and hood:
+                if by_model:
+                    nc["same_as_ref"] = hood
+                else:  # the model only lists the description as an alias: the program links them
+                    nc["aliases_ja"] = ["王女", "フードをかぶった少女"]
+        return out
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "scene_analyze": analyze}),
+                          mode="context")
+    if not by_model:  # the description without a glossary entry must still be shown before the reveal
+        conn.execute("DELETE FROM glossary WHERE source_term='フードをかぶった少女'")
+    rows = conn.execute("SELECT * FROM characters WHERE canonical_name IN ('リリア', 'フードをかぶった少女')").fetchall()
+    assert [r["canonical_name"] for r in rows] == ["リリア"]
+    lilia = rows[0]
+    assert "フードをかぶった少女" in json.loads(lilia["aliases_json"])
+    line = conn.execute("SELECT u.ordinal, ut.speaker_id_nullable FROM utterances ut JOIN units u ON u.id=ut.unit_id "
+                        "WHERE ut.quote_text LIKE '%その鍵をどこで%'").fetchone()
+    assert line[1] == lilia["id"]
+    # before the reveal the character is still only 「フードをかぶった少女」 (no spoiler)
+    assert vis.character_view(conn, book.id, lilia, line[0])["name_ja"] == "フードをかぶった少女"
+    reveal = conn.execute("SELECT ordinal FROM units WHERE plain_text LIKE '%王女リリアだった%'").fetchone()[0]
+    assert vis.character_view(conn, book.id, lilia, reveal)["name_ja"] == "リリア"
+
+
+def test_merge_carries_gender_and_address_terms(conn, cfg, fixtures):
+    from ncte.memory.address import upsert
+    from ncte.memory.repository import gender_at, merge_characters, set_gender, upsert_character
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    us = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal", (book.id,)).fetchall()
+    mk = lambda n: upsert_character(conn, book.id, n, name_zh=n, aliases=[], unit_id=us[0][0], ordinal=us[0][1],  # noqa: E731
+                                    origin="t")[0]
+    desc, named, other = mk("黒髪の女性"), mk("アルマ"), mk("レイド")
+    set_gender(conn, book.id, desc, "female", ordinal=us[0][1], quote="女性", origin="llm")
+    for who in (desc, named):
+        upsert(conn, book.id, other, who, "お前", ordinal=us[1][1], unit_id=us[1][0], origin="llm", certainty="inferred")
+    merge_characters(conn, named, desc)
+    assert gender_at(conn, named, (99.0, 10**9)) == "female"
+    rows = conn.execute("SELECT addressee_id, uses FROM address_terms WHERE form_ja='お前'").fetchall()
+    assert [(r[0], r[1]) for r in rows] == [(named, 2)]
+
+
+def test_generic_alias_does_not_merge():
+    from ncte.analysis.scene import _revealed
+
+    known = [{"id": "c1", "book_id": "b", "canonical_name": "少女", "known_from_ordinal": 10, "aliases_json": "[]"}]
+    assert _revealed(None, "b", known, None, ["少女"], 20) is None
+    known[0]["canonical_name"] = "黒髪の女性"
+    assert _revealed(None, "b", known, None, ["黒髪の女性"], 20) == "c1"
+    assert _revealed(None, "b", known, None, ["黒髪の女性"], 2000) is None  # introduced long before: may be someone else
