@@ -337,3 +337,19 @@ def test_honorific_named_character_gets_a_fix_proposal(conn, cfg, fixtures):
     assert (c[0], c[1]) == ("アダチの母", "安達媽媽") and "アダチさん" in json.loads(c[2])
     fmap, ambiguous = name_forms(conn, book.id)
     assert "アダチさん" in ambiguous and "アダチさん" not in fmap  # never attributed automatically any more
+
+
+def test_pronouns_rendered_alike_are_not_collisions(conn, cfg, fixtures):
+    from ncte.memory.address import upsert
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    us = _units(conn, book.id)
+    mk = lambda n: upsert_character(conn, book.id, n, name_zh=n, aliases=[], unit_id=us[0]["id"],  # noqa: E731
+                                    ordinal=us[0]["ordinal"], origin="t")[0]
+    a, b = mk("ヒノ"), mk("ナガフジ")
+    for form in ("あんた", "お前"):
+        rid = upsert(conn, book.id, a, b, form, ordinal=us[1]["ordinal"], unit_id=us[1]["id"], origin="llm",
+                     certainty="inferred", form_zh="妳")
+        conn.execute("INSERT INTO naming_proposals(book_id, kind, ref, label, chosen_zh, options_json, status, created_at) "
+                     "VALUES (?,?,?,?,?,?,?,?)", (book.id, "address", str(rid), form, "妳", "[]", "applied", "t"))
+    assert naming.flag_collisions(conn, book.id) == 0

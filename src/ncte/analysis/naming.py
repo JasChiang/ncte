@@ -281,8 +281,11 @@ def flag_collisions(conn: sqlite3.Connection, book_id: str) -> int:
     where, ids = scope_clause(conn, book_id)
     rows = conn.execute(f"SELECT * FROM address_terms WHERE {where} AND form_zh IS NOT NULL", ids).fetchall()
     groups: dict[tuple[str, str], list[sqlite3.Row]] = {}
+    from ..memory.address import _PRONOUNS
+
     for r in rows:
-        if r["speaker_id"] == r["addressee_id"] or r["form_zh"] == who.get(r["addressee_id"]):
+        if r["speaker_id"] == r["addressee_id"] or r["form_zh"] == who.get(r["addressee_id"]) \
+                or r["form_ja"] in _PRONOUNS:  # 「あんた」「お前」 to the same girl are both 「妳」: no distinction lost
             continue
         groups.setdefault((r["addressee_id"], r["form_zh"]), []).append(r)
     n = 0
