@@ -60,6 +60,7 @@ class EpubPackage:
     ncx_href: str | None
     page_progression: str | None = None
     warnings: list[str] = field(default_factory=list)
+    fixed_layout: set[str] = field(default_factory=set)  # pre-paginated pages inside a reflowable book (kept as is)
 
     @property
     def opf_dir(self) -> str:
@@ -160,8 +161,6 @@ def parse_package(path: Path, archive: SafeArchive, sha256: str) -> EpubPackage:
             warnings.append(f"manifest item missing id/href/media-type: {etree.tostring(it)[:120]!r}")
             continue
         props = set((it.get("properties") or "").split())
-        if "rendition:layout-pre-paginated" in props:
-            raise UnsupportedEpubError(f"Fixed-layout item {href} not supported")
         manifest[iid] = ManifestItem(iid, resolve_href(opf_path, href), href, mt, props)
 
     spine_el = opf.find("opf:spine", NS)
@@ -169,6 +168,7 @@ def parse_package(path: Path, archive: SafeArchive, sha256: str) -> EpubPackage:
         raise EpubStructureError("OPF has no <spine>")
     page_progression = spine_el.get("page-progression-direction")
     spine: list[SpineItem] = []
+    fixed: set[str] = set()
     for ref in spine_el.findall("opf:itemref", NS):
         idref = ref.get("idref", "")
         item = manifest.get(idref)
@@ -177,11 +177,16 @@ def parse_package(path: Path, archive: SafeArchive, sha256: str) -> EpubPackage:
         if not archive.has(item.href):
             raise EpubStructureError(f"spine item file missing from archive: {item.href}")
         props = set((ref.get("properties") or "").split())
-        if "rendition:layout-pre-paginated" in props:
-            raise UnsupportedEpubError(f"Fixed-layout spine item {item.href} not supported")
+        if "rendition:layout-pre-paginated" in props or "rendition:layout-pre-paginated" in item.properties:
+            # light novels often have fixed-layout colour plates in a reflowable book: keep those pages untouched
+            fixed.add(item.href)
         spine.append(SpineItem(idref, item.href, ref.get("linear", "yes") != "no"))
     if not spine:
         raise EpubStructureError("spine is empty")
+    if fixed and len(fixed) == len(spine):
+        raise UnsupportedEpubError("Fixed-layout (pre-paginated) EPUBs are not supported by NCTE")
+    if fixed:
+        warnings.append(f"{len(fixed)} fixed-layout page(s) (e.g. colour plates) are kept untranslated")
 
     nav_href = next((m.href for m in manifest.values() if "nav" in m.properties), None)
     ncx_href = None
@@ -206,4 +211,5 @@ def parse_package(path: Path, archive: SafeArchive, sha256: str) -> EpubPackage:
         ncx_href=ncx_href,
         page_progression=page_progression,
         warnings=warnings,
+        fixed_layout=fixed,
     )

@@ -66,6 +66,8 @@ def extract_all_units(pkg: EpubPackage) -> list[tuple[int | None, ExtractedUnit]
     for href, is_nav in content_documents(pkg):
         tree = parse_xml_tree(pkg.archive.get(href), name=href, html_entities=True)
         for u in extract_xhtml_units(tree.getroot(), href, nav=is_nav):
+            if href in pkg.fixed_layout and u.translatable:  # fixed-layout page: text positioned on an image
+                u.translatable, u.skip_reason = False, "fixed_layout"
             out.append((spine_index.get(href), u))
     if pkg.ncx_href and pkg.archive.has(pkg.ncx_href):
         tree = parse_xml_tree(pkg.archive.get(pkg.ncx_href), name=pkg.ncx_href)

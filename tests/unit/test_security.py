@@ -63,3 +63,28 @@ def test_font_obfuscation_allowed(tmp_path: Path, fixtures):
 <enc:EncryptedData><enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>
 <enc:CipherData><enc:CipherReference URI="OEBPS/font.otf"/></enc:CipherData></enc:EncryptedData></encryption>""")
     load_epub(p)
+
+
+def test_fixed_layout_pages_inside_a_reflowable_book_are_kept(tmp_path, fixtures):
+    """Colour plates are often pre-paginated pages in an otherwise reflowable light novel: the book is accepted
+    and only those pages are left untranslated."""
+    import re
+    import zipfile
+
+    from ncte.epub.parser import load_epub
+    from ncte.epub.reassemble import extract_all_units
+
+    src, out = fixtures["basic"], tmp_path / "mixed.epub"
+    with zipfile.ZipFile(src) as zin, zipfile.ZipFile(out, "w") as zout:
+        for info in zin.infolist():
+            data = zin.read(info.filename)
+            if info.filename.endswith(".opf"):
+                data = re.sub(rb'<itemref idref="ch1"\s*/>', b'<itemref idref="ch1" properties="rendition:layout-pre-paginated"/>',
+                              data)
+            zout.writestr(info, data, compress_type=zipfile.ZIP_STORED if info.filename == "mimetype" else zipfile.ZIP_DEFLATED)
+    pkg = load_epub(out)
+    assert len(pkg.fixed_layout) == 1 and any("fixed-layout" in w for w in pkg.warnings)
+    units = [u for _, u in extract_all_units(pkg)]
+    fixed = [u for u in units if u.resource_href in pkg.fixed_layout]
+    assert fixed and all(not u.translatable for u in fixed) and any(u.skip_reason == "fixed_layout" for u in fixed)
+    assert any(u.translatable for u in units if u.resource_href not in pkg.fixed_layout)
