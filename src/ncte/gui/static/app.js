@@ -167,9 +167,10 @@ async function namesView(id) {
 
 // ------------------------------------------------------------ reading (spoiler-aware)
 let POSIDX = null;
-async function readingData(id) {
-  const d = await loadBook(id, "characters");
-  const pos = $("#pos"), story = d.scenes.filter(s => s.story);
+async function readingData(id) { return readingDataFor(id, "characters"); }
+async function readingDataFor(id, what) {
+  const d = await loadBook(id, what);
+  const pos = $("#pos"), story = d.scenes.filter(s => s.story && s.a >= 0);
   pos.max = story.length;
   if (POSIDX == null || POSIDX > story.length) POSIDX = story.length;
   pos.value = POSIDX;
@@ -184,6 +185,7 @@ function topChars(d, seen, upto, n) {
   return Object.keys(cnt).filter(c => d.characters[c] && d.characters[c].from <= upto && !d.characters[c].info)
     .sort((a, b) => cnt[b] - cnt[a]).slice(0, n);
 }
+let storyJump = null;
 async function storyView(id) {
   const {d, upto, seen, nm} = await readingData(id);
   const top = topChars(d, seen, upto, 14);
@@ -196,13 +198,15 @@ async function storyView(id) {
     return `<div class="cell" style="background:color-mix(in srgb,var(--accent) ${a * 100}%,var(--unk-soft));${a > .6 ? "color:var(--panel)" : ""}">${x || ""}</div>`; }).join(""); });
   let last = null;
   const list = seen.map((s, i) => { const head = s.ch !== last ? `<h3>${esc(title(s.ch))}</h3>` : ""; last = s.ch;
-    return head + `<div class="card"><div class="muted small">場景 ${i + 1}・段 ${s.a}–${s.b}</div><div>${esc(s.summary) || '<span class="muted">（沒有摘要）</span>'}</div>
+    return head + `<div class="card" id="scene-${esc(s.id)}"><div class="muted small">場景 ${i + 1}・段 ${s.a}–${s.b}</div><div>${esc(s.summary) || '<span class="muted">（沒有摘要）</span>'}</div>
       <div class="muted small">出場：${s.who.map(c => esc(nm(c))).join("、") || "—"}</div>
       <details data-a="${s.a}" data-b="${s.b}"><summary class="small muted">看這個場景的原文與譯文</summary><div class="body muted small">載入中…</div></details></div>`; }).join("");
   view.innerHTML = `<div class="card scroll"><strong>誰在哪一章出場</strong> <span class="muted small">數字＝場景數；點名字看角色檔案</span>
     <div class="grid" style="grid-template-columns:110px repeat(${usedCh.length},minmax(30px,1fr));margin-top:8px">${grid}</div></div>
     <p class="muted small">摘要是模型整理的，可能有誤；展開可對照原文。封面、目次、後記等書籍資訊不列入。</p>${list || "<p>還沒讀到任何場景。</p>"}`;
   view.querySelectorAll("[data-p]").forEach(e => e.onclick = () => { peopleState.person = e.dataset.p; location.hash = `#/b/${id}/people`; });
+  if (storyJump) { const el = document.getElementById("scene-" + storyJump); storyJump = null;
+    if (el) { el.scrollIntoView({block: "center"}); el.style.outline = "2px solid var(--accent)"; } }
   view.querySelectorAll("details[data-a]").forEach(det => det.addEventListener("toggle", async () => {
     if (!det.open || det.dataset.loaded) return; det.dataset.loaded = 1;
     const r = await api(`book/${id}/units?start=${det.dataset.a}&end=${det.dataset.b}`);
@@ -249,34 +253,106 @@ async function peopleView(id) {
     <div class="card" style="flex:1 1 480px">${card}</div></div>`;
   view.querySelectorAll("[data-k]").forEach(b => b.onclick = e => { e.preventDefault(); peopleState.person = b.dataset.k; peopleView(id); });
 }
-let gmode = "co";
-async function graphView(id) {
-  const {d, upto, seen, nm} = await readingData(id);
-  const top = topChars(d, seen, upto, 10), W = 760, H = 520, R = 200;
-  const P = {}; top.forEach((c, i) => { const t = -Math.PI / 2 + i * 2 * Math.PI / top.length; P[c] = {x: W / 2 + R * Math.cos(t), y: H / 2 + R * Math.sin(t)}; });
-  let s = `<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="var(--accent)"/></marker></defs>`;
-  if (gmode === "co") {
-    const co = {}; seen.forEach(sc => { const w = sc.who.filter(c => P[c]); w.forEach((a, i) => w.slice(i + 1).forEach(b => { const k = [a, b].sort().join("|"); co[k] = (co[k] || 0) + 1; })); });
-    const mx = Math.max(1, ...Object.values(co));
-    Object.entries(co).forEach(([k, n]) => { const [a, b] = k.split("|");
-      s += `<line x1="${P[a].x}" y1="${P[a].y}" x2="${P[b].x}" y2="${P[b].y}" stroke="var(--muted)" stroke-opacity="${.15 + .6 * n / mx}" stroke-width="${1 + 7 * n / mx}"><title>${esc(nm(a))}・${esc(nm(b))}：同場 ${n} 次</title></line>`; });
-  } else {
-    const seenPair = {};
-    d.address.filter(a => P[a.speaker] && P[a.to] && a.speaker !== a.to && (a.at == null || a.at <= upto)).forEach(a => {
-      const key = a.speaker + a.to; seenPair[key] = (seenPair[key] || 0) + 1;
-      const p = P[a.speaker], q = P[a.to], dx = q.x - p.x, dy = q.y - p.y, L = Math.hypot(dx, dy), ux = dx / L, uy = dy / L, o = seenPair[key] * 10, nx = -uy * o, ny = ux * o;
-      s += `<line x1="${p.x + ux * 34 + nx}" y1="${p.y + uy * 34 + ny}" x2="${q.x - ux * 38 + nx}" y2="${q.y - uy * 38 + ny}" stroke="var(--accent)" stroke-width="1.4" marker-end="url(#ah)"></line>
-        <text x="${(p.x + q.x) / 2 + nx * 2.4}" y="${(p.y + q.y) / 2 + ny * 2.4}" font-size="11" text-anchor="middle">${esc(a.ja)}<title>${esc(a.zh || "")} ×${a.uses}</title></text>`; });
+const G = {mode: "talk", mentions: false, n: 12, hideMinor: true, series: false, focus: null, pair: null};
+const GROUPISH = /(たち|みんな|観客|生徒たち|周り|の声|チーム|們|觀眾|路人|大家)$/;
+function layout(nodes, edges, W, H) {
+  // small deterministic force layout: nodes that share many scenes end up close together
+  const P = {}; nodes.forEach((c, i) => { const t = -Math.PI / 2 + i * 2 * Math.PI / nodes.length; P[c] = {x: W / 2 + 180 * Math.cos(t), y: H / 2 + 180 * Math.sin(t)}; });
+  const k = Math.sqrt(W * H / Math.max(1, nodes.length)) * .55, mx = Math.max(1, ...edges.map(e => e.w));
+  for (let it = 0; it < 300; it++) {
+    const F = {}; nodes.forEach(c => F[c] = {x: 0, y: 0});
+    nodes.forEach((a, i) => nodes.slice(i + 1).forEach(b => { const dx = P[a].x - P[b].x, dy = P[a].y - P[b].y, d = Math.max(1, Math.hypot(dx, dy)), f = k * k / d;
+      F[a].x += dx / d * f; F[a].y += dy / d * f; F[b].x -= dx / d * f; F[b].y -= dy / d * f; }));
+    edges.forEach(e => { const dx = P[e.a].x - P[e.b].x, dy = P[e.a].y - P[e.b].y, d = Math.max(1, Math.hypot(dx, dy)), f = d * d / k * (.3 + e.w / mx);
+      F[e.a].x -= dx / d * f; F[e.a].y -= dy / d * f; F[e.b].x += dx / d * f; F[e.b].y += dy / d * f; });
+    const temp = 30 * (1 - it / 300) + 1;
+    nodes.forEach(c => { F[c].x += (W / 2 - P[c].x) * .04; F[c].y += (H / 2 - P[c].y) * .04;
+      const d = Math.max(1, Math.hypot(F[c].x, F[c].y)); P[c].x += F[c].x / d * Math.min(d, temp); P[c].y += F[c].y / d * Math.min(d, temp);
+      P[c].x = Math.min(W - 50, Math.max(50, P[c].x)); P[c].y = Math.min(H - 40, Math.max(40, P[c].y)); });
   }
-  top.forEach(c => { s += `<g style="cursor:pointer" data-k="${esc(c)}"><circle cx="${P[c].x}" cy="${P[c].y}" r="32" fill="var(--panel)" stroke="var(--accent)" stroke-width="1.6"/><text x="${P[c].x}" y="${P[c].y + 5}" text-anchor="middle" font-size="13" font-weight="600">${esc(nm(c))}</text></g>`; });
-  view.innerHTML = `<div class="row" style="align-items:center;margin-bottom:10px"><div class="seg">
-    <button data-g="co" class="${gmode === "co" ? "on" : ""}">同場次數</button><button data-g="addr" class="${gmode === "addr" ? "on" : ""}">稱呼（有方向）</button></div>
-    <span class="muted small">出場最多的 10 人；只算讀到的位置以前。滑過線條看數字，點人物看檔案。</span></div>
-    <div class="card scroll"><svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:560px">${s}</svg></div>`;
-  view.querySelectorAll("[data-g]").forEach(b => b.onclick = () => { gmode = b.dataset.g; graphView(id); });
-  view.querySelectorAll("g[data-k]").forEach(g => g.onclick = () => { peopleState.person = g.dataset.k; location.hash = `#/b/${id}/people`; });
+  return P;
 }
-
+async function graphView(id) {
+  const ov = await loadBook(id, "overview");
+  const {d, upto, nm} = await readingDataFor(id, G.series ? "characters?series=1" : "characters");
+  const scenes = d.scenes.filter(s => s.story && s.a <= upto);
+  const members = s => G.mode === "talk" && !G.mentions ? s.speakers : s.who;
+  const ok = c => d.characters[c] && d.characters[c].from <= upto && !d.characters[c].info &&
+    !(G.hideMinor && (GROUPISH.test(d.characters[c].ja) || GROUPISH.test(d.characters[c].zh)));
+  const cnt = {}; scenes.forEach(s => members(s).forEach(c => { if (ok(c)) cnt[c] = (cnt[c] || 0) + 1; }));
+  let nodes = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a]);
+  if (G.hideMinor) nodes = nodes.filter(c => cnt[c] >= 2);
+  if (G.n) nodes = nodes.slice(0, G.n);
+  const inSet = new Set(nodes);
+  const pairScenes = {};
+  scenes.forEach(s => { const m = members(s).filter(c => inSet.has(c)); m.forEach((a, i) => m.slice(i + 1).forEach(b => {
+    const k = [a, b].sort().join("|"); (pairScenes[k] = pairScenes[k] || []).push(s); })); });
+  const addr = d.address.filter(a => inSet.has(a.speaker) && inSet.has(a.to) && a.speaker !== a.to && (a.at == null || a.at <= upto));
+  const edges = G.mode === "addr"
+    ? Object.values(addr.reduce((m, a) => { const k = [a.speaker, a.to].sort().join("|"); (m[k] = m[k] || {a: a.speaker, b: a.to, w: 0}).w += a.uses; return m; }, {}))
+    : Object.entries(pairScenes).map(([k, ss]) => { const [a, b] = k.split("|"); return {a, b, w: ss.length}; });
+  const W = 820, H = 560, P = layout(nodes, edges, W, H), mx = Math.max(1, ...edges.map(e => e.w));
+  const maxN = Math.max(1, ...nodes.map(c => cnt[c]));
+  const near = new Set(G.focus ? [G.focus, ...edges.filter(e => e.a === G.focus || e.b === G.focus).flatMap(e => [e.a, e.b])] : nodes);
+  const dim = c => near.has(c) ? 1 : .15;
+  let svg = `<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="var(--accent)"/></marker></defs>`;
+  if (G.mode === "addr") {
+    const seen = {};
+    addr.forEach(a => { const key = a.speaker + a.to; seen[key] = (seen[key] || 0) + 1;
+      const p = P[a.speaker], q = P[a.to], dx = q.x - p.x, dy = q.y - p.y, L = Math.max(1, Math.hypot(dx, dy)), ux = dx / L, uy = dy / L, o = seen[key] * 9, nx = -uy * o, ny = ux * o;
+      const op = Math.min(dim(a.speaker), dim(a.to)), pk = [a.speaker, a.to].sort().join("|");
+      svg += `<g data-pair="${esc(pk)}" style="cursor:pointer;opacity:${op}"><line x1="${p.x + ux * 30 + nx}" y1="${p.y + uy * 30 + ny}" x2="${q.x - ux * 34 + nx}" y2="${q.y - uy * 34 + ny}" stroke="var(--accent)" stroke-width="1.4" marker-end="url(#ah)"/>
+        <text x="${(p.x + q.x) / 2 + nx * 2.2}" y="${(p.y + q.y) / 2 + ny * 2.2}" font-size="11" text-anchor="middle">${esc(a.ja)}</text></g>`; });
+  } else {
+    edges.forEach(e => { const op = Math.min(dim(e.a), dim(e.b)), pk = [e.a, e.b].sort().join("|");
+      svg += `<g data-pair="${esc(pk)}" style="cursor:pointer;opacity:${op}"><line x1="${P[e.a].x}" y1="${P[e.a].y}" x2="${P[e.b].x}" y2="${P[e.b].y}" stroke="transparent" stroke-width="12"/>
+        <line x1="${P[e.a].x}" y1="${P[e.a].y}" x2="${P[e.b].x}" y2="${P[e.b].y}" stroke="${G.pair === pk ? "var(--accent)" : "var(--muted)"}" stroke-opacity="${.25 + .6 * e.w / mx}" stroke-width="${1 + 7 * e.w / mx}"><title>${esc(nm(e.a))}・${esc(nm(e.b))}：${e.w} 個場景</title></line></g>`; });
+  }
+  nodes.forEach(c => { const r = 20 + 16 * Math.sqrt(cnt[c] / maxN);
+    svg += `<g data-k="${esc(c)}" style="cursor:pointer;opacity:${dim(c)}"><circle cx="${P[c].x}" cy="${P[c].y}" r="${r}" fill="${G.focus === c ? "var(--accent-soft)" : "var(--panel)"}" stroke="var(--accent)" stroke-width="${G.focus === c ? 3 : 1.6}"/>
+      <text x="${P[c].x}" y="${P[c].y + 5}" text-anchor="middle" font-size="13" font-weight="600">${esc(nm(c))}</text><title>${esc(nm(c))}：${cnt[c]} 個場景</title></g>`; });
+  const sel = (name, opts, cur) => `<select data-ctl="${name}">${opts.map(([v, l]) => `<option value="${v}" ${String(v) === String(cur) ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+  view.innerHTML = `<div class="row" style="align-items:center;margin-bottom:10px;gap:10px">
+      <div class="seg"><button data-m="talk" class="${G.mode === "talk" ? "on" : ""}">一起出場</button><button data-m="addr" class="${G.mode === "addr" ? "on" : ""}">誰怎麼叫誰</button></div>
+      ${G.mode === "talk" ? `<label class="small"><input type="checkbox" data-ctl="mentions" ${G.mentions ? "checked" : ""}> 只被提到也算</label>` : ""}
+      ${sel("n", [[12, "12 人"], [20, "20 人"], [0, "全部"]], G.n)}
+      <label class="small"><input type="checkbox" data-ctl="hideMinor" ${G.hideMinor ? "checked" : ""}> 隱藏路人、群體</label>
+      <div class="seg"><button data-s="0" class="${G.series ? "" : "on"}">本集</button><button data-s="1" class="${G.series ? "on" : ""}">系列累計</button></div>
+      ${G.focus ? `<button class="btn" data-clear>取消聚焦</button>` : ""}</div>
+    <div class="row" style="align-items:flex-start"><div class="card scroll" style="flex:1 1 560px;padding:6px"><svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:540px">${svg}</svg></div>
+    <div class="card" style="flex:0 1 340px;min-width:280px" id="gside">${graphSide(d, nm, upto, pairScenes, addr, cnt)}</div></div>
+    <p class="muted small">${G.mode === "talk" ? (G.mentions ? "線＝同一場景出現（含只被提到）" : "線＝兩人在同一場景都有台詞") : "箭頭＝誰用什麼稱呼叫誰"}；圓圈大小＝出場場景數。點人物聚焦，點線看兩人的互動。${ov.title}</p>`;
+  view.querySelectorAll("[data-m]").forEach(b => b.onclick = () => { G.mode = b.dataset.m; G.pair = null; graphView(id); });
+  view.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { G.series = b.dataset.s === "1"; graphView(id); });
+  view.querySelectorAll("[data-ctl]").forEach(el => el.onchange = () => { const k = el.dataset.ctl; G[k] = el.type === "checkbox" ? el.checked : +el.value; graphView(id); });
+  const clr = view.querySelector("[data-clear]"); if (clr) clr.onclick = () => { G.focus = null; graphView(id); };
+  view.querySelectorAll("g[data-k]").forEach(g => g.onclick = () => { G.focus = G.focus === g.dataset.k ? null : g.dataset.k; G.pair = null; graphView(id); });
+  view.querySelectorAll("g[data-pair]").forEach(g => g.onclick = () => { G.pair = g.dataset.pair; graphView(id); });
+  view.querySelectorAll("[data-goscene]").forEach(a => a.onclick = e => { e.preventDefault(); storyJump = a.dataset.goscene; location.hash = `#/b/${id}/story`; });
+  view.querySelectorAll("[data-profile]").forEach(a => a.onclick = e => { e.preventDefault(); peopleState.person = a.dataset.profile; location.hash = `#/b/${id}/people`; });
+}
+function graphSide(d, nm, upto, pairScenes, addr, cnt) {
+  if (G.pair) {
+    const [a, b] = G.pair.split("|"), ss = pairScenes[G.pair] || [];
+    const names = c => [d.characters[c].ja, d.characters[c].zh, ...d.characters[c].aka].filter(x => x && x.length >= 2);
+    const facts = [a, b].flatMap(x => d.characters[x].facts.filter(f => f.at <= upto && names(x === a ? b : a).some(n => (f.object + f.predicate).includes(n)))
+      .map(f => ({...f, who: x})));
+    const between = d.address.filter(t => (t.speaker === a && t.to === b) || (t.speaker === b && t.to === a)).filter(t => t.at == null || t.at <= upto)
+      .sort((x, y) => (x.at ?? -1) - (y.at ?? -1));
+    return `<strong>${esc(nm(a))} ⇄ ${esc(nm(b))}</strong>
+      <div style="margin-top:8px"><div class="muted small">互相怎麼稱呼（依首次出現）</div>${between.map(t => `<div>${esc(nm(t.speaker))} → ${esc(nm(t.to))}：<span class="ja">${esc(t.ja)}</span>（${esc(t.zh || "")}）<span class="muted small">${t.at < 0 ? "前集" : "§" + t.at}・×${t.uses}</span></div>`).join("") || '<div class="muted">—</div>'}</div>
+      <div style="margin-top:8px"><div class="muted small">相關事實</div>${facts.map(f => `<div class="small">${esc(nm(f.who))} ${esc(f.predicate)}：${esc(f.object)} ${chip(f.certainty === "explicit" ? "c-ok" : "c-warn", f.certainty === "explicit" ? "明寫" : "推測")}<div class="ja muted">${esc(f.quote)}</div></div>`).join("") || '<div class="muted">—</div>'}</div>
+      <div style="margin-top:8px"><div class="muted small">一起出場的場景（${ss.length}）</div>${ss.map(s => `<div class="small">${s.a < 0 ? "<span class='muted'>前集</span> " : `<a href="#" data-goscene="${esc(s.id)}">§${s.a}</a> `}${esc((s.summary || "").slice(0, 60))}</div>`).join("")}</div>`;
+  }
+  if (G.focus && d.characters[G.focus]) {
+    const c = d.characters[G.focus];
+    const partners = Object.entries(pairScenes).filter(([k]) => k.split("|").includes(G.focus)).map(([k, ss]) => [k.split("|").find(x => x !== G.focus), ss.length]).sort((x, y) => y[1] - x[1]);
+    return `<strong>${esc(c.zh)}</strong> <span class="ja muted">${esc(c.ja)}</span><div class="muted small">${cnt[G.focus] || 0} 個場景</div>
+      <div style="margin-top:8px">${partners.map(([o, n]) => `<div>${esc(nm(o))} <span class="muted small">${n} 個場景</span></div>`).join("") || '<div class="muted">—</div>'}</div>
+      <p><a href="#" data-profile="${esc(G.focus)}">看角色檔案</a></p>`;
+  }
+  return `<div class="muted">點人物：只顯示他和他的連線。<br>點兩人之間的線：看兩人怎麼互相稱呼、相關事實、一起出場的場景。</div>`;
+}
 // ------------------------------------------------------------ names & address terms
 async function glossaryView(id) {
   const [g, d] = await Promise.all([loadBook(id, "glossary"), loadBook(id, "characters")]);

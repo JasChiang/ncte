@@ -89,3 +89,19 @@ def test_split_edges():
 
     assert split_edges("⟦1⟧　好⟦2/⟧啊⟦/1⟧") == ("⟦1⟧", "　好⟦2/⟧啊", "⟦/1⟧")
     assert split_edges("沒有標記") == ("", "沒有標記", "")
+
+
+def test_series_reading_data_keeps_earlier_volume_characters(tmp_path, fixtures):
+    """A character introduced in volume 1 is a normal character in volume 2's reading pages (not book matter)."""
+    from ncte.gui import data
+
+    cfg = load_config(workspace=str(tmp_path / "ws"))
+    ws = Workspace(cfg)
+    conn, book, _ = ws.import_book(fixtures["basic"])
+    from ncte.memory.repository import upsert_character
+
+    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal DESC LIMIT 1", (book.id,)).fetchone()
+    upsert_character(conn, book.id, "ミナ", name_zh="米娜", aliases=[], unit_id=u["id"], ordinal=u["ordinal"], origin="t")
+    conn.execute("UPDATE books SET volume_index=1")
+    d = data.characters(conn, book, series=True)
+    assert all(not c["info"] or c["from"] >= 0 for c in d["characters"].values())

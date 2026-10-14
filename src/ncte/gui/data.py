@@ -167,22 +167,51 @@ def story(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
     return {"chapters": chs, "scenes": scenes}
 
 
-def characters(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
+def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) -> dict[str, Any]:
+    """Characters, address terms and scenes for the reading pages. ``series``: earlier volumes' story scenes are
+    included too (always visible: they come before anything in this volume, marked with negative positions)."""
+    from ..library import resolve_book
+
     st = story(conn, book)
+    if series:
+        from ..series import volume_of
+
+        here_v = volume_of(conn, book.id)
+        from ..series import scope_clause
+
+        where, ids = scope_clause(conn, book.id, "id")
+        earlier = [r[0] for r in conn.execute(f"SELECT id FROM books WHERE {where} AND volume_index<? "
+                                              "ORDER BY volume_index", (*ids, here_v))]
+        prior = []
+        for bid in earlier:
+            prior += [{**s, "a": -1, "b": -1, "ch": None, "vol": bid} for s in story(conn, resolve_book(conn, bid))["scenes"]
+                      if s["story"]]
+        st = {**st, "scenes": prior + st["scenes"]}
     story_scenes = [s for s in st["scenes"] if s["story"]]
     scene_count = Counter(c for s in story_scenes for c in s["who"])
     in_story = {s["id"] for s in story_scenes}
     lines = Counter(u["sp"] for u in conn.execute(
-        "SELECT speaker_id_nullable sp, scene_id FROM utterances WHERE book_id=? AND sp IS NOT NULL", (book.id,))
+        f"SELECT speaker_id_nullable sp, scene_id FROM utterances WHERE {SERIES_SCOPE} AND sp IS NOT NULL", (book.id,))
         if u["scene_id"] in in_story)
     chars = {r["id"]: r for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book.id,))}
     facts: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for f in conn.execute("SELECT * FROM facts WHERE book_id=? AND retracted_by IS NULL ORDER BY first_revealed_ordinal",
-                          (book.id,)):
-        if f["subject"] in chars:
-            facts[f["subject"]].append({"at": f["first_revealed_ordinal"], "predicate": f["predicate"], "object": f["object"],
+    from ..series import volume_of as _vol
+    from ..series import volumes as _vols
+
+    _v, _here = _vols(conn), _vol(conn, book.id)
+    _ids = re.compile(r"(?<![0-9A-Za-z_])c_[0-9a-f]{12}(?![0-9a-f])")
+
+    def _names(text: str) -> str:  # facts sometimes mention a character by its internal id
+        return _ids.sub(lambda m: chars[m.group(0)]["display_name_zh"] or chars[m.group(0)]["canonical_name"]
+                        if m.group(0) in chars else m.group(0), text or "")
+    for f in conn.execute(f"SELECT * FROM facts WHERE {SERIES_SCOPE} AND retracted_by IS NULL ORDER BY "
+                          "first_revealed_ordinal", (book.id,)):
+        fv = _v.get(f["book_id"], 1.0)
+        if f["subject"] in chars and (fv == _here or (series and fv < _here)):
+            facts[f["subject"]].append({"at": f["first_revealed_ordinal"] if fv == _here else -1,
+                                        "predicate": _names(f["predicate"]), "object": _names(f["object"]),
                                         "type": f["fact_type"], "certainty": f["certainty"],
-                                        "viewpoint": f["source_viewpoint"], "quote": RUBY.sub("", f["evidence_quote"] or "")})
+                                        "viewpoint": _names(f["source_viewpoint"] or "") or None, "quote": RUBY.sub("", f["evidence_quote"] or "")})
     examples: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for e in conn.execute("SELECT e.character_id, e.raw_text, u.ordinal FROM speech_examples e JOIN units u ON "
                           "u.id=e.unit_id WHERE u.book_id=? ORDER BY u.ordinal", (book.id,)):
@@ -199,12 +228,13 @@ def characters(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
     out = {}
     for cid, c in chars.items():
         cv = vols.get(c["book_id"], 1.0)
-        if cv > here or (c["book_id"] != book.id and not scene_count.get(cid)):
+        if cv > here or (c["book_id"] != book.id and not scene_count.get(cid) and not series):
             continue
         out[cid] = {"ja": c["canonical_name"], "zh": c["display_name_zh"] or c["canonical_name"],
                     "aka": json.loads(c["aliases_json"] or "[]"), "from": c["known_from_ordinal"] if cv == here else -1,
                     "scenes": scene_count.get(cid, 0), "lines": lines.get(cid, 0), "facts": facts.get(cid, []),
-                    "examples": examples.get(cid, [])[:6], "info": info(c["known_from_ordinal"])}
+                    "examples": examples.get(cid, [])[:6],
+                    "info": cv == here and info(c["known_from_ordinal"])}  # earlier volumes: never book matter here
     address = []
     for a in conn.execute(f"SELECT * FROM address_terms WHERE {SERIES_SCOPE} ORDER BY uses DESC", (book.id,)):
         v = vols.get(a["book_id"], 1.0)

@@ -51,7 +51,7 @@ class App:
             if what == "story":
                 return data.story(conn, book)
             if what == "characters":
-                return data.characters(conn, book)
+                return data.characters(conn, book, series=q.get("series") == "1")
             if what == "glossary":
                 return data.glossary(conn, book)
             if what == "proposals":
