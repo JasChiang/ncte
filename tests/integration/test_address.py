@@ -110,3 +110,17 @@ def test_cli_address_list_and_set(tmp_path, fixtures):
     bad = r.invoke(app, ["-w", str(ws), "names", "address-set", epub, "--speaker", "誰", "--to", "カイト",
                          "--ja", "x", "--zh", "y"])
     assert bad.exit_code != 0 and "unknown character" in str(bad.exception)
+
+
+def test_pronouns_are_not_address_terms(conn, cfg, fixtures):
+    def mem(payload, req):
+        out = memory_update(payload, req)
+        mina, kaito, u = known(payload, "ミナ"), known(payload, "カイト"), uid(payload, "誰だ、お前")
+        if mina and kaito and u:
+            out["address_terms"] = [{"speaker_ref": kaito, "addressee_ref": mina, "term": "お前", "term_zh": "你",
+                                     "note": "", "evidence_unit_ids": [u], "evidence_quote": "誰だ、お前"}]
+        return out
+
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "memory_update": mem}), mode="context")
+    assert conn.execute("SELECT count(*) FROM address_terms WHERE form_ja='お前'").fetchone()[0] == 0
+    assert conn.execute("SELECT count(*) FROM memory_rejections WHERE reason='address term: pronoun'").fetchone()[0] == 1

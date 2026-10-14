@@ -162,6 +162,7 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
             stats["name_links"] += 1
 
     # who calls whom what, with the rendering the translation used (ADR-022)
+    from ..memory.address import _PRONOUNS as ADDRESS_PRONOUNS
     from ..memory.address import upsert as upsert_address
 
     stats["address_terms"] = 0
@@ -174,6 +175,9 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         if not ev or len(quote) < 2 or quote not in _norm("".join(text_of[u] for u in ev)) \
                 or _norm(at.term) not in quote or not acceptable_glossary_term(at.term):
             rej(at.model_dump(), "address term: term/evidence_quote not found verbatim")
+            continue
+        if clean(at.term).strip() in PRONOUNS | ADDRESS_PRONOUNS:  # 「あなた」 is not a form of address to keep
+            rej(at.model_dump(), "address term: pronoun")
             continue
         first = min(ev, key=lambda u: ordinal[u])
         upsert_address(conn, book_id, at.speaker_ref, at.addressee_ref, clean(at.term).strip(), ordinal=ordinal[first],
