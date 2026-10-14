@@ -382,7 +382,8 @@ class Orchestrator:
                 ctx: dict[str, Any] = {"known_headings": heading_hints(self.conn, self.book.id),
                                        "note": "These are chapter titles / table-of-contents labels / book title."}
             else:
-                ctx = neighbor_context(self.conn, self.cfg, self.book.id, batch.rows, scene_id=batch.scene_id)
+                ctx = neighbor_context(self.conn, self.cfg, self.book.id, batch.rows, scene_id=batch.scene_id,
+                                       whole_scene=bool(self.opts.unit_ids))
                 text += " " + " ".join(c["source"] for c in ctx["context_before"] + ctx["context_after"])
             ctx["glossary"] = glossary_payload(self.glossary, text, upto=(self.volume, batch.rows[-1]["ordinal"]),
                                                revealed=self.link_revealed)

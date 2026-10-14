@@ -18,8 +18,12 @@ META_KINDS = ("head_title", "nav", "ncx", "opf_title")
 
 
 def neighbor_context(conn: sqlite3.Connection, cfg: Config, book_id: str, rows: list[sqlite3.Row],
-                     *, scene_id: str | None = None) -> dict[str, Any]:
+                     *, scene_id: str | None = None, whole_scene: bool = False) -> dict[str, Any]:
+    """Previous / next units as context. ``whole_scene`` (retranslating chosen units): the rest of the scene on
+    both sides, nearest first, up to ``targeted_scene_context_chars`` Japanese characters per side."""
     first, last = rows[0]["ordinal"], rows[-1]["ordinal"]
+    if whole_scene and (scene_id or rows[-1]["scene_id"]) and cfg.translation.targeted_scene_context_chars:
+        return _scene_window(conn, cfg, book_id, rows, scene_id or rows[-1]["scene_id"])
     # lookahead never crosses the current scene (spec §5.5), in every mode; "none" disables it
     scene_id = scene_id or rows[-1]["scene_id"]
     if cfg.app.lookahead_scope == "none":
@@ -42,6 +46,36 @@ def neighbor_context(conn: sqlite3.Connection, cfg: Config, book_id: str, rows: 
     for r in prev:
         tr = latest_translation(conn, r["id"], r["source_hash"])
         item = {"unit_id": r["id"], "source": r["source_text"]}
+        if tr is not None:
+            item["translation"] = tr["text"]
+        before.append(item)
+    return {"context_before": before,
+            "context_after": [{"unit_id": r["id"], "source": r["source_text"]} for r in nxt]}
+
+
+def _scene_window(conn: sqlite3.Connection, cfg: Config, book_id: str, rows: list[sqlite3.Row],
+                  scene_id: str) -> dict[str, Any]:
+    budget = cfg.translation.targeted_scene_context_chars
+    first, last = rows[0]["ordinal"], rows[-1]["ordinal"]
+    q = ("SELECT * FROM units WHERE book_id=? AND scene_id=? AND translatable=1 AND kind IN ('text','heading') "
+         "AND spine_index IS NOT NULL AND ordinal {} ? ORDER BY ordinal {}")
+
+    def take(cands: list[sqlite3.Row]) -> list[sqlite3.Row]:
+        out: list[sqlite3.Row] = []
+        used = 0
+        for r in cands:
+            used += len(r["plain_text"])
+            if out and used > budget:
+                break
+            out.append(r)
+        return out
+
+    prev = take(conn.execute(q.format("<", "DESC"), (book_id, scene_id, first)).fetchall())[::-1]
+    nxt = take(conn.execute(q.format(">", "ASC"), (book_id, scene_id, last)).fetchall())
+    before = []
+    for r in prev:
+        item = {"unit_id": r["id"], "source": r["source_text"]}
+        tr = latest_translation(conn, r["id"], r["source_hash"])
         if tr is not None:
             item["translation"] = tr["text"]
         before.append(item)

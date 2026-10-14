@@ -23,6 +23,7 @@ translation:
   unit_hard_max_japanese_chars: 2500
   include_previous_units: 2
   include_next_units: 1
+  targeted_scene_context_chars: 2500   # retranslating chosen units: rest of the scene as context, per side
   preserve_ambiguity: true
   skip_already_translated: true
 review:

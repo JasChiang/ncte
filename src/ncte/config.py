@@ -56,6 +56,9 @@ class TranslationConfig(_Strict):
     unit_hard_max_japanese_chars: int = Field(2500, ge=100)
     include_previous_units: int = Field(2, ge=0, le=20)
     include_next_units: int = Field(1, ge=0, le=20)
+    # retranslating chosen units: the rest of their scene is given as context (not retranslated), up to this many
+    # Japanese characters on each side — a lone short sentence otherwise loses the scene it belongs to
+    targeted_scene_context_chars: int = Field(2500, ge=0, le=20000)
     preserve_ambiguity: bool = True
     skip_already_translated: bool = True
 
