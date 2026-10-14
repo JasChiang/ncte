@@ -72,7 +72,12 @@ def resolve(program_ev: list[TagEvidence], llm: LlmClaim | None, head: Resolutio
     tagged = {e.character_id for e in program_ev if e.kind == "dialogue_tag"}
     if len(tagged) == 1:
         sid = next(iter(tagged))
-        if llm and llm.speaker_ref and llm.speaker_ref != sid:
+        if llm and llm.speaker_ref and llm.speaker_ref != sid and llm.status != "unknown":
+            if all(e.adjacent for e in program_ev if e.kind == "dialogue_tag"):
+                # a tag in the neighbouring paragraph often belongs to another line (「安達はすぐに答えない」):
+                # the model, reading the whole exchange, decides — as an inference, not a fact
+                return Resolution(llm.speaker_ref, "inferred", "llm", cands, notes + [
+                    f"LLM proposed {llm.speaker_ref} against a tag for {sid} in the neighbouring paragraph (LLM kept)"])
             notes.append(f"LLM proposed {llm.speaker_ref}, contradicted by explicit dialogue tag (ignored)")
         return Resolution(sid, "explicit", "program", cands, notes)
     if len(tagged) > 1:

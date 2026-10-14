@@ -21,7 +21,9 @@ SPEECH_VERBS = (
     "囁", "ささや", "怒鳴", "続け", "口を開", "口にし", "問い", "問う", "ぼや", "漏らし", "促し", "命じ", "話し",
     "謝っ", "頼ん", "言葉を", "声をかけ", "声を上げ", "笑っ", "微笑", "苦笑",
 )
-_VERB_ALT = "|".join(re.escape(v) for v in SPEECH_VERBS)
+# 「続け」 after a verb stem is 「使い続け」 (keep doing), not 「…と続けた」 (went on saying)
+_VERB_ALT = "|".join(r"(?<![いきしちにひみりぎじびぴえけせてねへめれげぜでべぺ])続け" if v == "続け" else re.escape(v)
+                     for v in SPEECH_VERBS)
 FIRST_PERSON = ["わたくし", "わたし", "あたし", "あたい", "私", "僕", "ぼく", "ボク", "俺様", "俺", "おれ", "オレ",
                 "うち", "ウチ", "わし", "儂", "拙者", "我輩", "吾輩", "自分", "妾", "余"]
 SECOND_PERSON = ["あなた", "貴方", "あんた", "お前", "おまえ", "君", "きみ", "貴様", "てめえ", "てめぇ", "そなた", "汝"]
@@ -45,6 +47,7 @@ class TagEvidence:
     kind: str  # dialogue_tag | action
     unit_id: str
     snippet: str
+    adjacent: bool = False  # found in the paragraph before/after the quote (weaker than «「…」とミナは言った»)
 
 
 @dataclass
@@ -122,7 +125,8 @@ def detect_tags(units: list[UnitText], quotes: list[Quote], aliases: dict[str, s
     if pat is None:
         return ev
     names = pat.pattern
-    after_tag = re.compile(rf"^[、，\s　]*と?[、\s　]*({names})(?:は|が|も)?[^。「」]{{0,24}}?(?:{_VERB_ALT})")
+    # «「…」とミナは言った»: the name must be the subject (「と日野に声をかけた」 — 日野 is spoken to)
+    after_tag = re.compile(rf"^[、，\s　]*と?[、\s　]*({names})(?:は|が|も|(?=[^にをへとの]))[^。「」]{{0,24}}?(?:{_VERB_ALT})")
     narr_tag = re.compile(rf"^[\s　]*({names})(?:は|が|も)[^。「」]{{0,24}}?(?:{_VERB_ALT})")
     narr_action = re.compile(rf"^[\s　]*({names})(?:は|が)")
     before_tag = re.compile(rf"({names})(?:は|が)[^。「」]{{0,24}}?(?:{_VERB_ALT})[^。「」]{{0,6}}。?[\s　]*$")
@@ -132,7 +136,7 @@ def detect_tags(units: list[UnitText], quotes: list[Quote], aliases: dict[str, s
         q_by_unit.setdefault(q.unit_id, []).append(q)
 
     def add(q: Quote, cid: str, kind: str, uid: str, snip: str) -> None:
-        ev.setdefault((q.unit_id, q.index), []).append(TagEvidence(cid, kind, uid, snip[:40]))
+        ev.setdefault((q.unit_id, q.index), []).append(TagEvidence(cid, kind, uid, snip[:40], uid != q.unit_id))
 
     for q in quotes:
         if not q.closes:

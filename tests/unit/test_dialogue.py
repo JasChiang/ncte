@@ -41,6 +41,29 @@ def test_explicit_tags():
     assert ev[("u1", 0)][0].character_id == "c_mina"
 
 
+def test_keep_doing_is_not_a_speech_verb():
+    # 「使い続け」 is "keeps using", not 「…と続けた」 (found in 英雄と賢者の転生婚 §3363)
+    _, qs, ev = ev_for(["　絶え間なくミナが魔法を使い続けることで、その形状を保ち続けている。", "「耐えるに決まってるよな」"])
+    assert ("u1", 0) not in ev
+    _, qs, ev = ev_for(["「それに」とミナが続けた。"])
+    assert ev[("u0", 0)][0].character_id == "c_mina"
+
+
+def test_name_spoken_to_is_not_the_speaker():
+    # 「…」と日野に声をかけた: 日野 is addressed (安達としまむら §1301)
+    _, qs, ev = ev_for(["「いつもありがとうございます」とミナに声をかけた。"])
+    assert ("u0", 0) not in ev
+
+
+def test_neighbouring_tag_yields_to_the_model_but_same_paragraph_tag_does_not():
+    _, _, ev = ev_for(["「な、なに？」", "　ミナはすぐに答えない。"])
+    llm = LlmClaim("c_kaito", "inferred", [Candidate("c_kaito", {"action", "continuity"}, ["u0"], "llm")])
+    r = res(ev[("u0", 0)], llm)
+    assert (r.speaker_id, r.status) == ("c_kaito", "inferred")
+    _, _, ev = ev_for(["「な、なに？」とミナは答えた。"])
+    assert res(ev[("u0", 0)], llm).speaker_id == "c_mina"
+
+
 def test_action_is_not_explicit():
     _, qs, ev = ev_for(["「悪い悪い」", "　カイトは頭をかいた。"])
     assert [(e.character_id, e.kind) for e in ev[("u0", 0)]] == [("c_kaito", "action")]
