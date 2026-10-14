@@ -241,7 +241,7 @@ def translate(
     force: Annotated[bool, typer.Option("--force", help="Ignore translation cache")] = False,
     fake: Annotated[bool, typer.Option("--fake", help="Use offline FakeLLM (NOT a real translation)")] = False,
     reasoning_effort: Annotated[str | None, typer.Option("--reasoning-effort",
-                                                         help="low | medium | high (model-dependent)")] = None,
+                                                         help="low | medium | high … (model-dependent); default = the model's own")] = None,
     as_json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     """Translate a book (imports it first if needed)."""
@@ -249,7 +249,7 @@ def translate(
 
     cfg = state.cfg
     if reasoning_effort:
-        cfg.openrouter.reasoning_effort = reasoning_effort
+        cfg.openrouter.reasoning_effort = None if reasoning_effort == "default" else reasoning_effort
     book = _book(epub, auto_import=True)
     opts = RunOptions(mode=mode or cfg.app.mode, model=model or cfg.openrouter.model,
                       budget_usd=cfg.openrouter.per_book_budget_usd if budget_usd is None else budget_usd,
@@ -474,10 +474,15 @@ def retranslate(epub: Annotated[str, typer.Argument(help="EPUB path or book id")
                 mode: Annotated[str, typer.Option()] = "baseline",
                 model: Annotated[str | None, typer.Option()] = None,
                 budget_usd: Annotated[float, typer.Option("--budget-usd")] = 0.5,
-                fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
+                fake: Annotated[bool, typer.Option("--fake")] = False,
+                reasoning_effort: Annotated[str | None, typer.Option(
+                    "--reasoning-effort", help="low | medium | high … (model-dependent); default = the model's own")] = None,
+                ) -> None:
     """Retranslate only the given units; other translations (and human edits) are untouched."""
     from .translation.orchestrator import RunOptions
 
+    if reasoning_effort:
+        state.cfg.openrouter.reasoning_effort = None if reasoning_effort == "default" else reasoning_effort
     book = _book(epub)
     opts = RunOptions(mode=mode, model=model or state.cfg.openrouter.model, budget_usd=budget_usd,
                       unit_ids=unit_id, force=True, client="fake" if fake else "openrouter", include_meta=True)

@@ -413,3 +413,21 @@ def test_address_rendering_replaces_a_contradicting_unconfirmed_glossary_entry()
     addr = [{"speaker": "日野", "to": "島村", "ja": "しまむらちゃん", "zh": "小島村"},
             {"speaker": "日野", "to": "安達", "ja": "あだっち", "zh": "小安"}]
     assert [g["ja"] for g in drop_address_forms(gl, addr)] == ["島村", "あだっち"]  # a confirmed entry stays
+
+
+def test_retranslate_takes_a_reasoning_effort(tmp_path, fixtures):
+    from typer.testing import CliRunner
+
+    from ncte.cli import app
+
+    ws, epub, r = tmp_path / "ws", str(fixtures["basic"]), CliRunner()
+    assert r.invoke(app, ["-w", str(ws), "translate", epub, "--fake", "--mode", "context"]).exit_code == 0
+    import sqlite3
+
+    db = next((ws / "series").glob("*/ncte.db"))
+    uid = sqlite3.connect(db).execute("SELECT id FROM units WHERE translatable=1 LIMIT 1").fetchone()[0]
+    base = ["-w", str(ws), "retranslate", epub, "--fake", "--mode", "context", "--unit-id", uid]
+    assert r.invoke(app, [*base, "--reasoning-effort", "high"]).exit_code == 0
+    assert r.invoke(app, [*base, "--reasoning-effort", "default"]).exit_code == 0
+    bad = r.invoke(app, [*base, "--reasoning-effort", "xhigh"])  # the fake model offers low/medium/high
+    assert "not supported" in bad.output or bad.exit_code != 0
