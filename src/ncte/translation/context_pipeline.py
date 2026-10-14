@@ -309,6 +309,8 @@ class ContextOrchestrator(Orchestrator):
             mem = memory_context(self.conn, self.book.id, scene=scene, batch_rows=batch.rows,
                                  max_evidence=self.cfg.memory.max_retrieved_evidence)
         ctx.update(mem)
+        if ctx.get("address_terms") and ctx.get("glossary"):
+            ctx["glossary"] = drop_address_forms(ctx["glossary"], ctx["address_terms"])
         if "style" in ctx:  # voice notes also for characters present in the scene but not named in the batch
             from ..memory.style import load_style, style_payload
 
@@ -321,3 +323,12 @@ class ContextOrchestrator(Orchestrator):
     def target_units(self) -> list[sqlite3.Row]:
         rows = super().target_units()
         return [r for r in rows if r["kind"] not in BODY_KINDS or r["scene_id"] is not None]
+
+
+def drop_address_forms(glossary: list[dict[str, Any]], address: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One source per form of address in a request: a form with a speaker-specific rendering in ``address_terms``
+    (「しまむらちゃん」 → 小島村) does not also go out as an unconfirmed glossary entry (島村醬) that contradicts it.
+    Confirmed glossary entries stay (the human chose them)."""
+    forms = {a["ja"] for a in address if a.get("zh")}
+    return [g for g in glossary if g.get("verified") or g["ja"] not in forms
+            or all(a.get("zh") == g.get("zh") for a in address if a["ja"] == g["ja"])]

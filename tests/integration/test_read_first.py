@@ -403,3 +403,13 @@ def test_given_name_decision_reaches_the_full_name(conn, cfg, fixtures):
     assert conn.execute("SELECT display_name_zh FROM characters WHERE id=?", (cid,)).fetchone()[0] == "艾莉潔·朗梅爾"
     assert conn.execute("SELECT target_term FROM glossary WHERE source_term='エリーゼ・ランメル'").fetchone()[0] == "艾莉潔·朗梅爾"
     assert conn.execute("SELECT target_term FROM glossary WHERE source_term='エリーゼ商会'").fetchone()[0] == "艾莉潔商會"
+
+
+def test_address_rendering_replaces_a_contradicting_unconfirmed_glossary_entry():
+    from ncte.translation.context_pipeline import drop_address_forms
+
+    gl = [{"ja": "しまむらちゃん", "zh": "島村醬", "verified": False}, {"ja": "島村", "zh": "島村", "verified": True},
+          {"ja": "あだっち", "zh": "阿達", "verified": True}]
+    addr = [{"speaker": "日野", "to": "島村", "ja": "しまむらちゃん", "zh": "小島村"},
+            {"speaker": "日野", "to": "安達", "ja": "あだっち", "zh": "小安"}]
+    assert [g["ja"] for g in drop_address_forms(gl, addr)] == ["島村", "あだっち"]  # a confirmed entry stays
