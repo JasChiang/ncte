@@ -77,6 +77,8 @@ class App:
                 return actions.apply_rename(conn, book, int(ident), str(body.get("old", "")), str(body.get("new", "")))
             if kind == "proposals" and op == "preview":
                 return actions.rename_preview(conn, book, int(ident), str(body.get("old", "")))
+            if kind == "characters" and op == "gender":
+                return actions.set_gender(conn, book, ident, str(body.get("gender", "")))
             if kind == "proposals" and op == "decide":
                 return actions.decide(conn, book, int(ident), str(body.get("zh", "")))
         raise KeyError(path)

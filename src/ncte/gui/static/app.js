@@ -106,7 +106,7 @@ function rowHtml(u) {
       ${u.wordplay.map(w => `<div class="note">梗「${esc(w.term)}」：${esc(w.explanation)}</div>`).join("")}
       ${u.findings.map(f => `<div class="issue">⚑ ${esc(f.type)}：${esc(f.evidence)}</div>`).join("")}</div>
     <div>${u.quotes.map(q => { const [c, l] = STATUS[q.status] || ["c-unk", q.status];
-      return `<div>${esc(q.speaker || "？")} ${chip(c, l)}</div>`; }).join("") || `<span class="muted small">敘述</span>`}</div></div>`;
+      return `<div>${esc(q.speaker || "？")} ${chip(c, l)}${q.disputed ? chip("c-warn", "有爭議") : ""}${q.second ? `<div class="muted small" title="讀完後再確認一次的結果">再確認：${esc(q.second)}</div>` : ""}</div>`; }).join("") || `<span class="muted small">敘述</span>`}</div></div>`;
 }
 function bindRow(id, el, u) {
   const zh = el.querySelector(".zh");
@@ -151,6 +151,7 @@ async function namesView(id) {
         ${chip(r.status === "pending" ? "c-warn" : r.status === "decided" ? "c-ok" : "c-unk", {pending: "待決定", decided: "已決定", applied: "已套用"}[r.status] || r.status)}
         <span class="muted small">出現 ${r.importance} 次　目前：${esc(r.decided_zh || r.chosen_zh)}</span></div>
       ${r.reason && r.options.length && r.reason !== r.options[0].reason ? `<div class="issue">${esc(r.reason)}</div>` : ""}
+      ${(r.related || []).length ? `<div class="small">同一暱稱已定為：${r.related.map(x => `<span class="ja">${esc(x.ja)}</span> → ${esc(x.zh)}`).join("、")}</div>` : ""}
       <div style="margin:6px 0">${r.options.map(o => { const cur = (r.decided_zh || r.chosen_zh) === o.zh;
         return `<div><button class="btn ${o.zh === r.chosen_zh ? "primary" : ""}" data-zh="${esc(o.zh)}">${esc(o.zh)}</button>
         ${o.zh === r.chosen_zh ? chip("c-acc", "建議") : ""}${r.status === "decided" && cur ? chip("c-ok", "你選的") : ""}
@@ -263,6 +264,7 @@ async function peopleView(id) {
     card = `<div class="row" style="align-items:baseline;gap:10px"><h2 style="margin:0">${esc(p.zh)}</h2><span class="ja">${esc(p.ja)}</span>
       <span class="muted small">初登場 §${p.from}・出場 ${p.scenes} 場景・台詞 ${p.lines} 句</span></div>
       ${p.aka.length ? `<div class="muted small">其他稱呼：<span class="ja">${p.aka.map(esc).join("・")}</span></div>` : ""}
+      ${genderLine(p, upto)}
       <div class="row" style="margin-top:12px;gap:24px">
         <div style="flex:1 1 240px"><strong>被怎麼叫</strong>${called.map(a => `<div>${esc(nm(a.speaker))} → <span class="ja">${esc(a.ja)}</span>（${esc(a.zh || "")}）<span class="muted small">×${a.uses}</span></div>`).join("") || '<div class="muted">—</div>'}</div>
         <div style="flex:1 1 240px"><strong>怎麼叫別人</strong>${calls.map(a => `<div>→ ${a.to === pid ? "自稱" : esc(nm(a.to))}：<span class="ja">${esc(a.ja)}</span>（${esc(a.zh || "")}）<span class="muted small">×${a.uses}</span></div>`).join("") || '<div class="muted">—</div>'}</div></div>
@@ -277,6 +279,18 @@ async function peopleView(id) {
     <details><summary class="muted small">書籍資訊裡的人名 ${groups.info.length} 個</summary>${groups.info.map(btn).join("")}</details></div>
     <div class="card" style="flex:1 1 480px">${card}</div></div>`;
   view.querySelectorAll("[data-k]").forEach(b => b.onclick = e => { e.preventDefault(); peopleState.person = b.dataset.k; peopleView(id); });
+  const gs = $("#genderSet"); if (gs) gs.onchange = async () => {
+    try { await api(`book/${id}/characters/${peopleState.person}/gender`, {gender: gs.value}); invalidate(id); toast("性別已更新（之後的翻譯會用）"); peopleView(id); }
+    catch (e) { toast(e.message); } };
+}
+function genderLine(p, upto) {
+  // gender as known at the slider position: explicit (a word in the text), inferred (tone), or set by you
+  const g = p.gender && p.gender.at <= upto ? p.gender : null;
+  const label = {female: "女", male: "男"}, sure = {explicit: ["c-ok", "原文明寫"], inferred: ["c-warn", "推測"], human: ["c-acc", "你設定的"]};
+  const cur = g ? g.g : "unknown";
+  return `<div class="small" style="margin-top:4px">性別：${g ? `${label[g.g]} ${chip(...sure[g.sure])} ${g.quote ? `<span class="ja muted">「${esc(g.quote)}」</span>` : ""}`
+    : '<span class="muted">不明（翻譯時用「你」）</span>'}
+    <select id="genderSet" title="改成你確定的性別">${[["unknown", "不明"], ["female", "女"], ["male", "男"]].map(([v, t]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${t}</option>`).join("")}</select></div>`;
 }
 const G = {mode: "talk", mentions: false, n: 12, hideMinor: true, series: false, focus: null, pair: null};
 const GROUPISH = /(たち|みんな|観客|生徒たち|周り|の声|チーム|們|觀眾|路人|大家)$/;

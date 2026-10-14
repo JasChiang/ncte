@@ -105,3 +105,16 @@ def test_series_reading_data_keeps_earlier_volume_characters(tmp_path, fixtures)
     conn.execute("UPDATE books SET volume_index=1")
     d = data.characters(conn, book, series=True)
     assert all(not c["info"] or c["from"] >= 0 for c in d["characters"].values())
+
+
+def test_set_gender_from_the_people_page(gui):
+    call, book, conn = gui
+    chars = call(f"/api/book/{book.id}/characters")[1]["characters"]
+    cid = next(k for k, c in chars.items() if c["ja"] == "ミナ")
+    assert "gender" not in chars[cid]
+    assert call(f"/api/book/{book.id}/characters/{cid}/gender", {"gender": "female"})[0] == 200
+    g = call(f"/api/book/{book.id}/characters")[1]["characters"][cid]["gender"]
+    assert (g["g"], g["sure"]) == ("female", "human")
+    assert call(f"/api/book/{book.id}/characters/{cid}/gender", {"gender": "unknown"})[0] == 200
+    assert "gender" not in call(f"/api/book/{book.id}/characters")[1]["characters"][cid]
+    assert call(f"/api/book/{book.id}/characters/{cid}/gender", {"gender": "x"})[0] == 400

@@ -73,3 +73,20 @@ def accept_all(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
         for r in rows:
             _decide(conn, book.id, r["id"], r["chosen_zh"])
     return {"ok": True, "accepted": len(rows)}
+
+
+def set_gender(conn: sqlite3.Connection, book: Book, cid: str, gender: str) -> dict[str, Any]:
+    """A human setting (female / male), or unknown to clear it: same as `ncte names gender`."""
+    from ..memory.repository import set_gender as _set
+
+    if gender not in ("female", "male", "unknown"):
+        raise NCTEError("gender must be female, male or unknown")
+    c = conn.execute("SELECT book_id, known_from_ordinal FROM characters WHERE id=?", (cid,)).fetchone()
+    if c is None:
+        raise NCTEError(f"unknown character {cid}")
+    with Transaction(conn):
+        if gender == "unknown":
+            conn.execute("DELETE FROM character_gender WHERE character_id=?", (cid,))
+        else:
+            _set(conn, c[0], cid, gender, ordinal=c[1], quote=None, origin="human")
+    return {"ok": True}

@@ -106,10 +106,15 @@ def units(conn: sqlite3.Connection, book: Book, *, start: int | None = None, end
                           "AND unit_id IS NOT NULL", (book.id,)):
         findings[f["unit_id"]].append({"type": f["type"], "severity": f["severity"], "evidence": (f["evidence"] or "")[:300]})
     quotes: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for u in conn.execute("SELECT id, unit_id, quote_text, speaker_id_nullable sp, status FROM utterances WHERE book_id=? "
-                          "ORDER BY unit_id, quote_index", (book.id,)):
+    for u in conn.execute("SELECT id, unit_id, quote_text, speaker_id_nullable sp, status, notes_json FROM utterances "
+                          "WHERE book_id=? ORDER BY unit_id, quote_index", (book.id,)):
+        # the program and the model disagreed (ADR-031) and / or the line got a second look (ADR-033)
+        notes = json.loads(u["notes_json"] or "[]")
+        second = next((n[len("second look: "):] for n in reversed(notes) if n.startswith("second look: ")), None)
         quotes[u["unit_id"]].append({"id": u["id"], "speaker": names.get(u["sp"]) if u["sp"] else None,
-                                     "status": u["status"], "quote": match_text(u["quote_text"])[:40]})
+                                     "status": u["status"], "quote": match_text(u["quote_text"])[:40],
+                                     "disputed": any("(LLM kept)" in n or "conflict:" in n for n in notes),
+                                     **({"second": second[:160]} if second else {})})
     found: dict[str, list[dict[str, str]]] = defaultdict(list)
     for w in conn.execute("SELECT unit_id, term, explanation, note_zh FROM reader_notes WHERE book_id=? AND "
                           "status!='dropped'", (book.id,)):
@@ -225,6 +230,9 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
         kinds = [k for s, k in sorted(matter_first.items()) if s <= ordinal]
         return bool(kinds) and kinds[-1] != "story"
 
+    genders = {g["character_id"]: g for g in conn.execute(
+        f"SELECT g.* FROM character_gender g JOIN characters c ON c.id=g.character_id WHERE c.{SERIES_SCOPE}",
+        (book.id,))}
     out = {}
     for cid, c in chars.items():
         cv = vols.get(c["book_id"], 1.0)
@@ -235,6 +243,11 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
                     "scenes": scene_count.get(cid, 0), "lines": lines.get(cid, 0), "facts": facts.get(cid, []),
                     "examples": examples.get(cid, [])[:6],
                     "info": cv == here and info(c["known_from_ordinal"])}  # earlier volumes: never book matter here
+        g = genders.get(cid)
+        if g is not None and vols.get(g["book_id"], 1.0) <= here:
+            out[cid]["gender"] = {"g": g["gender"], "sure": "human" if g["origin"] == "human" else g["certainty"],
+                                  "quote": RUBY.sub("", g["evidence_quote"] or ""),
+                                  "at": g["ordinal"] if vols.get(g["book_id"], 1.0) == here else -1}
     address = []
     for a in conn.execute(f"SELECT * FROM address_terms WHERE {SERIES_SCOPE} ORDER BY uses DESC", (book.id,)):
         v = vols.get(a["book_id"], 1.0)
@@ -272,5 +285,12 @@ def proposals(conn: sqlite3.Connection, book: Book, *, include_done: bool = Fals
                 c["zh"] = plain(t[0]) if t else ""
             else:
                 c["zh"] = plain(tr["text"]) if tr is not None else ""
-        out.append({k: v for k, v in r.items() if k not in ("options_json", "context_json")})
+        item = {k: v for k, v in r.items() if k not in ("options_json", "context_json")}
+        if r["kind"] == "address":  # other spellings of the same nickname already decided (「あだっつぃー」→ 安達仔～～)
+            from ..memory.address import decided_variants
+
+            a = conn.execute("SELECT * FROM address_terms WHERE id=?", (int(r["ref"]),)).fetchone()
+            if a is not None:
+                item["related"] = decided_variants(conn, a["speaker_id"], a["addressee_id"], a["form_ja"])
+        out.append(item)
     return out
