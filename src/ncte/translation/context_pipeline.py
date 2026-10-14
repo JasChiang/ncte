@@ -177,6 +177,38 @@ class ContextOrchestrator(Orchestrator):
         stats = self.stage_naming(record_job=False)
         self.log(f"proposals: {stats}")
 
+    def scan_genders(self) -> None:
+        """``ncte names gender-scan``: for a volume read before genders were recorded, re-ask each analysed scene's
+        memory update and keep only the genders (facts, names and summaries stay as they are)."""
+        from ..analysis.memory_update import apply_genders
+        from ..analysis.scene import scene_rows
+
+        sids = [r[0] for r in self.conn.execute(
+            "SELECT s.id FROM scenes s JOIN chapter_summaries c ON c.scene_id=s.id AND c.book_id=s.book_id "
+            "WHERE s.book_id=? ORDER BY s.start_ordinal", (self.book.id,))]
+        total = 0
+        for i, sid in enumerate(sids):
+            if self._stop_reason:
+                break
+            scene = get_scene(self.conn, self.book.id, sid)
+            with self.lock:
+                payload = build_memory_payload(self.conn, self.book.id, scene,
+                                               [{"ja": g["source_term"], "zh": g["target_term"]} for g in self.glossary])
+            try:
+                parsed = self._llm("memory_update", self.memory_prompt, payload, [u["unit_id"] for u in payload["units"]])
+            except FatalAPIError:
+                raise
+            except LLMError as exc:
+                self.log(f"  {sid}: {exc}")
+                continue
+            rows = scene_rows(self.conn, self.book.id, sid)
+            with self.lock, Transaction(self.conn):
+                n = apply_genders(self.conn, self.book.id, sid, {r["id"]: r["plain_text"] for r in rows},
+                                  {r["id"]: r["ordinal"] for r in rows}, parsed.genders)
+            total += n
+            self.log(f"gender {sid} ({i + 1}/{len(sids)}): +{n}")
+        self.log(f"genders recorded: {total}")
+
     def translate_pass(self, scenes: list[str]) -> None:
         positions = self.body_positions()
         for i, sid in enumerate(scenes):

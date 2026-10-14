@@ -463,6 +463,17 @@ CREATE TABLE reader_notes (
 );
 CREATE INDEX idx_reader_notes_unit ON reader_notes(unit_id);
 """),
+    (12, "character gender with verbatim evidence (2nd person 妳／你)", """
+CREATE TABLE character_gender (
+    character_id TEXT PRIMARY KEY REFERENCES characters(id),
+    gender TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    evidence_quote TEXT,
+    origin TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""),
 ]
 
 

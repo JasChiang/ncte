@@ -143,6 +143,13 @@ class WordplayOut(_M):
     evidence_quote: str
 
 
+class GenderOut(_M):
+    character_ref: str
+    gender: Literal["female", "male"]
+    evidence_unit_ids: list[str]
+    evidence_quote: str  # verbatim: the words that show it (彼女, 少女, 娘, 少年 …)
+
+
 class MemoryUpdateOutput(_M):
     scene_summary: str
     facts: list[FactOut]
@@ -151,6 +158,7 @@ class MemoryUpdateOutput(_M):
     name_links: list[NameLink] = Field(default_factory=list)
     address_terms: list[AddressTermOut] = Field(default_factory=list)
     wordplay: list[WordplayOut] = Field(default_factory=list)
+    genders: list[GenderOut] = Field(default_factory=list)
 
 
 # ------------------------------------------------------------------ naming (ADR-023)

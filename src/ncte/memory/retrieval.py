@@ -74,9 +74,11 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             if tr is not None:
                 item["unit_translation"] = tr["text"]
             examples.append(item)
-        present.append({"character_id": c["id"], "name_ja": v["name_ja"], "name_zh": v["name_zh"],
-                        "aliases_ja": v["aliases_ja"], "speech_profile": prof,
-                        "verified_examples": examples})
+        card = {"character_id": c["id"], "name_ja": v["name_ja"], "name_zh": v["name_zh"],
+                "aliases_ja": v["aliases_ja"], "speech_profile": prof, "verified_examples": examples}
+        if v.get("gender"):
+            card["gender"] = v["gender"]
+        present.append(card)
     batch_ids = {r["id"] for r in batch_rows}
     utts = []
     for u in conn.execute("SELECT * FROM utterances WHERE book_id=? AND scene_id=? ORDER BY unit_id, quote_index",

@@ -134,4 +134,9 @@ def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
     else:
         g = conn.execute("SELECT target_term FROM glossary WHERE source_term=? LIMIT 1", (head,)).fetchone()
         zh = g[0] if g else None
-    return {"name_ja": head, "name_zh": zh, "aliases_ja": [n for n in shown if n != head]}
+    from .repository import gender_at
+
+    out: dict[str, Any] = {"name_ja": head, "name_zh": zh, "aliases_ja": [n for n in shown if n != head]}
+    if g := gender_at(conn, c["id"], hz):
+        out["gender"] = g
+    return out

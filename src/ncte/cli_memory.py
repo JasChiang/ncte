@@ -649,6 +649,48 @@ def names_address_set(epub: Annotated[str, typer.Argument()],
                "use `ncte retranslate` for specific units)")
 
 
+@names_app.command("gender-scan")
+def names_gender_scan(epub: Annotated[str, typer.Argument()],
+                      budget_usd: Annotated[float, typer.Option("--budget-usd")] = 1.5,
+                      fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
+    """Find characters' gender (with evidence) for a volume read before genders were recorded."""
+    from .cli import _run
+    from .translation.orchestrator import RunOptions
+
+    cfg = state.cfg
+    book = _book(epub)
+    opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
+                      client="fake" if fake else "openrouter", gender_only=True)
+    _run(book, opts, fake=fake, cfg=cfg)
+    typer.echo(f"see: ncte names gender {epub}")
+
+
+@names_app.command("gender")
+def names_gender(epub: Annotated[str, typer.Argument()],
+                 who: Annotated[str | None, typer.Argument(help="character name or id; omit to list")] = None,
+                 gender: Annotated[str | None, typer.Argument(help="female | male | unknown")] = None) -> None:
+    """List characters' gender (with the evidence), or set one (human decision; never overwritten)."""
+    from .memory.repository import set_gender
+
+    book = _book(epub)
+    conn = state.conn
+    if who is None:
+        for r in conn.execute("SELECT c.canonical_name, c.display_name_zh, g.gender, g.origin, g.evidence_quote "
+                              "FROM character_gender g JOIN characters c ON c.id=g.character_id ORDER BY g.ordinal"):
+            typer.echo(f"{r[1] or r[0]}  {r[2]}  ({r[3]}) {r[4] or ''}")
+        return
+    if gender not in ("female", "male", "unknown"):
+        raise typer.BadParameter("gender must be female, male or unknown")
+    cid = _character(book.id, who)
+    with Transaction(conn):
+        if gender == "unknown":
+            conn.execute("DELETE FROM character_gender WHERE character_id=?", (cid,))
+        else:
+            c = conn.execute("SELECT book_id, known_from_ordinal FROM characters WHERE id=?", (cid,)).fetchone()
+            set_gender(conn, c[0], cid, gender, ordinal=c[1], quote=None, origin="human")
+    typer.echo(f"{who}: {gender} (used by later translations; `ncte retranslate` for existing ones)")
+
+
 # --------------------------------------------------------------------------- naming before translating (ADR-023)
 @names_app.command("proposals")
 def names_proposals(epub: Annotated[str, typer.Argument()],

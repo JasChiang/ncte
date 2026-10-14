@@ -54,6 +54,7 @@ class RunOptions:
     include_meta: bool = True
     review_only: bool = False
     naming_only: bool = False  # ADR-023: `ncte names propose` (context mode, read pass already done)
+    gender_only: bool = False  # `ncte names gender-scan` (context mode, read pass already done)
 
 
 @dataclass
@@ -483,6 +484,8 @@ class Orchestrator:
                 self.review_existing()
             elif self.opts.naming_only:
                 self.propose_names()
+            elif self.opts.gender_only:
+                self.scan_genders()
             else:
                 self.ensure_jobs()
                 self.execute()
@@ -542,6 +545,9 @@ class Orchestrator:
 
     def propose_names(self) -> None:
         raise NCTEError("naming proposals need context mode")
+
+    def scan_genders(self) -> None:
+        raise NCTEError("gender scan needs context mode")
 
     def review(self, unit_ids: list[str]) -> None:
         from .review import review_scope

@@ -201,6 +201,8 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
                       w.note_zh.strip()[:120] or None, w.evidence_quote[:300] or None, "llm", utcnow()))
         stats["wordplay"] += 1
 
+    stats["genders"] = apply_genders(conn, book_id, sid, text_of, ordinal, parsed.genders, rej)
+
     for p in parsed.prop_states:
         if p.name_ja not in "".join(clean(t) for t in text_of.values()):
             rej(p.model_dump(), "prop not mentioned in scene")
@@ -222,3 +224,23 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         index_memory(conn, book_id, "summary", sid, scene["end_ordinal"], summary)
     repo.refresh_profiles(conn, book_id)
     return stats
+
+
+def apply_genders(conn: sqlite3.Connection, book_id: str, sid: str, text_of: dict[str, str], ordinal: dict[str, int],
+                  genders: list[Any], rej: Any = None) -> int:
+    """Gender, only from words in the text that show it (for 妳／你); never guessed from a name."""
+    chars = {c["id"] for c in repo.characters(conn, book_id)}
+    n = 0
+    for gd in genders:
+        ev = [u for u in gd.evidence_unit_ids if u in text_of]
+        quote = _norm(gd.evidence_quote)
+        if gd.character_ref not in chars or not ev or not quote or quote not in _norm("".join(text_of[u] for u in ev)):
+            if rej is not None:
+                rej(gd.model_dump(), "gender: unknown character or evidence_quote not found verbatim")
+            else:
+                repo.reject(conn, book_id, sid, "memory_update", gd.model_dump(), "gender: evidence not verbatim")
+            continue
+        repo.set_gender(conn, book_id, gd.character_ref, gd.gender, ordinal=min(ordinal[u] for u in ev),
+                        quote=gd.evidence_quote, origin="llm")
+        n += 1
+    return n

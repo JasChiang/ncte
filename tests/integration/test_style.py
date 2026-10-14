@@ -112,3 +112,71 @@ def test_wordplay_found_while_reading_reaches_translation(conn, cfg, fixtures):
     rows = conn.execute("SELECT term, note_zh FROM reader_notes").fetchall()
     assert [tuple(r) for r in rows] == [("カイト", "日文「海斗」與風箏同音")]
     assert [w["term"] for w in seen] == ["カイト"] and seen[0]["note"] == "日文「海斗」與風箏同音"
+
+
+def test_gender_with_evidence_reaches_character_cards(conn, cfg, fixtures):
+    from ncte.memory import visibility as vis
+
+    from ..scripted import known, memory_update, uid
+
+    def mem(payload, req):
+        out = memory_update(payload, req)
+        u, kaito = uid(payload, "カイト、遅いですよ"), known(payload, "カイト")
+        if u and kaito:
+            out["genders"] = [
+                {"character_ref": kaito, "gender": "male", "evidence_unit_ids": [u], "evidence_quote": "カイト、遅いですよ"},
+                {"character_ref": kaito, "gender": "female", "evidence_unit_ids": [u], "evidence_quote": "彼女は"}]  # rejected
+        return out
+
+    cards = []
+
+    def tr(payload, req):
+        cards.extend(c for c in payload.get("characters", []) if c["name_ja"] == "カイト")
+        return {"translations": [{"unit_id": u["unit_id"], "translated_text": "譯", "flags": [], "notes": [],
+                                  "translator_note": ""} for u in payload["units"]]}
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"],
+                          FakeLLM(responders={**RESPONDERS, "memory_update": mem, "translate": tr}), mode="context")
+    row = conn.execute("SELECT g.*, c.* FROM character_gender g JOIN characters c ON c.id=g.character_id").fetchone()
+    assert row["gender"] == "male" and row["canonical_name"] == "カイト"
+    assert any(c.get("gender") == "male" for c in cards)
+    c = conn.execute("SELECT * FROM characters WHERE id=?", (row["character_id"],)).fetchone()
+    before = vis.character_view(conn, book.id, c, row["ordinal"] - 1)
+    assert before is None or "gender" not in before  # not shown before the evidence
+
+
+def test_gender_conflict_and_human_override(conn, cfg, fixtures):
+    from ncte.library import import_book
+    from ncte.memory.repository import gender_at, set_gender, upsert_character
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
+    cid = upsert_character(conn, book.id, "ヒカル", name_zh="光", aliases=[], unit_id=u[0], ordinal=u[1], origin="t")[0]
+    hz = (99.0, 10**9)
+    assert set_gender(conn, book.id, cid, "female", ordinal=u[1], quote="彼女", origin="llm") == "female"
+    assert set_gender(conn, book.id, cid, "male", ordinal=u[1], quote="彼", origin="llm") == "conflict"
+    assert gender_at(conn, cid, hz) is None
+    set_gender(conn, book.id, cid, "male", ordinal=u[1], quote=None, origin="human")
+    assert set_gender(conn, book.id, cid, "female", ordinal=u[1], quote="彼女", origin="llm") == "male"
+    assert gender_at(conn, cid, hz) == "male"
+
+
+def test_gender_scan_for_a_volume_already_read(conn, cfg, fixtures):
+    from ..scripted import known, memory_update, uid
+
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    facts = conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0]
+
+    def mem(payload, req):
+        out = memory_update(payload, req)
+        u, kaito = uid(payload, "カイト、遅いですよ"), known(payload, "カイト")
+        out["facts"] = []  # a scan must not touch facts
+        if u and kaito:
+            out["genders"] = [{"character_ref": kaito, "gender": "male", "evidence_unit_ids": [u],
+                               "evidence_quote": "カイト、遅いですよ"}]
+        return out
+
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "memory_update": mem}), mode="context",
+             gender_only=True)
+    assert conn.execute("SELECT gender FROM character_gender").fetchone()[0] == "male"
+    assert conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == facts

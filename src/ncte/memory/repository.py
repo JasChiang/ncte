@@ -153,3 +153,38 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
                      (drop["book_id"], drop["known_from_unit_id"], drop["known_from_ordinal"], keep_id))
     conn.execute("DELETE FROM characters WHERE id=?", (drop_id,))
     refresh_profiles(conn, keep["book_id"])
+
+
+def set_gender(conn: sqlite3.Connection, book_id: str, character_id: str, gender: str, *, ordinal: int,
+               quote: str | None, origin: str) -> str:
+    """Record a character's gender from verbatim evidence. The earliest evidence is kept (so it is visible from
+    there on); evidence for the other gender makes it 'conflict' (shown to no one) unless a human set it.
+    Returns the stored value."""
+    from ..series import pos
+
+    row = conn.execute("SELECT * FROM character_gender WHERE character_id=?", (character_id,)).fetchone()
+    if row is None or origin == "human":
+        conn.execute("INSERT OR REPLACE INTO character_gender(character_id, gender, book_id, ordinal, evidence_quote, "
+                     "origin, updated_at) VALUES (?,?,?,?,?,?,?)",
+                     (character_id, gender, book_id, ordinal, (quote or "")[:200] or None, origin, utcnow()))
+        return gender
+    if row["origin"] == "human":
+        return str(row["gender"])
+    if row["gender"] != gender:
+        conn.execute("UPDATE character_gender SET gender='conflict', updated_at=? WHERE character_id=?",
+                     (utcnow(), character_id))
+        return "conflict"
+    if pos(conn, book_id, ordinal) < pos(conn, row["book_id"], row["ordinal"]):
+        conn.execute("UPDATE character_gender SET book_id=?, ordinal=?, evidence_quote=?, updated_at=? "
+                     "WHERE character_id=?", (book_id, ordinal, (quote or "")[:200] or None, utcnow(), character_id))
+    return gender
+
+
+def gender_at(conn: sqlite3.Connection, character_id: str, hz: tuple[float, int]) -> str | None:
+    """'female' / 'male' once the evidence has appeared by position ``hz``; None if unknown, later or in conflict."""
+    from ..series import pos
+
+    row = conn.execute("SELECT * FROM character_gender WHERE character_id=?", (character_id,)).fetchone()
+    if row is None or row["gender"] not in ("female", "male") or pos(conn, row["book_id"], row["ordinal"]) > hz:
+        return None
+    return str(row["gender"])
