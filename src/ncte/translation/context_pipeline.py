@@ -21,7 +21,7 @@ import sqlite3
 from typing import Any
 
 from ..analysis.memory_update import apply_memory_update, build_memory_payload
-from ..analysis.naming import apply_naming, build_naming_payload, pending
+from ..analysis.naming import apply_naming, build_naming_payload, model_view, pending
 from ..analysis.scene import apply_scene_analysis, build_analysis_payload, get_scene
 from ..errors import FatalAPIError, LLMError, ModelOutputError
 from ..llm.prompt_loader import load_prompt
@@ -46,13 +46,21 @@ class ContextOrchestrator(Orchestrator):
             "SELECT DISTINCT u.scene_id, MIN(u.ordinal) o FROM jobs j JOIN units u ON u.id=j.target_id WHERE "
             "j.run_id=? AND j.stage='translate' AND u.scene_id IS NOT NULL GROUP BY u.scene_id ORDER BY o",
             (self.run_id,))]
+        matter: set[str] = set()
+        if self.cfg.context.skip_book_matter:
+            from ..epub.matter import story_hrefs
+
+            story = story_hrefs(self.conn, self.book.id)
+            matter = {sid for sid in scene_ids if not {r[0] for r in self.conn.execute(
+                "SELECT DISTINCT resource_href FROM units WHERE book_id=? AND scene_id=?", (self.book.id, sid))} & story}
         for seq, sid in enumerate(scene_ids):
             scene = get_scene(self.conn, self.book.id, sid)
-            analyzed = int(scene["version"]) > 0
+            analyzed = int(scene["version"]) > 0 or sid in matter  # book matter: translated, not analysed
             has_memory = self.conn.execute("SELECT 1 FROM chapter_summaries WHERE book_id=? AND scene_id=?",
                                            (self.book.id, sid)).fetchone() is not None
-            a_status = "pending" if (not analyzed or (self.opts.force and not self.opts.unit_ids)) else "skipped"
-            m_status = "pending" if (self.cfg.context.memory_update and (not has_memory or (
+            a_status = "pending" if sid not in matter and (not analyzed or (self.opts.force and not self.opts.unit_ids)) \
+                else "skipped"
+            m_status = "pending" if (self.cfg.context.memory_update and sid not in matter and (not has_memory or (
                 self.opts.force and not self.opts.unit_ids))) else "skipped"
             for stage, st in (("scene_analyze", a_status), ("memory_update", m_status)):
                 self.conn.execute(
@@ -147,7 +155,7 @@ class ContextOrchestrator(Orchestrator):
             stats = {"names": 0, "address": 0, "pending": 0, "rejected": 0}
         else:
             try:
-                parsed = self._llm("naming", self.naming_prompt, payload, [])
+                parsed = self._llm("naming", self.naming_prompt, model_view(payload), [])
             except FatalAPIError:
                 raise
             except LLMError as exc:  # renderings then stay as proposed by the read pass

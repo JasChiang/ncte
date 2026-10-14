@@ -441,6 +441,9 @@ CREATE TABLE naming_proposals (
     UNIQUE(kind, ref)
 );
 """),
+    (9, "naming proposals keep example sentences to show while choosing", """
+ALTER TABLE naming_proposals ADD COLUMN context_json TEXT NOT NULL DEFAULT '[]';
+"""),
 ]
 
 
@@ -493,8 +496,15 @@ def _harvest_address_terms(conn: sqlite3.Connection) -> None:
         harvest_book(conn, book_id)
 
 
+def _naming_context(conn: sqlite3.Connection) -> None:
+    from ..analysis.naming import refresh_context
+
+    for (bid,) in conn.execute("SELECT DISTINCT book_id FROM naming_proposals").fetchall():
+        refresh_context(conn, bid)
+
+
 POST_MIGRATION = {3: _reindex_units_fts, 4: _rehash_glossary_versions, 5: _group_entities, 6: _assign_series,
-                  7: _harvest_address_terms}
+                  7: _harvest_address_terms, 9: _naming_context}
 
 
 def utcnow() -> str:

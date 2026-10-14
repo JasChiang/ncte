@@ -653,6 +653,7 @@ def names_address_set(epub: Annotated[str, typer.Argument()],
 @names_app.command("proposals")
 def names_proposals(epub: Annotated[str, typer.Argument()],
                     show_all: Annotated[bool, typer.Option("--all", help="also proposals already applied or decided")] = False,
+                    show_context: Annotated[bool, typer.Option("--context", help="example sentences for every item")] = False,
                     as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
     """Renderings proposed after the read pass; pending ones wait for your choice before translating."""
     from .analysis.naming import pending
@@ -671,8 +672,20 @@ def names_proposals(epub: Annotated[str, typer.Argument()],
         typer.echo(f"#{r['id']} [{state_mark}] {r['label']}  ×{r['importance']}  → {current}")
         for i, o in enumerate(r["options"], 1):
             typer.echo(f"    {i}. {o['zh']}　{o['reason']}")
+        if r["status"] == "pending" or show_context:
+            for c in r["context"]:
+                typer.echo(f"       例 §{c['at']}：{c['text']}")
     if any(r["status"] == "pending" for r in rows):
         typer.echo("\nchoose: ncte names decide <book> --id N --pick K   (or --zh TEXT, or --accept-all)")
+    from .analysis.naming import suspicious_characters
+
+    odd = [c for c in suspicious_characters(state.conn, book.id) if c["also"]]
+    if odd:
+        typer.echo("\n⚠ characters named by a form of address that also fits another character "
+                   "(their lines may be attributed wrongly):")
+        for c in odd:
+            typer.echo(f"    {c['name']}（{c['zh']}） ↔ {c['also']}: rename the character, and mark the form as shared: "
+                       f"ncte names link <book> {c['name']} {c['also']} --shared")
 
 
 @names_app.command("decide")

@@ -26,10 +26,24 @@ MAX_ADDRESS = 60
 MAX_ZH = 24
 
 
-def _book_texts(conn: sqlite3.Connection, book_id: str) -> list[str]:
-    return [match_text(r[0]) for r in conn.execute(
-        "SELECT plain_text FROM units WHERE book_id=? AND translatable=1 AND kind IN ('text','heading') "
-        "AND spine_index IS NOT NULL ORDER BY ordinal", (book_id,))]
+def _book_texts(conn: sqlite3.Connection, book_id: str) -> list[tuple[int, str]]:
+    """(ordinal, text) of the story (front/back matter left out, ADR-024)."""
+    from ..epub.matter import story_hrefs
+
+    story = story_hrefs(conn, book_id)
+    return [(r[0], match_text(r[1])) for r in conn.execute(
+        "SELECT ordinal, plain_text, resource_href FROM units WHERE book_id=? AND translatable=1 AND kind IN "
+        "('text','heading') AND spine_index IS NOT NULL ORDER BY ordinal", (book_id,)) if r[2] in story]
+
+
+def _quotes(conn: sqlite3.Connection, address_id: int, limit: int = 3) -> list[dict[str, Any]]:
+    """Example lines for an address term: the quotes it was observed in, spread over the book."""
+    rows = conn.execute("SELECT u.ordinal, ut.quote_text FROM address_observations o JOIN utterances ut ON "
+                        "ut.id=o.utterance_id JOIN units u ON u.id=ut.unit_id WHERE o.address_id=? ORDER BY u.ordinal",
+                        (address_id,)).fetchall()
+    if len(rows) > limit:
+        rows = [rows[i * (len(rows) - 1) // (limit - 1)] for i in range(limit)]
+    return [{"at": r[0], "text": match_text(r[1])[:90]} for r in rows]
 
 
 _HIRA = "\u3041-\u309f"
@@ -76,13 +90,16 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
         if g["category"] not in NAME_CATEGORIES or g["verified"] or g["origin"] == "user" or term in done:
             continue
         pat = term_pattern(term)
-        hits = [t for t in texts if pat.search(t)]
+        hits = [(o, t) for o, t in texts if pat.search(t)]
         if not hits:
             continue
+        spread = hits if len(hits) <= 3 else [hits[i * (len(hits) - 1) // 2] for i in range(3)]
         sib = [{"ja": o["source_term"], "zh": o["target_term"], "form": o["form_type"] or "official"}
                for o in by_entity.get(g["entity_id"] or "", []) if o["source_term"] != term]
         names.append({"ref": term, "ja": term, "zh": g["target_term"], "category": g["category"], "count": len(hits),
-                      **({"same_entity_as": sib} if sib else {}), "samples": [_excerpt(t, term) for t in hits[:2]]})
+                      **({"same_entity_as": sib} if sib else {}),
+                      "samples": [_excerpt(t, term) for _, t in spread[:2]],
+                      "_context": [{"at": o, "text": _excerpt(t, term, 70)} for o, t in spread]})
     names.sort(key=lambda n: -n["count"])
 
     who = char_names(conn, book_id)
@@ -97,7 +114,9 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
                         "to": "（自稱）" if a["speaker_id"] == a["addressee_id"] else who.get(a["addressee_id"], a["addressee_id"]),
                         "ja": a["form_ja"], "zh": a["form_zh"], "uses": a["uses"],
                         **({"note": a["note"]} if a["note"] else {}),
-                        **({"sample": a["evidence_quote"][:80]} if a["evidence_quote"] else {})})
+                        **({"sample": a["evidence_quote"][:80]} if a["evidence_quote"] else {}),
+                        "_context": _quotes(conn, a["id"]) or ([{"at": a["first_ordinal"], "text": a["evidence_quote"][:90]}]
+                                                               if a["evidence_quote"] else [])})
     main = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE} ORDER BY known_from_ordinal LIMIT 30",
                         (book_id,)).fetchall()
     payload: dict[str, Any] = {
@@ -109,6 +128,12 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
     if style:
         payload["style"] = style
     return payload
+
+
+def model_view(payload: dict[str, Any]) -> dict[str, Any]:
+    """The request without the program's private keys (``_context``: example sentences kept for the user)."""
+    return {k: ([{f: v for f, v in it.items() if not f.startswith("_")} for it in val] if isinstance(val, list) else val)
+            for k, val in payload.items()}
 
 
 def _clean(zh: str) -> str:
@@ -147,12 +172,13 @@ def apply_naming(conn: sqlite3.Connection, book_id: str, payload: dict[str, Any]
                              "(zh_origin IS NULL OR zh_origin!='human')", (zh, utcnow(), int(it.ref)))
             conn.execute(
                 "INSERT INTO naming_proposals(book_id, kind, ref, label, previous_zh, chosen_zh, options_json, reason, "
-                "importance, needs_review, status, run_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                "importance, needs_review, status, run_id, created_at, context_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(kind, ref) DO UPDATE SET chosen_zh=excluded.chosen_zh, options_json=excluded.options_json, "
                 "reason=excluded.reason, importance=excluded.importance, needs_review=excluded.needs_review, "
-                "status=excluded.status, run_id=excluded.run_id",
+                "status=excluded.status, run_id=excluded.run_id, context_json=excluded.context_json",
                 (book_id, kind, it.ref, label, src.get("zh"), zh, json.dumps(options, ensure_ascii=False),
-                 it.reason[:200], importance, int(needs), "pending" if needs else "applied", run_id, utcnow()))
+                 it.reason[:200], importance, int(needs), "pending" if needs else "applied", run_id, utcnow(),
+                 json.dumps(src.get("_context", []), ensure_ascii=False)))
             stats["names" if kind == "name" else "address"] += 1
             stats["pending"] += int(needs)
     return stats
@@ -176,7 +202,7 @@ def _set_name(conn: sqlite3.Connection, book_id: str, term: str, zh: str, *, hum
 def pending(conn: sqlite3.Connection, book_id: str, *, include_done: bool = False) -> list[dict[str, Any]]:
     where, ids = scope_clause(conn, book_id)
     q = f"SELECT * FROM naming_proposals WHERE {where}" + ("" if include_done else " AND status='pending'")
-    return [{**dict(r), "options": json.loads(r["options_json"])}
+    return [{**dict(r), "options": json.loads(r["options_json"]), "context": json.loads(r["context_json"])}
             for r in conn.execute(q + " ORDER BY status='pending' DESC, importance DESC, id", ids)]
 
 
@@ -196,3 +222,37 @@ def decide(conn: sqlite3.Connection, book_id: str, pid: int, zh: str) -> dict[st
     conn.execute("UPDATE naming_proposals SET status='decided', decided_zh=?, decided_at=? WHERE id=?",
                  (zh, utcnow(), pid))
     return {"id": pid, "label": row["label"], "zh": zh}
+
+
+def suspicious_characters(conn: sqlite3.Connection, book_id: str) -> list[dict[str, str]]:
+    """Characters whose name is a form of address (「安達さん」): usually someone named only by how others address
+    them, and the same form also addresses another person — such a character takes over the other person's lines."""
+    from ..memory.address import _HONORIFIC_END
+
+    out = []
+    for c in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,)):
+        base = _HONORIFIC_END.sub("", c["canonical_name"])
+        if base != c["canonical_name"] and len(base) >= 1:
+            other = conn.execute(f"SELECT canonical_name FROM characters WHERE {SERIES_SCOPE} AND id!=? AND "
+                                 "(canonical_name=? OR instr(aliases_json, ?) > 0)",
+                                 (book_id, c["id"], base, json.dumps(base, ensure_ascii=False))).fetchone()
+            out.append({"id": c["id"], "name": c["canonical_name"], "zh": c["display_name_zh"] or "",
+                        "also": other[0] if other else ""})
+    return out
+
+
+def refresh_context(conn: sqlite3.Connection, book_id: str) -> int:
+    """(Re)compute the example sentences of every proposal of this book (proposals made before they were kept)."""
+    texts = _book_texts(conn, book_id)
+    n = 0
+    for r in conn.execute("SELECT id, kind, ref FROM naming_proposals WHERE book_id=?", (book_id,)).fetchall():
+        if r["kind"] == "name":
+            pat = term_pattern(r["ref"])
+            hits = [(o, t) for o, t in texts if pat.search(t)]
+            spread = hits if len(hits) <= 3 else [hits[i * (len(hits) - 1) // 2] for i in range(3)]
+            ctx = [{"at": o, "text": _excerpt(t, r["ref"], 70)} for o, t in spread]
+        else:
+            ctx = _quotes(conn, int(r["ref"]))
+        conn.execute("UPDATE naming_proposals SET context_json=? WHERE id=?", (json.dumps(ctx, ensure_ascii=False), r["id"]))
+        n += 1
+    return n

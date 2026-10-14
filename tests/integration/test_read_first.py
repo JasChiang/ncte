@@ -187,3 +187,47 @@ def test_address_forms_only_from_characters_known_by_then(conn, cfg, fixtures):
     assert "カイトさん" not in early and "カイト" in early
     late, _ = name_forms(conn, book.id, us[6]["ordinal"])
     assert "カイトさん" in late
+
+
+# ---------------------------------------------------------------- book matter (ADR-024)
+def test_classify_front_story_back():
+    from ncte.epub.matter import classify
+
+    hrefs = ["cover.xhtml", "p0.html", "toc.xhtml", "c1.html", "c2.html", "p9.html", "end.html", "x.html"]
+    labels = {"cover.xhtml": "表紙", "toc.xhtml": "目次", "c1.html": "第一章", "c2.html": "第二章", "end.html": "奥付"}
+    first = {"p9.html": "あとがき"}
+    assert classify(hrefs, labels, first) == {
+        "cover.xhtml": "front", "p0.html": "front", "toc.xhtml": "front", "c1.html": "story", "c2.html": "story",
+        "p9.html": "back", "end.html": "back", "x.html": "back"}
+    # no TOC labels: file names decide
+    assert classify(["p-cover.xhtml", "p-caution.xhtml", "p-001.xhtml", "p-colophon.xhtml"], {}) == {
+        "p-cover.xhtml": "front", "p-caution.xhtml": "front", "p-001.xhtml": "story", "p-colophon.xhtml": "back"}
+
+
+def test_book_matter_scenes_are_translated_not_analysed(conn, cfg, fixtures, monkeypatch):
+    import ncte.epub.matter as matter
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    hrefs = [r[0] for r in conn.execute("SELECT resource_href, MIN(ordinal) o FROM units WHERE book_id=? AND "
+                                        "spine_index IS NOT NULL GROUP BY resource_href ORDER BY o", (book.id,))]
+    monkeypatch.setattr(matter, "story_hrefs", lambda c, b: set(hrefs[:-1]))  # last file = colophon
+    fake = FakeLLM(responders=RESPONDERS)
+    _, rid, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    assert s.status == "completed"
+    last_scenes = {r[0] for r in conn.execute("SELECT DISTINCT scene_id FROM units WHERE book_id=? AND resource_href=?",
+                                              (book.id, hrefs[-1]))}
+    analysed = {r[0] for r in conn.execute("SELECT target_id FROM jobs WHERE run_id=? AND stage IN "
+                                           "('scene_analyze','memory_update') AND status='succeeded'", (rid,))}
+    assert last_scenes and not (last_scenes & analysed)
+    untranslated = conn.execute("SELECT COUNT(*) FROM jobs WHERE run_id=? AND stage='translate' AND status NOT IN "
+                                "('succeeded','needs_review','skipped')", (rid,)).fetchone()[0]
+    assert untranslated == 0
+
+
+def test_proposals_keep_examples_out_of_the_request(conn, cfg, fixtures, low_thresholds):
+    fake = FakeLLM(responders={**RESPONDERS, "naming": naming_responder})
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    sent = next(json.loads(c.messages[1]["content"]) for c in fake.calls if c.stage == "naming")
+    assert "_context" not in json.dumps(sent, ensure_ascii=False)
+    p = naming.pending(conn, book.id)[0]
+    assert p["context"] and all("カイト" in c["text"] and c["at"] for c in p["context"])

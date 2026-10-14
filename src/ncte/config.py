@@ -81,6 +81,7 @@ class ContextConfig(_Strict):
     include_memory: bool = True  # inject characters / summaries / facts into translation requests
     read_first: bool = True  # ADR-023: analyse + remember every scene first, then name, then translate
     naming: Literal["review", "auto", "off"] = "review"  # ADR-023: propose renderings; review = pause for choices
+    skip_book_matter: bool = True  # ADR-024: no story analysis for covers, TOC, afterword, colophon (still translated)
 
 
 class ExportConfig(_Strict):

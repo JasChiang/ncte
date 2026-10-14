@@ -125,8 +125,9 @@ ncte names proposals 書.epub                 # 待確認的譯法與選項
 ncte names decide 書.epub --id 3 --pick 2    # 選第 2 個選項；或 --zh 自訂譯法；或 --accept-all 全部採用建議
 ncte resume --run-id r_xxx                   # 決定後繼續翻譯
 ncte names propose 書.epub                   # 已分析過的書（例如要重翻前）單獨產生提案
+ncte names proposals 書.epub --all --context   # 所有提案（含已套用的）與原文例句
 ```
-不想暫停可在設定檔設 `context.naming = "auto"`（直接採用建議）或 `"off"`；`context.read_first = false` 恢復逐場景交錯的舊流程。你決定的譯法在同系列之後的集數會沿用，不會再問。翻譯時仍只附上該場景之前已揭露的資訊（例如身分揭露前，角色只以當時的稱呼出現）。
+不想暫停可在設定檔設 `context.naming = "auto"`（直接採用建議）或 `"off"`；`context.read_first = false` 恢復逐場景交錯的舊流程。你決定的譯法在同系列之後的集數會沿用，不會再問。待確認的項目會附上幾句原文例句方便判斷。封面、目次、注意事項、後記、版權頁照常翻譯，但不做角色與劇情分析（`context.skip_book_matter`）。翻譯時仍只附上該場景之前已揭露的資訊（例如身分揭露前，角色只以當時的稱呼出現）。
 
 ### 品質控制與人工校正
 ```bash
