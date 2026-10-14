@@ -406,7 +406,11 @@ def decide(conn: sqlite3.Connection, book_id: str, pid: int, zh: str) -> dict[st
         if a is not None:
             where, ids = scope_clause(conn, book_id)
             users = conn.execute(f"SELECT COUNT(*) FROM address_terms WHERE {where} AND form_ja=?", (*ids, a[0])).fetchone()[0]
-            if users == 1:
+            plain_name = conn.execute(f"SELECT 1 FROM characters WHERE {SERIES_SCOPE} AND (canonical_name=? OR "
+                                      "EXISTS (SELECT 1 FROM json_each(aliases_json) WHERE value=?))",
+                                      (book_id, a[0], a[0])).fetchone()
+            # a person's bare name (ファレグ in 「ファレグの坊主」) keeps its own rendering: the glossary is the name
+            if users == 1 and not plain_name:
                 conn.execute(f"UPDATE glossary SET target_term=?, origin='naming', updated_at=? WHERE {SERIES_SCOPE} AND "
                              "source_term=? AND verified=0 AND origin!='user'", (zh, utcnow(), book_id, a[0]))
     conn.execute("UPDATE naming_proposals SET status='decided', decided_zh=?, decided_at=? WHERE id=?",

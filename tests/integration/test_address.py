@@ -32,6 +32,7 @@ def test_find_forms_longest_match_and_honorifics():
     assert find_forms("「島村さん、安達は？」", forms) == [("島村さん", "c1"), ("安達", "c2")]
     assert find_forms("しまむらちゃん", forms) == [("しまむらちゃん", "c1")]
     assert find_forms("島《しま》村《むら》くん", forms) == [("島村くん", "c1")]  # ruby readings ignored
+    assert set(find_forms("「ミリス嬢、エルリア」", {"ミリス": "c3", "エルリア": "c4"})) == {("ミリス嬢", "c3"), ("エルリア", "c4")}
 
 
 def test_program_harvest_from_resolved_quotes(conn, cfg, fixtures):

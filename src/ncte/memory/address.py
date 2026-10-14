@@ -25,7 +25,7 @@ from ..series import SERIES_SCOPE, Pos, pos, volumes
 from .db import utcnow
 
 HONORIFICS = ("ちゃん", "さん", "くん", "君", "様", "さま", "先輩", "せんぱい", "先生", "せんせい", "殿", "氏", "たん",
-              "っち", "ちゃま", "にゃん")
+              "っち", "ちゃま", "にゃん", "嬢", "卿", "閣下", "姫")
 _HONORIFIC_RE = re.compile("(" + "|".join(sorted(map(re.escape, HONORIFICS), key=len, reverse=True)) + ")")
 _HONORIFIC_END = re.compile("(" + "|".join(map(re.escape, HONORIFICS)) + ")$")
 RESOLVED = ("explicit", "inferred", "human_verified")

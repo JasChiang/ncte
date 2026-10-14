@@ -370,7 +370,7 @@ def test_rename_reaches_existing_translations(conn, cfg, fixtures):
     assert t == "凱特來了"
 
 
-def test_address_decision_updates_an_unconfirmed_glossary_entry(conn, cfg, fixtures, low_thresholds):
+def test_address_decision_leaves_the_bare_name_alone(conn, cfg, fixtures, low_thresholds):
     def addr(payload, req):
         return {"names": [], "address": [{"ref": a["ref"], "zh": "阿海", "reason": "", "alternatives": [{"zh": "海斗", "reason": ""}]}
                                           for a in payload["address"] if a["ja"] == "カイト"]}
@@ -380,7 +380,9 @@ def test_address_decision_updates_an_unconfirmed_glossary_entry(conn, cfg, fixtu
     conn.execute("UPDATE glossary SET verified=0, origin='memory_update' WHERE source_term='カイト'")
     p = next(x for x in naming.pending(conn, book.id) if x["kind"] == "address")
     naming.decide(conn, book.id, p["id"], "阿海")
-    assert conn.execute("SELECT target_term FROM glossary WHERE source_term='カイト'").fetchone()[0] == "阿海"
+    # カイト is the person's own name (narration uses it too): one speaker's 「阿海」 does not rename him
+    assert conn.execute("SELECT target_term FROM glossary WHERE source_term='カイト'").fetchone()[0] != "阿海"
+    assert conn.execute("SELECT form_zh FROM address_terms WHERE id=?", (int(p["ref"]),)).fetchone()[0] == "阿海"
 
 
 def test_given_name_decision_reaches_the_full_name(conn, cfg, fixtures):
