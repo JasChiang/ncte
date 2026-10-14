@@ -66,7 +66,7 @@ def default_memory_update(payload: dict[str, Any], req: LLMRequest) -> dict[str,
 
 
 def default_naming(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:
-    return {"names": [], "address": []}
+    return {"names": [], "address": [], "characters": []}
 
 
 def default_review(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:

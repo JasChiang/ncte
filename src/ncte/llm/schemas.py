@@ -166,9 +166,18 @@ class NamingItem(_M):
     alternatives: list[NamingOption] = Field(default_factory=list)
 
 
+class NamingCharacter(_M):
+    ref: str  # character id from characters_to_check
+    verdict: Literal["different", "same", "unsure"]
+    name_ja: str  # descriptive name when different (e.g. 「安達の母」)
+    name_zh: str  # its Chinese label (e.g. 「安達媽媽」)
+    reason: str
+
+
 class NamingOutput(_M):
     names: list[NamingItem] = Field(default_factory=list)
     address: list[NamingItem] = Field(default_factory=list)
+    characters: list[NamingCharacter] = Field(default_factory=list)
 
 
 # ------------------------------------------------------------------ review

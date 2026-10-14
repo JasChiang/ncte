@@ -79,6 +79,8 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
 
     texts = _book_texts(conn, book_id)
     done = _proposed(conn, "name")
+    suspects = [c for c in suspicious_characters(conn, book_id) if c["also"] and c["id"] not in _proposed(conn, "character")]
+    done |= {c["name"] for c in suspects}  # a name that is someone else's form of address is checked as a character
     by_entity: dict[str, list[sqlite3.Row]] = {}
     rows = conn.execute(f"SELECT * FROM glossary WHERE {SERIES_SCOPE}", (book_id,)).fetchall()
     for g in rows:
@@ -122,11 +124,24 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
                                                                if a["evidence_quote"] else [])})
     main = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE} ORDER BY known_from_ordinal LIMIT 30",
                         (book_id,)).fetchall()
+    to_check = []
+    for c in suspects:
+        pat = term_pattern(c["name"])
+        hits = [(o, t) for o, t in texts if pat.search(t)]
+        if not hits:
+            continue
+        spread = hits if len(hits) <= 4 else [hits[i * (len(hits) - 1) // 3] for i in range(4)]
+        to_check.append({"ref": c["id"], "name_ja": c["name"], "name_zh": c["zh"], "overlaps_with": c["also"],
+                         "count": len(hits), "samples": [_excerpt(t, c["name"], 60) for _, t in spread],
+                         "_context": [{"at": o, "text": _excerpt(t, c["name"], 70)} for o, t in spread],
+                         "_also_id": c["also_id"]})
     payload: dict[str, Any] = {
         "task": "naming",
         "characters": [{"name_ja": c["canonical_name"], "name_zh": c["display_name_zh"],
                         "aliases_ja": json.loads(c["aliases_json"] or "[]")} for c in main],
         "names": names[:MAX_NAMES], "address": address[:MAX_ADDRESS]}
+    if to_check:
+        payload["characters_to_check"] = to_check
     style = style_payload(load_style(conn, book_id), "")
     if style:
         payload["style"] = style
@@ -185,8 +200,70 @@ def apply_naming(conn: sqlite3.Connection, book_id: str, payload: dict[str, Any]
                  json.dumps(src.get("_context", []), ensure_ascii=False)))
             stats["names" if kind == "name" else "address"] += 1
             stats["pending"] += int(needs)
+    for ch in parsed.characters:
+        src = {c["ref"]: c for c in payload.get("characters_to_check", [])}.get(ch.ref)
+        if src is None:
+            stats["rejected"] += 1
+            continue
+        form, other = src["name_ja"], src["overlaps_with"]
+        rename = {"action": "rename", "name_ja": ch.name_ja.strip()[:24] or form, "name_zh": _clean(ch.name_zh) or form,
+                  "form": form, "other_id": src["_also_id"]}
+        rename["zh"] = f"改名為「{rename['name_zh']}」，「{form}」設為與{other}共用的稱呼"
+        merge = {"action": "merge", "other_id": src["_also_id"], "zh": f"與{other}是同一人（合併）"}
+        keep = {"action": "keep", "zh": "維持現狀"}
+        options = {"different": [rename, keep], "same": [merge, keep]}.get(ch.verdict, [rename, merge, keep])
+        for o in options:
+            o["reason"] = ch.reason[:200] if o is options[0] else ""
+        conn.execute(
+            "INSERT INTO naming_proposals(book_id, kind, ref, label, previous_zh, chosen_zh, options_json, reason, "
+            "importance, needs_review, status, run_id, created_at, context_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(kind, ref) DO UPDATE SET chosen_zh=excluded.chosen_zh, options_json=excluded.options_json, "
+            "reason=excluded.reason, status=excluded.status, context_json=excluded.context_json",
+            (book_id, "character", ch.ref, f"角色「{form}」（與{other}的稱呼重疊）", src["name_zh"], options[0]["zh"],
+             json.dumps(options, ensure_ascii=False), ch.reason[:200], int(src["count"]), 1, "pending", run_id, utcnow(),
+             json.dumps(src["_context"], ensure_ascii=False)))
+        stats["pending"] += 1
     stats["pending"] += flag_collisions(conn, book_id)
     return stats
+
+
+def _fix_character(conn: sqlite3.Connection, book_id: str, cid: str, option: dict[str, Any]) -> None:
+    """Apply a decided character fix: rename + shared form, merge into the other character, or nothing."""
+    from ..memory import repository as repo
+    from ..memory.entities import add_sense
+
+    act = option.get("action")
+    if act == "merge" and option.get("other_id"):
+        repo.merge_characters(conn, option["other_id"], cid)
+    elif act == "rename":
+        c = conn.execute("SELECT * FROM characters WHERE id=?", (cid,)).fetchone()
+        if c is None:
+            return
+        form = option.get("form") or c["canonical_name"]
+        aliases = [a for a in json.loads(c["aliases_json"] or "[]") if a != option["name_ja"]]
+        if form not in aliases:
+            aliases.append(form)
+        conn.execute("UPDATE characters SET canonical_name=?, display_name_zh=?, aliases_json=?, updated_at=? WHERE id=?",
+                     (option["name_ja"], option["name_zh"], json.dumps(aliases, ensure_ascii=False), utcnow(), cid))
+        other = conn.execute("SELECT canonical_name, display_name_zh FROM characters WHERE id=?",
+                             (option.get("other_id"),)).fetchone()
+        if other is not None:
+            repo.ensure_glossary(conn, book_id, form, option["name_zh"], category="character", origin="naming",
+                                 first_unit_id=None)
+            repo.ensure_glossary(conn, book_id, other[0], other[1] or other[0], category="character", origin="naming",
+                                 first_unit_id=None)
+            add_sense(conn, book_id, form, other[0], origin="human", note=f"也用來稱呼{option['name_zh']}")
+        # address observations made while the form meant only this person are redone (it is ambiguous now)
+        from ..memory.address import reharvest_scene
+        from ..series import scope_clause as _sc
+
+        where, ids = _sc(conn, book_id, "book_id")
+        for bid, sid in conn.execute(f"SELECT DISTINCT book_id, scene_id FROM units WHERE {where} AND scene_id IS NOT "
+                                     "NULL AND instr(plain_text, ?) > 0", (*ids, form)).fetchall():
+            reharvest_scene(conn, bid, sid)
+        # the form is no longer this person's name: a pending name proposal for it is moot
+        conn.execute("UPDATE naming_proposals SET status='superseded' WHERE kind='name' AND ref=? AND status!='decided'",
+                     (form,))
 
 
 def _variant_key(form: str) -> str:
@@ -248,10 +325,17 @@ def decide(conn: sqlite3.Connection, book_id: str, pid: int, zh: str) -> dict[st
     row = conn.execute("SELECT * FROM naming_proposals WHERE id=?", (pid,)).fetchone()
     if row is None:
         raise KeyError(f"unknown proposal id {pid}")
-    zh = _clean(zh)
+    zh = zh.strip() if row["kind"] == "character" else _clean(zh)  # a fix option is a sentence, not a name
     if not zh:
         raise ValueError("empty rendering")
-    if row["kind"] == "name":
+    if row["kind"] == "character":
+        opts = json.loads(row["options_json"])
+        opt = next((o for o in opts if o["zh"] == zh), None)
+        if opt is None:  # own text: rename to it
+            base = next((o for o in opts if o.get("action") == "rename"), {"form": None, "other_id": None})
+            opt = {**base, "action": "rename", "name_ja": zh, "name_zh": zh}
+        _fix_character(conn, book_id, row["ref"], opt)
+    elif row["kind"] == "name":
         _set_name(conn, book_id, row["ref"], zh, human=True)
         # the same form addressed to the same person follows (unless a person decided that pair differently).
         # Only that person: 「安達さん」 named as 安達's mother must not rename classmates' 「安達さん」 for 安達.
@@ -284,11 +368,11 @@ def suspicious_characters(conn: sqlite3.Connection, book_id: str) -> list[dict[s
     for c in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,)):
         base = _HONORIFIC_END.sub("", c["canonical_name"])
         if base != c["canonical_name"] and len(base) >= 1:
-            other = conn.execute(f"SELECT canonical_name FROM characters WHERE {SERIES_SCOPE} AND id!=? AND "
+            other = conn.execute(f"SELECT canonical_name, id FROM characters WHERE {SERIES_SCOPE} AND id!=? AND "
                                  "(canonical_name=? OR instr(aliases_json, ?) > 0)",
                                  (book_id, c["id"], base, json.dumps(base, ensure_ascii=False))).fetchone()
             out.append({"id": c["id"], "name": c["canonical_name"], "zh": c["display_name_zh"] or "",
-                        "also": other[0] if other else ""})
+                        "also": other[0] if other else "", "also_id": other[1] if other else ""})
     return out
 
 

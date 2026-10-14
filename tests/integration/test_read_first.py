@@ -306,3 +306,34 @@ def test_name_decision_only_syncs_address_terms_for_that_person(conn, cfg, fixtu
     naming.decide(conn, book.id, pid, "安達太太")
     rows = {r[0]: r[1] for r in conn.execute("SELECT addressee_id, form_zh FROM address_terms WHERE form_ja='アダチさん'")}
     assert rows == {a: "安達同學", mom: "安達太太"}  # the classmate's 「アダチさん」 for アダチ is untouched
+
+
+def test_honorific_named_character_gets_a_fix_proposal(conn, cfg, fixtures):
+    """A character named 「アダチさん」 (someone's mother) that overlaps アダチ: naming proposes renaming her and
+    sharing the form; deciding it renames, records the shared form and drops the name proposal."""
+    from ncte.llm.schemas import NamingOutput
+    from ncte.memory.address import name_forms
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    us = _units(conn, book.id)
+    text = conn.execute("SELECT plain_text FROM units WHERE id=?", (us[1]["id"],)).fetchone()[0]
+    conn.execute("UPDATE units SET plain_text=? WHERE id=?", (text + "「アダチさん、こんにちは」", us[1]["id"]))
+    a, _ = upsert_character(conn, book.id, "アダチ", name_zh="安達", aliases=[], unit_id=us[0]["id"],
+                            ordinal=us[0]["ordinal"], origin="t")
+    mom, _ = upsert_character(conn, book.id, "アダチさん", name_zh="安達太太", aliases=[], unit_id=us[1]["id"],
+                              ordinal=us[1]["ordinal"], origin="t")
+    ensure_glossary(conn, book.id, "アダチさん", "安達太太", category="character", origin="t", first_unit_id=us[1]["id"])
+    payload = naming.build_naming_payload(conn, book.id)
+    assert [c["ref"] for c in payload["characters_to_check"]] == [mom]
+    assert "アダチさん" not in {n["ref"] for n in payload["names"]}  # not proposed as an ordinary name
+    assert "_also_id" not in json.dumps(naming.model_view(payload), ensure_ascii=False)
+    out = NamingOutput.model_validate({"characters": [{"ref": mom, "verdict": "different", "name_ja": "アダチの母",
+                                                       "name_zh": "安達媽媽", "reason": "對母親的稱呼"}]})
+    naming.apply_naming(conn, book.id, payload, out)
+    p = next(x for x in naming.pending(conn, book.id) if x["kind"] == "character")
+    assert p["options"][0]["zh"].startswith("改名為「安達媽媽」") and p["options"][-1]["zh"] == "維持現狀"
+    naming.decide(conn, book.id, p["id"], p["options"][0]["zh"])
+    c = conn.execute("SELECT canonical_name, display_name_zh, aliases_json FROM characters WHERE id=?", (mom,)).fetchone()
+    assert (c[0], c[1]) == ("アダチの母", "安達媽媽") and "アダチさん" in json.loads(c[2])
+    fmap, ambiguous = name_forms(conn, book.id)
+    assert "アダチさん" in ambiguous and "アダチさん" not in fmap  # never attributed automatically any more
