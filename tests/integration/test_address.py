@@ -142,3 +142,29 @@ def test_decided_rendering_reaches_the_scene_of_first_use(conn, cfg, fixtures):
     items = context_items(conn, book.id, start, text, set(), names, upto=r["ordinal"])
     assert [(i["ja"], i["zh"]) for i in items] == [("カイト", "阿海")]
     assert context_items(conn, book.id, start, text, set(), names, upto=r["ordinal"] - 1) == []  # not before it
+
+
+def test_memory_model_reassigns_the_name_owner_guess(conn, cfg, fixtures):
+    # 「アダチさん」 said to アダチ's mother is counted for アダチ by the program (the name's owner); the memory
+    # model read the scene and says otherwise
+    from ncte.memory.repository import upsert_character
+
+    def mem(payload, req):
+        out = memory_update(payload, req)
+        u, mina, mom = uid(payload, "カイト、遅いですよ"), known(payload, "ミナ"), known(payload, "カイトの母")
+        if u and mina and mom:
+            out["address_terms"] = [{"speaker_ref": mina, "addressee_ref": mom, "term": "カイト", "term_zh": "海斗媽媽",
+                                     "note": "", "evidence_unit_ids": [u], "evidence_quote": "カイト、遅いですよ"}]
+        return out
+
+    from ncte.library import import_book
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    u0 = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
+    mom = upsert_character(conn, book.id, "カイトの母", name_zh="海斗的母親", aliases=[], unit_id=u0[0], ordinal=u0[1],
+                           origin="t")[0]
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "memory_update": mem}), mode="context")
+    line = conn.execute("SELECT id FROM utterances WHERE quote_text LIKE '%カイト、遅いですよ%'").fetchone()[0]
+    to = conn.execute("SELECT a.addressee_id FROM address_observations o JOIN address_terms a ON a.id=o.address_id "
+                      "WHERE o.utterance_id=?", (line,)).fetchall()
+    assert [r[0] for r in to] == [mom]

@@ -166,6 +166,13 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
     from ..memory.address import upsert as upsert_address
 
     stats["address_terms"] = 0
+    stats["address_reassigned"] = 0
+    from ..memory.address import reassign_scene
+
+    # one addressee per (speaker, form) in this scene: the model's reading replaces the program's name-owner guess
+    targets: dict[tuple[str, str], set[str]] = {}
+    for at in parsed.address_terms:
+        targets.setdefault((at.speaker_ref, clean(at.term).strip()), set()).add(at.addressee_ref)
     for at in parsed.address_terms:
         ev = [u for u in at.evidence_unit_ids if u in text_of]
         quote = _norm(at.evidence_quote)
@@ -185,6 +192,9 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
                        form_zh=None if pronoun else (at.term_zh.strip()[:24] or None),
                        quote=at.evidence_quote, note=at.note[:200] or None)
         stats["address_terms"] += 1
+        term = clean(at.term).strip()
+        if len(targets.get((at.speaker_ref, term), ())) == 1 and at.speaker_ref != at.addressee_ref:
+            stats["address_reassigned"] += reassign_scene(conn, book_id, sid, at.speaker_ref, term, at.addressee_ref)
 
     # wordplay / real-world references a Chinese reader would miss (ADR-026); re-reading replaces the scene's list
     conn.execute("DELETE FROM reader_notes WHERE book_id=? AND scene_id=? AND origin='llm'", (book_id, sid))

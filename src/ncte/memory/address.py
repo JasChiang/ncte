@@ -165,6 +165,35 @@ def harvest_scene(conn: sqlite3.Connection, book_id: str, scene_id: str,
     return n
 
 
+def reassign_scene(conn: sqlite3.Connection, book_id: str, scene_id: str, speaker: str, form: str,
+                   addressee: str) -> int:
+    """The memory model read the scene and says ``speaker``'s 「form」 there is for ``addressee``: the program's
+    guess (whoever owns the name — 「安達さん」 → 安達, though it was said to her mother) follows. Returns the
+    number of observations moved."""
+    rows = conn.execute(
+        "SELECT o.utterance_id, o.address_id, a.addressee_id, a.uses FROM address_observations o "
+        "JOIN address_terms a ON a.id=o.address_id JOIN utterances ut ON ut.id=o.utterance_id "
+        "WHERE ut.book_id=? AND ut.scene_id=? AND a.speaker_id=? AND a.form_ja=? AND a.addressee_id!=?",
+        (book_id, scene_id, speaker, form, addressee)).fetchall()
+    n = 0
+    for r in rows:
+        ut = conn.execute("SELECT ut.*, u.ordinal FROM utterances ut JOIN units u ON u.id=ut.unit_id WHERE ut.id=?",
+                          (r["utterance_id"],)).fetchone()
+        conn.execute("DELETE FROM address_observations WHERE utterance_id=? AND address_id=?",
+                     (r["utterance_id"], r["address_id"]))
+        conn.execute("UPDATE address_terms SET uses=MAX(uses-1, 0), updated_at=? WHERE id=?", (utcnow(), r["address_id"]))
+        guess = conn.execute("SELECT * FROM address_terms WHERE id=?", (r["address_id"],)).fetchone()
+        if guess["uses"] == 0 and guess["origin"] == "program" and guess["zh_origin"] not in DECIDED:
+            # nothing is left of the guess (a human / naming decision is kept)
+            conn.execute("DELETE FROM address_terms WHERE id=?", (r["address_id"],))
+            conn.execute("UPDATE naming_proposals SET status='superseded' WHERE kind='address' AND ref=? "
+                         "AND status='pending'", (str(r["address_id"]),))
+        upsert(conn, book_id, speaker, addressee, form, ordinal=ut["ordinal"], unit_id=ut["unit_id"], origin="llm",
+               certainty="inferred", quote=ut["quote_text"], utterance_id=ut["id"])
+        n += 1
+    return n
+
+
 def harvest_book(conn: sqlite3.Connection, book_id: str) -> int:
     return sum(harvest_scene(conn, book_id, r[0])
                for r in conn.execute("SELECT id FROM scenes WHERE book_id=? ORDER BY start_ordinal", (book_id,)).fetchall())
