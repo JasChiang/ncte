@@ -139,15 +139,18 @@ async function namesView(id) {
   const rows = await api(`book/${id}/proposals${namesAll ? "?all=1" : ""}`);
   const pend = rows.filter(r => r.status === "pending");
   view.innerHTML = `<div class="row" style="align-items:center;margin-bottom:10px"><strong>待決定 ${pend.length} 項</strong>
-    ${pend.length ? `<button class="btn" id="acceptAll">全部採用建議</button>` : ""}
+    ${pend.length ? `<button class="btn" id="acceptAll" title="每一項都選標有「建議」的那個譯法">全部採用建議</button>` : ""}
     <label class="small muted"><input type="checkbox" id="showAll" ${namesAll ? "checked" : ""}> 也顯示已套用、已決定的</label></div>
     ${rows.map(r => `<div class="card" data-pid="${r.id}">
       <div class="row" style="align-items:baseline;gap:10px"><strong>${esc(r.label)}</strong>
         ${chip(r.status === "pending" ? "c-warn" : r.status === "decided" ? "c-ok" : "c-unk", {pending: "待決定", decided: "已決定", applied: "已套用"}[r.status] || r.status)}
         <span class="muted small">出現 ${r.importance} 次　目前：${esc(r.decided_zh || r.chosen_zh)}</span></div>
       ${r.reason && r.options.length && r.reason !== r.options[0].reason ? `<div class="issue">${esc(r.reason)}</div>` : ""}
-      <div style="margin:6px 0">${r.options.map(o => `<div><button class="btn" data-zh="${esc(o.zh)}">${esc(o.zh)}</button>
-        <span class="muted small">${esc(o.reason)}</span></div>`).join("")}</div>
+      <div style="margin:6px 0">${r.options.map(o => { const cur = (r.decided_zh || r.chosen_zh) === o.zh;
+        return `<div><button class="btn ${o.zh === r.chosen_zh ? "primary" : ""}" data-zh="${esc(o.zh)}">${esc(o.zh)}</button>
+        ${o.zh === r.chosen_zh ? chip("c-acc", "建議") : ""}${r.status === "decided" && cur ? chip("c-ok", "你選的") : ""}
+        <span class="muted small">${esc(o.reason)}</span></div>`; }).join("")}
+        ${r.status === "decided" && !r.options.some(o => o.zh === r.decided_zh) ? `<div>${chip("c-ok", "你選的")} ${esc(r.decided_zh)}</div>` : ""}</div>
       <div class="row" style="gap:6px"><input type="text" placeholder="自己填譯法" data-own><button class="btn" data-ownok>用這個</button></div>
       ${r.context.length ? `<details ${r.status === "pending" ? "open" : ""} style="margin-top:6px"><summary class="small muted">原文例句</summary>
         ${r.context.map(c => `<div class="ja small">§${c.at}　${esc(c.text)}</div>`).join("")}</details>` : ""}</div>`).join("")

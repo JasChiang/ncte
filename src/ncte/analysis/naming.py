@@ -253,10 +253,15 @@ def decide(conn: sqlite3.Connection, book_id: str, pid: int, zh: str) -> dict[st
         raise ValueError("empty rendering")
     if row["kind"] == "name":
         _set_name(conn, book_id, row["ref"], zh, human=True)
-        # the same form in the address table follows (unless a person decided that pair differently)
+        # the same form addressed to the same person follows (unless a person decided that pair differently).
+        # Only that person: 「安達さん」 named as 安達's mother must not rename classmates' 「安達さん」 for 安達.
+        from ..memory.entities import character_for_form
+
+        owner = character_for_form(conn, book_id, row["ref"])
         where, ids = scope_clause(conn, book_id)
-        same = [r[0] for r in conn.execute(f"SELECT id FROM address_terms WHERE {where} AND form_ja=? AND "
-                                           "(zh_origin IS NULL OR zh_origin!='human')", (*ids, row["ref"]))]
+        same = [r[0] for r in conn.execute(f"SELECT id FROM address_terms WHERE {where} AND form_ja=? AND addressee_id=? "
+                                           "AND (zh_origin IS NULL OR zh_origin!='human')",
+                                           (*ids, row["ref"], owner))] if owner else []
         for aid in same:
             conn.execute("UPDATE address_terms SET form_zh=?, zh_origin='human', updated_at=? WHERE id=?",
                          (zh, utcnow(), aid))

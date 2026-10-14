@@ -262,6 +262,7 @@ def test_forms_rendered_alike_are_flagged_and_names_sync_address(conn, cfg, fixt
     mk = lambda n, zh: upsert_character(conn, book.id, n, name_zh=zh, aliases=[], unit_id=us[0]["id"],  # noqa: E731
                                         ordinal=us[0]["ordinal"], origin="t")[0]
     mom, friend, a = mk("ママ", "媽媽"), mk("ヒノ", "日野"), mk("アダチ", "安達")
+    conn.execute("UPDATE characters SET aliases_json='[\"あだっちー\"]' WHERE id=?", (a,))  # the nickname is アダチ's
     for sp, form in ((mom, "アダチちゃん"), (friend, "あだっちー"), (friend, "あだっち")):
         upsert(conn, book.id, sp, a, form, ordinal=us[1]["ordinal"], unit_id=us[1]["id"], origin="llm",
                certainty="inferred")
@@ -281,3 +282,27 @@ def test_forms_rendered_alike_are_flagged_and_names_sync_address(conn, cfg, fixt
     row = conn.execute("SELECT form_zh, zh_origin FROM address_terms WHERE form_ja='あだっちー'").fetchone()
     assert tuple(row) == ("安達兒", "human")
     assert "日野 → 安達：あだっちー" not in {p["label"] for p in naming.pending(conn, book.id)}
+
+
+def test_name_decision_only_syncs_address_terms_for_that_person(conn, cfg, fixtures):
+    from ncte.llm.schemas import NamingOutput
+    from ncte.memory.address import upsert
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    us = _units(conn, book.id)
+    mk = lambda n, zh: upsert_character(conn, book.id, n, name_zh=zh, aliases=[], unit_id=us[0]["id"],  # noqa: E731
+                                        ordinal=us[0]["ordinal"], origin="t")[0]
+    friend, a, mom = mk("ヒノ", "日野"), mk("アダチ", "安達"), mk("アダチさん", "安達媽媽")
+    ensure_glossary(conn, book.id, "アダチさん", "安達媽媽", category="character", origin="t", first_unit_id=us[0]["id"])
+    upsert(conn, book.id, friend, a, "アダチさん", ordinal=us[1]["ordinal"], unit_id=us[1]["id"], origin="llm",
+           certainty="inferred", form_zh="安達同學")
+    upsert(conn, book.id, friend, mom, "アダチさん", ordinal=us[2]["ordinal"], unit_id=us[2]["id"], origin="llm",
+           certainty="inferred", form_zh="阿姨")
+    payload = {"names": [{"ref": "アダチさん", "ja": "アダチさん", "zh": "安達媽媽", "category": "character", "count": 9}],
+               "address": []}
+    naming.apply_naming(conn, book.id, payload, NamingOutput.model_validate(
+        {"names": [{"ref": "アダチさん", "zh": "安達太太", "reason": "", "alternatives": [{"zh": "安達媽媽", "reason": ""}]}]}))
+    pid = next(p["id"] for p in naming.pending(conn, book.id, include_done=True) if p["ref"] == "アダチさん")
+    naming.decide(conn, book.id, pid, "安達太太")
+    rows = {r[0]: r[1] for r in conn.execute("SELECT addressee_id, form_zh FROM address_terms WHERE form_ja='アダチさん'")}
+    assert rows == {a: "安達同學", mom: "安達太太"}  # the classmate's 「アダチさん」 for アダチ is untouched
