@@ -381,3 +381,23 @@ def test_address_decision_updates_an_unconfirmed_glossary_entry(conn, cfg, fixtu
     p = next(x for x in naming.pending(conn, book.id) if x["kind"] == "address")
     naming.decide(conn, book.id, p["id"], "阿海")
     assert conn.execute("SELECT target_term FROM glossary WHERE source_term='カイト'").fetchone()[0] == "阿海"
+
+
+def test_given_name_decision_reaches_the_full_name(conn, cfg, fixtures):
+    from ncte.llm.schemas import NamingOutput
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    us = _units(conn, book.id)
+    cid = upsert_character(conn, book.id, "エリーゼ・ランメル", name_zh="愛麗絲·朗梅爾", aliases=["エリーゼ"],
+                           unit_id=us[0]["id"], ordinal=us[0]["ordinal"], origin="t")[0]
+    for ja, zh in (("エリーゼ", "愛麗絲"), ("エリーゼ・ランメル", "愛麗絲·朗梅爾"), ("エリーゼ商会", "愛麗絲商會")):
+        ensure_glossary(conn, book.id, ja, zh, category="character", origin="t", first_unit_id=us[0]["id"])
+    payload = {"names": [{"ref": "エリーゼ", "ja": "エリーゼ", "zh": "愛麗絲", "category": "character", "count": 9}],
+               "address": []}
+    naming.apply_naming(conn, book.id, payload, NamingOutput.model_validate(
+        {"names": [{"ref": "エリーゼ", "zh": "愛麗絲", "reason": "", "alternatives": [{"zh": "艾莉絲", "reason": ""}]}]}))
+    pid = next(p["id"] for p in naming.pending(conn, book.id, include_done=True) if p["ref"] == "エリーゼ")
+    naming.decide(conn, book.id, pid, "艾莉潔")
+    assert conn.execute("SELECT display_name_zh FROM characters WHERE id=?", (cid,)).fetchone()[0] == "艾莉潔·朗梅爾"
+    assert conn.execute("SELECT target_term FROM glossary WHERE source_term='エリーゼ・ランメル'").fetchone()[0] == "艾莉潔·朗梅爾"
+    assert conn.execute("SELECT target_term FROM glossary WHERE source_term='エリーゼ商会'").fetchone()[0] == "艾莉潔商會"

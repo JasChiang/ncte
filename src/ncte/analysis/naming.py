@@ -304,11 +304,43 @@ def flag_collisions(conn: sqlite3.Connection, book_id: str) -> int:
     return n
 
 
+def _set_full_names(conn: sqlite3.Connection, book_id: str, term: str, old_zh: str, zh: str) -> None:
+    """A given name decided alone (エリーゼ) also changes the full names that contain it (エリーゼ・ランメル
+    愛麗絲·朗梅爾 → 艾莉潔·朗梅爾, ヴェガルタ魔法王国): unconfirmed glossary entries and character display names."""
+    if not old_zh or old_zh == zh:
+        return
+
+    def swap(ja: str, cur: str | None) -> str | None:
+        if cur and ja != term and ja.startswith(term) and cur.startswith(old_zh) and "・" not in ja:
+            return zh + cur[len(old_zh):]  # ヴェガルタ魔法王国 威加爾達魔法王國 → 維加爾達魔法王國
+        ja_parts, zh_parts = re.split(r"[・･·]", ja), re.split(r"[・･·]", cur or "")
+        if len(ja_parts) < 2 or term not in ja_parts or len(zh_parts) != len(ja_parts):
+            return None
+        i = ja_parts.index(term)
+        if zh_parts[i] != old_zh:
+            return None
+        zh_parts[i] = zh
+        return "·".join(zh_parts)
+
+    for r in conn.execute(f"SELECT id, source_term, target_term FROM glossary WHERE {SERIES_SCOPE} AND verified=0 "
+                          "AND origin!='user' AND instr(source_term, ?) > 0", (book_id, term)).fetchall():
+        new = swap(r["source_term"], r["target_term"])
+        if new:
+            conn.execute("UPDATE glossary SET target_term=?, origin='naming', updated_at=? WHERE id=?",
+                         (new, utcnow(), r["id"]))
+    for r in conn.execute(f"SELECT id, canonical_name, display_name_zh FROM characters WHERE {SERIES_SCOPE} "
+                          "AND instr(canonical_name, ?) > 0", (book_id, term)).fetchall():
+        new = swap(r["canonical_name"], r["display_name_zh"])
+        if new:
+            conn.execute("UPDATE characters SET display_name_zh=?, updated_at=? WHERE id=?", (new, utcnow(), r["id"]))
+
+
 def _set_name(conn: sqlite3.Connection, book_id: str, term: str, zh: str, *, human: bool = False) -> None:
     """Change a glossary rendering (never one a human set unless ``human``) and the character's display name."""
     g = conn.execute(f"SELECT * FROM glossary WHERE {SERIES_SCOPE} AND source_term=?", (book_id, term)).fetchone()
     if g is None or (not human and (g["verified"] or g["origin"] == "user")):
         return
+    _set_full_names(conn, book_id, term, g["target_term"], zh)
     if human:
         conn.execute("UPDATE glossary SET target_term=?, verified=1, origin='user', version=version+1, updated_at=? "
                      "WHERE id=?", (zh, utcnow(), g["id"]))
