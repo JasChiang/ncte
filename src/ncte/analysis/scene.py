@@ -222,8 +222,11 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                                           ordinal=first.ordinal, origin="scene_analysis")
                 names_of[existing_alias[name]] = [name]
                 continue
+            # the model says what each alias is; a common noun (「少女」「兵士」) names anyone and is not kept
+            # (the generic word list stays as a check for the model's omissions)
+            common = {k.ja.strip() for k in nc.alias_kinds if k.kind == "common"}
             aliases = [a for a in nc.aliases_ja if a and a != name and len(a) <= MAX_NAME_LEN and a not in PRONOUNS
-                       and a not in GENERIC_REFERENTS
+                       and a not in GENERIC_REFERENTS and a not in common
                        and _standalone(a, scene_text, [name, *existing_alias, *(x.name_ja for x in parsed.new_characters)])]
             gl = conn.execute(f"SELECT target_term FROM glossary WHERE {SERIES_SCOPE} AND source_term=?",
                               (book_id, name)).fetchone()
@@ -239,7 +242,8 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             ref_map[cid] = cid
             names_of[cid] = [name, *aliases]
             existing_alias[name] = cid
-            same = _revealed(conn, book_id, known, nc.same_as_ref, [a.strip() for a in nc.aliases_ja], first.ordinal)
+            same = _revealed(conn, book_id, known, nc.same_as_ref,
+                             [a.strip() for a in nc.aliases_ja if a.strip() not in common], first.ordinal)
             if same and same != cid:
                 reveals.append((cid, same, name, first, nc.evidence_unit_ids))
         # a name revealed for a character known so far only by a description: one character from here on.

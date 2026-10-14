@@ -34,6 +34,12 @@ STRONG_EVIDENCE = {"dialogue_tag", "action", "address", "knowledge", "continuity
 Resolution = Literal["explicit", "inferred", "unknown"]
 
 
+class AliasKind(_M):
+    ja: str
+    # name / nickname / title (称号・役職: 学院長) / description (具體描述: 黒髪の女性) / common (普通名詞: 少女、兵士)
+    kind: Literal["name", "nickname", "title", "description", "common"]
+
+
 class NewCharacter(_M):
     temp_id: str
     name_ja: str
@@ -41,6 +47,7 @@ class NewCharacter(_M):
     proposed_name_zh: str
     evidence_unit_ids: list[str]
     same_as_ref: str | None = None  # a known character (so far unnamed / described) this name now reveals
+    alias_kinds: list[AliasKind] = Field(default_factory=list)  # what each alias is; common nouns are not kept
 
 
 class Participant(_M):

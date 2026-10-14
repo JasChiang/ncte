@@ -278,3 +278,19 @@ def test_generic_alias_does_not_merge():
     known[0]["canonical_name"] = "黒髪の女性"
     assert _revealed(None, "b", known, None, ["黒髪の女性"], 20) == "c1"
     assert _revealed(None, "b", known, None, ["黒髪の女性"], 2000) is None  # introduced long before: may be someone else
+
+
+def test_aliases_the_model_calls_common_nouns_are_not_kept(conn, cfg, fixtures):
+    from ..scripted import scene_analyze
+
+    def analyze(payload, req):
+        out = scene_analyze(payload, req)
+        for nc in out["new_characters"]:
+            if nc["name_ja"] == "カイト":
+                nc["aliases_ja"] = ["市場", "寝坊"]
+                nc["alias_kinds"] = [{"ja": "市場", "kind": "description"}, {"ja": "寝坊", "kind": "common"}]
+        return out
+
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "scene_analyze": analyze}), mode="context")
+    al = json.loads(conn.execute("SELECT aliases_json FROM characters WHERE canonical_name='カイト'").fetchone()[0])
+    assert "寝坊" not in al and "市場" in al  # not in the word list: the model's label decides
