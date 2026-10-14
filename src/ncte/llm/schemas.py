@@ -215,12 +215,24 @@ class ReviewOutput(_M):
     issues: list[ReviewIssue]
 
 
+# ------------------------------------------------------------------ second look (ADR-033)
+class VerifyItem(_M):
+    ref: str
+    answer: str  # character id | unknown ; female | male | unknown ; same | different | unsure
+    reason: str
+
+
+class VerifyOutput(_M):
+    items: list[VerifyItem]
+
+
 SCHEMAS: dict[str, type[BaseModel]] = {
     "translate": TranslationBatchOutput,
     "scene_analyze": SceneAnalysisOutput,
     "memory_update": MemoryUpdateOutput,
     "naming": NamingOutput,
     "review": ReviewOutput,
+    "verify": VerifyOutput,
 }
 
 

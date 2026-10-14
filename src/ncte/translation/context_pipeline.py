@@ -25,12 +25,14 @@ from ..analysis.naming import apply_naming, build_naming_payload, model_view, pe
 from ..analysis.scene import apply_scene_analysis, build_analysis_payload, get_scene
 from ..errors import FatalAPIError, LLMError, ModelOutputError
 from ..llm.prompt_loader import load_prompt
-from ..llm.schemas import MemoryUpdateOutput, NamingOutput, SceneAnalysisOutput
+from ..llm.schemas import MemoryUpdateOutput, NamingOutput, SceneAnalysisOutput, VerifyOutput
 from ..memory.db import Transaction, utcnow
 from ..memory.retrieval import memory_context
 from .context_builder import BODY_KINDS
 from .orchestrator import Batch, Orchestrator, make_batches
 from .translator import call_structured
+
+VERIFY_BATCH = 25  # items per second-look request
 
 
 class ContextOrchestrator(Orchestrator):
@@ -66,6 +68,10 @@ class ContextOrchestrator(Orchestrator):
                 self.conn.execute(
                     "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
                     (self.book.id, self.run_id, stage, sid, seq, st, utcnow()))
+        if self.cfg.context.read_first and not self.opts.unit_ids:
+            self.conn.execute(
+                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (self.book.id, self.run_id, "verify", self.book.id, len(scene_ids), "pending", utcnow()))
         if self.cfg.context.read_first and self.cfg.context.naming != "off" and not self.opts.unit_ids:
             # naming is a whole-volume step; retranslating chosen units keeps the existing renderings
             self.conn.execute(
@@ -93,6 +99,8 @@ class ContextOrchestrator(Orchestrator):
                 "GROUP BY target_id ORDER BY MIN(seq)", (self.run_id,))]
         if self.cfg.context.read_first:
             self.read_pass(scenes)
+            if not self._stop_reason:
+                self.verify_pass()
             if self._stop_reason or not self.naming_pass():
                 return
             self.translate_pass(scenes)
@@ -130,6 +138,34 @@ class ContextOrchestrator(Orchestrator):
             self.log(f"read {sid} ({i + 1}/{len(due)})")
             self.stage_scene_analyze(sid)
             self.stage_memory_update(sid)
+
+    def verify_pass(self) -> None:
+        """Pass 1b (ADR-033): a second look at what the read pass left in doubt, with the surrounding text."""
+        from ..analysis import verify
+
+        job = self._job("verify", self.book.id)
+        if job is None or job["status"] not in ("pending", "running"):
+            return
+        with self.lock:
+            items = verify.collect(self.conn, self.book.id)
+        stats: dict[str, int] = {"items": len(items)}
+        prompt = load_prompt("verify")
+        for i in range(0, len(items), VERIFY_BATCH):
+            chunk = items[i:i + VERIFY_BATCH]
+            try:
+                parsed = self._llm("verify", prompt, {"task": "verify", "items": [
+                    {k: v for k, v in it.items() if not k.startswith("_")} for it in chunk]}, [])
+            except FatalAPIError:
+                raise
+            except LLMError as exc:  # the read pass's answers stand
+                self._finding(None, "verify_failed", "low", str(exc)[:400])
+                continue
+            assert isinstance(parsed, VerifyOutput)
+            with self.lock, Transaction(self.conn):
+                for k, v in verify.apply(self.conn, self.book.id, chunk, parsed, self._finding).items():
+                    stats[k] = stats.get(k, 0) + v
+        self._set_job("verify", self.book.id, "succeeded", None, stats)
+        self.log(f"second look: {stats}")
 
     def naming_pass(self) -> bool:
         """Pass 2: propose renderings. False when the run stops here for the user's choices."""

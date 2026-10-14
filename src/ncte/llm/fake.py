@@ -73,12 +73,18 @@ def default_review(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:
     return {"issues": []}
 
 
+def default_verify(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+    """Confirms nothing and changes nothing (a second look with no opinion)."""
+    return {"items": []}
+
+
 DEFAULTS: dict[str, Responder] = {
     "translate": default_translate,
     "scene_analyze": default_scene_analyze,
     "memory_update": default_memory_update,
     "naming": default_naming,
     "review": default_review,
+    "verify": default_verify,
 }
 
 
