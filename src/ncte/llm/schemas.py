@@ -135,6 +135,14 @@ class AddressTermOut(_M):
     evidence_quote: str
 
 
+class WordplayOut(_M):
+    unit_id: str
+    term: str  # the word / phrase as written
+    explanation: str  # what a Chinese reader would miss
+    note_zh: str  # a short reader-facing note, if one is needed
+    evidence_quote: str
+
+
 class MemoryUpdateOutput(_M):
     scene_summary: str
     facts: list[FactOut]
@@ -142,6 +150,7 @@ class MemoryUpdateOutput(_M):
     prop_states: list[PropState]
     name_links: list[NameLink] = Field(default_factory=list)
     address_terms: list[AddressTermOut] = Field(default_factory=list)
+    wordplay: list[WordplayOut] = Field(default_factory=list)
 
 
 # ------------------------------------------------------------------ naming (ADR-023)

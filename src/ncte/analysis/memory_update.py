@@ -186,6 +186,21 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
                        quote=at.evidence_quote, note=at.note[:200] or None)
         stats["address_terms"] += 1
 
+    # wordplay / real-world references a Chinese reader would miss (ADR-026); re-reading replaces the scene's list
+    conn.execute("DELETE FROM reader_notes WHERE book_id=? AND scene_id=? AND origin='llm'", (book_id, sid))
+    stats["wordplay"] = 0
+    for w in parsed.wordplay:
+        src = text_of.get(w.unit_id)
+        if src is None or not w.term.strip() or clean(w.term).strip() not in clean(src) \
+                or (w.evidence_quote and _norm(w.evidence_quote) not in _norm(src)):
+            rej(w.model_dump(), "wordplay: term/quote not found verbatim in the unit")
+            continue
+        conn.execute("INSERT INTO reader_notes(book_id, unit_id, scene_id, term, explanation, note_zh, evidence_quote, "
+                     "origin, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                     (book_id, w.unit_id, sid, clean(w.term).strip()[:60], w.explanation.strip()[:300],
+                      w.note_zh.strip()[:120] or None, w.evidence_quote[:300] or None, "llm", utcnow()))
+        stats["wordplay"] += 1
+
     for p in parsed.prop_states:
         if p.name_ja not in "".join(clean(t) for t in text_of.values()):
             rej(p.model_dump(), "prop not mentioned in scene")

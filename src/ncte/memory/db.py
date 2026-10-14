@@ -447,6 +447,22 @@ ALTER TABLE naming_proposals ADD COLUMN context_json TEXT NOT NULL DEFAULT '[]';
     (10, "translator's notes (reader-facing, exported in parentheses)", """
 ALTER TABLE translations ADD COLUMN translator_note TEXT;
 """),
+    (11, "wordplay and real-world references found while reading (ADR-026)", """
+CREATE TABLE reader_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id TEXT NOT NULL,
+    unit_id TEXT NOT NULL,
+    scene_id TEXT,
+    term TEXT NOT NULL,
+    explanation TEXT NOT NULL,
+    note_zh TEXT,
+    evidence_quote TEXT,
+    origin TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'found',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_reader_notes_unit ON reader_notes(unit_id);
+"""),
 ]
 
 

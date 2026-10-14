@@ -294,3 +294,9 @@ open workspace/eval/<timestamp>/report.html
 - 譯註（ADR-025）：`translator_note` 欄位、`style --notes inline`、匯出時括號附在段落後、`ncte notes list|drop`。migration 10。
 - 翻譯規則：台詞要口語（起因：輝夜姬「黒鬼圧倒的だねえ」→「具壓倒性優勢呢」，與安達的翻譯腔同類，已在兩本書出現）。
 - 測試：251 passed；ruff、mypy 通過。
+
+## 模型比較、推理強度 medium、讀的階段找梗（2026-10-14，ADR-026）
+- 同一組 189 段（安達 152、輝夜 37）比較 flash low（既有）、flash medium、claude-sonnet-5.5（medium）：medium 修正了 low 的讀錯（安達 2600 關係方向，與正式版一字不差；輝夜 1346「恰好」→打扮）；sonnet 台詞最口語、最能保留留白，但有自己的錯（對女生用「你」、「時々」→常有人、「くどい」→囉嗦），費用約為 medium 兩倍（測試 189 段：medium US$0.33、sonnet US$0.62）。三者都沒抓到「しまむら」雙關。本機預設改為 reasoning_effort medium（`ncte.yaml`，不進 git）。
+- 修正：模型不支援 temperature 時不送（sonnet 5.5 在 require_parameters 下原本全部 404）。
+- 讀的階段找梗（ADR-026）：記憶整理輸出 `wordplay` → `reader_notes`（migration 11）→ 翻譯請求附提示；`ncte notes found`。
+- 測試：253 passed；ruff、mypy 通過。

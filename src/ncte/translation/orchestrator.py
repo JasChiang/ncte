@@ -390,6 +390,13 @@ class Orchestrator:
                 style = style_payload(load_style(self.conn, self.book.id), text)
                 if style:
                     ctx["style"] = style
+                ids = [r["id"] for r in batch.rows]
+                found = self.conn.execute(
+                    f"SELECT unit_id, term, explanation, note_zh FROM reader_notes WHERE status!='dropped' AND unit_id IN "
+                    f"({','.join('?' * len(ids))}) ORDER BY id", ids).fetchall()
+                if found:  # ADR-026: wordplay / references found while reading this very unit
+                    ctx["wordplay"] = [{"unit_id": f["unit_id"], "term": f["term"], "explanation": f["explanation"],
+                                        **({"note": f["note_zh"]} if f["note_zh"] else {})} for f in found]
             return ctx
 
     def qa_glossary(self) -> list[dict[str, Any]]:

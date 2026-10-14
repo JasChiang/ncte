@@ -81,3 +81,30 @@ def test_translator_notes_only_when_allowed_and_exported_in_parentheses(conn, cf
     blob = "".join(zipfile.ZipFile(out).read(n).decode("utf-8", "ignore") for n in zipfile.ZipFile(out).namelist()
                    if n.endswith("html"))
     assert "（註：日文「鍵」也有關鍵之意）" in blob
+
+
+def test_wordplay_found_while_reading_reaches_translation(conn, cfg, fixtures):
+    from ..scripted import memory_update, uid
+
+    def mem(payload, req):
+        out = memory_update(payload, req)
+        u = uid(payload, "カイト、遅いですよ")
+        if u:
+            out["wordplay"] = [
+                {"unit_id": u, "term": "カイト", "explanation": "與「凧（風箏）」同音", "note_zh": "日文「海斗」與風箏同音",
+                 "evidence_quote": "カイト、遅いですよ"},
+                {"unit_id": u, "term": "不存在", "explanation": "x", "note_zh": "", "evidence_quote": ""}]  # rejected
+        return out
+
+    seen = []
+
+    def tr(payload, req):
+        seen.extend(payload.get("wordplay", []))
+        return {"translations": [{"unit_id": u["unit_id"], "translated_text": "譯", "flags": [], "notes": [],
+                                  "translator_note": ""} for u in payload["units"]]}
+
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "memory_update": mem, "translate": tr}),
+             mode="context")
+    rows = conn.execute("SELECT term, note_zh FROM reader_notes").fetchall()
+    assert [tuple(r) for r in rows] == [("カイト", "日文「海斗」與風箏同音")]
+    assert [w["term"] for w in seen] == ["カイト"] and seen[0]["note"] == "日文「海斗」與風箏同音"

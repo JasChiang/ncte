@@ -764,6 +764,24 @@ def notes_list(epub: Annotated[str, typer.Argument()], as_json: Annotated[bool, 
         typer.echo("no notes")
 
 
+@notes_app.command("found")
+def notes_found(epub: Annotated[str, typer.Argument()]) -> None:
+    """Wordplay and real-world references found while reading, and whether the translation carries a note."""
+    from .translation.cache import latest_texts
+
+    book = _book(epub)
+    best = latest_texts(state.conn, book.id)
+    rows = state.conn.execute("SELECT r.*, u.ordinal FROM reader_notes r JOIN units u ON u.id=r.unit_id WHERE "
+                              "r.book_id=? ORDER BY u.ordinal", (book.id,)).fetchall()
+    for r in rows:
+        tr = best.get(r["unit_id"])
+        has = "已加註" if tr is not None and tr["translator_note"] else "未加註"
+        typer.echo(f"§{r['ordinal']} {r['unit_id']} 「{r['term']}」 [{has}]\n    {r['explanation']}"
+                   + (f"\n    建議譯註：{r['note_zh']}" if r["note_zh"] else ""))
+    if not rows:
+        typer.echo("nothing found")
+
+
 @notes_app.command("drop")
 def notes_drop(epub: Annotated[str, typer.Argument()], unit_id: Annotated[str, typer.Argument()]) -> None:
     """Remove the note of one unit's current translation (the translation itself stays)."""
