@@ -12,8 +12,9 @@ from ..helpers import run_book
 from ..scripted import RESPONDERS
 
 
-def test_default_style_adds_nothing():
-    assert style_payload(SeriesStyle(), "ミナ") is None
+def test_default_style_only_allows_notes():
+    assert set(style_payload(SeriesStyle(), "ミナ")) == {"notes"}  # notes are on by default
+    assert style_payload(SeriesStyle(notes="off"), "ミナ") is None
 
 
 def test_payload_filters_voices():
@@ -46,7 +47,7 @@ def test_style_cli(tmp_path, fixtures):
     assert out.exit_code == 0, out.output
     assert r.invoke(app, ["-w", str(ws), "style", "set", epub, "--remove-rule", "1"]).exit_code == 0
     data = json.loads(r.invoke(app, ["-w", str(ws), "style", "show", epub, "--json"]).output)
-    assert data == {"honorifics": "explicit", "rules": ["B"], "voices": {"ミナ": "禮貌"}, "notes": "off"}
+    assert data == {"honorifics": "explicit", "rules": ["B"], "voices": {"ミナ": "禮貌"}, "notes": "inline"}
     bad = r.invoke(app, ["-w", str(ws), "style", "set", epub, "--honorifics", "polite"])
     assert bad.exit_code != 0 and "invalid style" in str(bad.exception)
 
@@ -65,8 +66,11 @@ def test_translator_notes_only_when_allowed_and_exported_in_parentheses(conn, cf
                                         "flags": [], "notes": [], "translator_note": note})
         return out
 
-    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "translate": tr}),
-                          mode="context")
+    from ncte.library import import_book
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    save_style(conn, book.id, SeriesStyle(notes="off"))
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "translate": tr}), mode="context")
     assert conn.execute("SELECT COUNT(*) FROM translations WHERE translator_note IS NOT NULL").fetchone()[0] == 0
     save_style(conn, book.id, SeriesStyle(notes="inline"))
     fake = FakeLLM(responders={**RESPONDERS, "translate": tr})

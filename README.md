@@ -105,7 +105,7 @@ ncte names address-set 書.epub --speaker 日野 --to 安達 --ja あだっち -
 ncte style show 書.epub
 ncte style set 書.epub --honorifics omit --rule "先輩一律譯「學姊」" --voice "安達=話少、句子短、常結巴"
 ```
-敬稱處理有 `natural`（預設，依語氣自然處理）、`explicit`（固定譯出）、`omit`（原則省略）。`--notes inline` 允許譯註：雙關或文化梗無法用譯文傳達時，匯出的段落後會加「（註：……）」，可用 `ncte notes list` 檢視、`ncte notes drop` 刪除。設定只影響之後的翻譯；既有譯文要重翻才會套用。
+敬稱處理有 `natural`（預設，依語氣自然處理）、`explicit`（固定譯出）、`omit`（原則省略）。譯註預設開啟（`--notes off` 關閉）：雙關或文化梗無法用譯文傳達時，匯出的段落後會加「（註：……）」，可用 `ncte notes list` 檢視、`ncte notes drop` 刪除。設定只影響之後的翻譯；既有譯文要重翻才會套用。
 
 ### 有上下文的翻譯（劇情記憶、說話者分析）
 ```bash

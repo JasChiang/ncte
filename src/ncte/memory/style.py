@@ -31,7 +31,7 @@ class SeriesStyle(BaseModel):
     honorifics: Literal["natural", "explicit", "omit"] = "natural"
     rules: list[str] = Field(default_factory=list)  # free-form house rules, e.g. 「先輩一律譯學姊」
     voices: dict[str, str] = Field(default_factory=dict)  # character name → how they should sound
-    notes: Literal["off", "inline"] = "off"  # ADR-025: translator's notes, exported in parentheses
+    notes: Literal["off", "inline"] = "inline"  # ADR-025: translator's notes in parentheses (on unless turned off)
 
     def is_default(self) -> bool:
         return self == SeriesStyle()
@@ -64,11 +64,13 @@ def save_style(conn: sqlite3.Connection, book_id: str, style: SeriesStyle) -> No
 
 def style_payload(style: SeriesStyle, text: str, names: list[str] = ()) -> dict[str, Any] | None:  # type: ignore[assignment]
     """The ``style`` block of a translation request: the honorific policy, every house rule and the voice notes
-    of characters named in ``text`` or present in the scene (``names``). None for the default style."""
-    if style.is_default():
-        return None
+    of characters named in ``text`` or present in the scene (``names``), and whether notes are allowed. None when
+    nothing differs from the defaults and notes are off."""
     t = match_text(text)
-    out: dict[str, Any] = {"honorifics": HONORIFICS_ZH[style.honorifics]}
+    out: dict[str, Any] = {}
+    custom = style.model_copy(update={"notes": SeriesStyle().notes}) != SeriesStyle()
+    if custom:
+        out["honorifics"] = HONORIFICS_ZH[style.honorifics]
     if style.rules:
         out["rules"] = list(style.rules)
     if style.notes == "inline":
@@ -77,4 +79,4 @@ def style_payload(style: SeriesStyle, text: str, names: list[str] = ()) -> dict[
     voices = {k: v for k, v in style.voices.items() if k in t or k in names}
     if voices:
         out["voices"] = voices
-    return out
+    return out or None
