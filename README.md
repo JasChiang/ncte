@@ -119,6 +119,15 @@ ncte memory     ./samples/book.epub --facts --at u_xxx                        # 
 ncte memory     ./samples/book.epub --search 銀の鍵
 ```
 
+**先讀再翻**（預設）：context 模式會先把整集依序讀完（說話者、角色、稱呼、事實、摘要），再請模型為名字與稱呼提出譯法（含其他選項與理由），最後才逐場景翻譯。重要且有不同譯法的項目（例如主要角色名、常用稱呼、中文只剩一個字的人名）會先停下來等你決定：
+```bash
+ncte names proposals 書.epub                 # 待確認的譯法與選項
+ncte names decide 書.epub --id 3 --pick 2    # 選第 2 個選項；或 --zh 自訂譯法；或 --accept-all 全部採用建議
+ncte resume --run-id r_xxx                   # 決定後繼續翻譯
+ncte names propose 書.epub                   # 已分析過的書（例如要重翻前）單獨產生提案
+```
+不想暫停可在設定檔設 `context.naming = "auto"`（直接採用建議）或 `"off"`；`context.read_first = false` 恢復逐場景交錯的舊流程。你決定的譯法在同系列之後的集數會沿用，不會再問。翻譯時仍只附上該場景之前已揭露的資訊（例如身分揭露前，角色只以當時的稱呼出現）。
+
 ### 品質控制與人工校正
 ```bash
 ncte glossary set    ./samples/book.epub ミナ 米娜 --category character   # 列出受影響單元；只有這些會重翻
@@ -149,7 +158,7 @@ ncte export tests/fixtures/basic.epub
 `--fake` 會改用離線 FakeLLM：**輸出不是翻譯**，只用來驗證流程。
 
 ## 運作方式（摘要）
-（context 模式另外：每個場景先做說話者／角色分析並以程式驗證、翻譯時只帶入「該場景之前已揭露」的記憶、翻完後以逐字證據更新記憶、對被標記的單元做一次複查。詳見 [`docs/architecture.md`](docs/architecture.md)。）
+（context 模式另外：先依序讀完整集——每個場景做說話者／角色分析並以程式驗證、以逐字證據整理記憶——再決定名字與稱呼的譯法，最後逐場景翻譯，翻譯時只帶入「該場景之前已揭露」的記憶，並對被標記的單元做一次複查。詳見 [`docs/architecture.md`](docs/architecture.md)。）
 
 1. **安全匯入**：拒絕 Zip Slip、Zip Bomb、XXE、DRM 加密、fixed-layout；經 `container.xml` 找 OPF。
 2. **翻譯單元**：段落／標題等葉節點；行內 `<em>`、`<a>`、`<br/>`、外字圖等轉成 `⟦n⟧` placeholder；ruby 轉成 `漢字《かな》` 作為提示。模型永遠看不到 HTML。
@@ -161,7 +170,7 @@ ncte export tests/fixtures/basic.epub
 - 真實模型的 A/B 評測尚未執行；目前只用一本書實測過，其他出版社的 EPUB 格式可能遇到新的狀況。
 - 內容審查：雲端模型可能誤擋正常段落；被擋的段落會保留原文並列入報告（可再重送或人工翻譯）。
 - Gemini 等推理模型的推理 token 以輸出價計費；可用 `--reasoning-effort low` 降低成本（試算會以實際花費校正）。
-- context 模式依場景順序執行（為了讓記憶依序更新），不使用併發；baseline 可併發。
+- context 模式依場景順序執行（為了讓記憶依序更新），不使用併發；baseline 可併發。先讀再翻時，第一段譯文要等整集讀完（約占總費用四成）才會出現；預算若在讀的階段用完，不會有任何譯文。
 - 說話者 `explicit` 只來自規則可驗證的發話標記；較隱晦的標記只會是 `inferred`（刻意保守）。
 - 同一角色的不同稱呼只在有原文證據（或人工連結）時才合併，後文才揭露的身分不會提前合併。
 - 人工譯文永遠優先；目前沒有「撤銷人工譯文」指令，需再以 `ncte edit` 覆寫。
