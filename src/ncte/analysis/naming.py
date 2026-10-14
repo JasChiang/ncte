@@ -51,7 +51,10 @@ _KATA = "\u30a0-\u30ff\u31f0-\u31ff"
 
 
 def term_pattern(term: str) -> re.Pattern[str]:
-    """A kana-only name must not match inside a longer kana word (「のん」 in 「のんびり」)."""
+    """A short kana-only name must not match inside a longer kana word (「のん」 in 「のんびり」). Longer names are
+    matched as they are: particles are kana too (「ところでしまむらちゃん」「しまむらは」)."""
+    if len(term) > 2:
+        return re.compile(re.escape(term))
     for cls in (_HIRA, _KATA):
         if re.fullmatch(f"[{cls}]+", term):
             return re.compile(f"(?<![{cls}]){re.escape(term)}(?![{cls}])")

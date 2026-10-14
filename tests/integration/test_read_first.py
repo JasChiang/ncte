@@ -172,6 +172,8 @@ def test_kana_names_do_not_count_inside_words():
     assert naming.term_pattern("のん").search("イラスト：のん") is not None
     assert naming.term_pattern("ヤシロ").search("ヤシロが笑う") is not None
     assert naming.term_pattern("シロ").search("ヤシロが笑う") is None
+    assert naming.term_pattern("しまむらちゃん").search("ところでしまむらちゃん") is not None
+    assert naming.term_pattern("しまむら").search("しまむらは笑う") is not None
 
 
 def test_address_forms_only_from_characters_known_by_then(conn, cfg, fixtures):
