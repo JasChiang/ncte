@@ -675,9 +675,9 @@ def names_gender(epub: Annotated[str, typer.Argument()],
     book = _book(epub)
     conn = state.conn
     if who is None:
-        for r in conn.execute("SELECT c.canonical_name, c.display_name_zh, g.gender, g.origin, g.evidence_quote "
-                              "FROM character_gender g JOIN characters c ON c.id=g.character_id ORDER BY g.ordinal"):
-            typer.echo(f"{r[1] or r[0]}  {r[2]}  ({r[3]}) {r[4] or ''}")
+        for r in conn.execute("SELECT c.canonical_name, c.display_name_zh, g.gender, g.origin, g.evidence_quote, "
+                              "g.certainty FROM character_gender g JOIN characters c ON c.id=g.character_id ORDER BY g.ordinal"):
+            typer.echo(f"{r[1] or r[0]}  {r[2]}  ({r[3]}, {r[5]}) {r[4] or ''}")
         return
     if gender not in ("female", "male", "unknown"):
         raise typer.BadParameter("gender must be female, male or unknown")

@@ -19,3 +19,19 @@ def acceptable_glossary_term(term: str) -> bool:
     """Automatic glossary candidates must be specific terms: ≥2 characters and not a generic referent."""
     t = term.strip()
     return len(t) >= 2 and t not in GENERIC_REFERENTS
+
+
+# words that state a person's gender (an explicit gender needs one of them in its evidence quote)
+GENDER_WORDS = {
+    "female": ("彼女", "少女", "女性", "女の子", "女子", "娘", "母", "姉", "妹", "王女", "姫", "嬢", "夫人", "婦人", "令嬢",
+               "幼女", "老婆", "おばさん", "おばあ", "奥さん", "妻", "女王", "女神", "女", "メイド", "シスター", "巫女"),
+    "male": ("彼", "少年", "男性", "男の子", "男子", "息子", "父", "兄", "弟", "王子", "青年", "老人", "おじさん", "おじい",
+             "旦那", "夫", "王", "男", "坊", "爺"),
+}
+
+
+def states_gender(quote: str, gender: str) -> bool:
+    """True if ``quote`` contains a word stating ``gender`` (「彼女」 does not count as 「彼」)."""
+    if gender == "male":
+        quote = quote.replace("彼女", "")
+    return any(w in quote for w in GENDER_WORDS.get(gender, ()))

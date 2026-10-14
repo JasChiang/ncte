@@ -474,6 +474,9 @@ CREATE TABLE character_gender (
     updated_at TEXT NOT NULL
 );
 """),
+    (13, "gender certainty: explicit (a word in the text says so) or inferred (speech style …)", """
+ALTER TABLE character_gender ADD COLUMN certainty TEXT NOT NULL DEFAULT 'explicit';
+"""),
 ]
 
 

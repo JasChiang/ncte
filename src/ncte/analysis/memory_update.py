@@ -240,7 +240,11 @@ def apply_genders(conn: sqlite3.Connection, book_id: str, sid: str, text_of: dic
             else:
                 repo.reject(conn, book_id, sid, "memory_update", gd.model_dump(), "gender: evidence not verbatim")
             continue
+        from ..lexicon import states_gender
+
+        # explicit only when the quote has a word that says so (「少女」); 「あたし」 or a soft tone is an inference
+        certainty = "explicit" if gd.certainty == "explicit" and states_gender(gd.evidence_quote, gd.gender) else "inferred"
         repo.set_gender(conn, book_id, gd.character_ref, gd.gender, ordinal=min(ordinal[u] for u in ev),
-                        quote=gd.evidence_quote, origin="llm")
+                        quote=gd.evidence_quote, origin="llm", certainty=certainty)
         n += 1
     return n

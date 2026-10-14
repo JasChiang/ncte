@@ -138,8 +138,9 @@ def test_gender_with_evidence_reaches_character_cards(conn, cfg, fixtures):
     book, _, _ = run_book(conn, cfg, fixtures["basic"],
                           FakeLLM(responders={**RESPONDERS, "memory_update": mem, "translate": tr}), mode="context")
     row = conn.execute("SELECT g.*, c.* FROM character_gender g JOIN characters c ON c.id=g.character_id").fetchone()
-    assert row["gender"] == "male" and row["canonical_name"] == "カイト"
-    assert any(c.get("gender") == "male" for c in cards)
+    # no word in 「カイト、遅いですよ」 says he is male: kept, but only as an inference
+    assert row["gender"] == "male" and row["certainty"] == "inferred" and row["canonical_name"] == "カイト"
+    assert any(c.get("gender") == "male (inferred)" for c in cards)
     c = conn.execute("SELECT * FROM characters WHERE id=?", (row["character_id"],)).fetchone()
     before = vis.character_view(conn, book.id, c, row["ordinal"] - 1)
     assert before is None or "gender" not in before  # not shown before the evidence
@@ -180,3 +181,26 @@ def test_gender_scan_for_a_volume_already_read(conn, cfg, fixtures):
              gender_only=True)
     assert conn.execute("SELECT gender FROM character_gender").fetchone()[0] == "male"
     assert conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == facts
+
+
+def test_explicit_gender_outranks_inferred():
+    from ncte.lexicon import states_gender
+
+    assert states_gender("流れるような黒髪の女性", "female") and not states_gender("あたしもそれに合わせ", "female")
+    assert not states_gender("彼女は笑った", "male") and states_gender("彼は笑った", "male")
+
+
+def test_gender_ranks(conn, cfg, fixtures):
+    from ncte.library import import_book
+    from ncte.memory.repository import gender_view, set_gender, upsert_character
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
+    cid = upsert_character(conn, book.id, "アルマ", name_zh="阿爾瑪", aliases=[], unit_id=u[0], ordinal=u[1], origin="t")[0]
+    hz = (99.0, 10**9)
+    set_gender(conn, book.id, cid, "male", ordinal=u[1], quote="俺", origin="llm", certainty="inferred")
+    assert gender_view(conn, cid, hz) == ("male", "inferred")
+    set_gender(conn, book.id, cid, "female", ordinal=u[1], quote="黒髪の女性", origin="llm")  # explicit replaces it
+    assert gender_view(conn, cid, hz) == ("female", "explicit")
+    set_gender(conn, book.id, cid, "male", ordinal=u[1], quote="俺", origin="llm", certainty="inferred")
+    assert gender_view(conn, cid, hz) == ("female", "explicit")  # an inference never overrides the text

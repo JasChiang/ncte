@@ -135,9 +135,9 @@ def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
     else:
         g = conn.execute("SELECT target_term FROM glossary WHERE source_term=? LIMIT 1", (head,)).fetchone()
         zh = g[0] if g else None
-    from .repository import gender_at
+    from .repository import gender_view
 
     out: dict[str, Any] = {"name_ja": head, "name_zh": zh, "aliases_ja": [n for n in shown if n != head]}
-    if g := gender_at(conn, c["id"], hz):
-        out["gender"] = g
+    if g := gender_view(conn, c["id"], hz):
+        out["gender"] = g[0] if g[1] == "explicit" else f"{g[0]} (inferred)"
     return out

@@ -147,6 +147,7 @@ class WordplayOut(_M):
 class GenderOut(_M):
     character_ref: str
     gender: Literal["female", "male"]
+    certainty: Literal["explicit", "inferred"] = "explicit"  # inferred: speech style, first person …
     evidence_unit_ids: list[str]
     evidence_quote: str  # verbatim: the words that show it (彼女, 少女, 娘, 少年 …)
 

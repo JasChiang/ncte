@@ -149,7 +149,7 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
             conn.execute("UPDATE character_gender SET character_id=? WHERE character_id=?", (keep_id, drop_id))
         else:
             set_gender(conn, g_drop["book_id"], keep_id, g_drop["gender"], ordinal=g_drop["ordinal"],
-                       quote=g_drop["evidence_quote"], origin=g_drop["origin"])
+                       quote=g_drop["evidence_quote"], origin=g_drop["origin"], certainty=g_drop["certainty"])
             conn.execute("DELETE FROM character_gender WHERE character_id=?", (drop_id,))
     # scene states and naming proposals refer to characters by id
     for rid, blob in conn.execute("SELECT rowid, state_json FROM scenes WHERE instr(state_json, ?) > 0",
@@ -172,19 +172,28 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
 
 
 def set_gender(conn: sqlite3.Connection, book_id: str, character_id: str, gender: str, *, ordinal: int,
-               quote: str | None, origin: str) -> str:
-    """Record a character's gender from verbatim evidence. The earliest evidence is kept (so it is visible from
-    there on); evidence for the other gender makes it 'conflict' (shown to no one) unless a human set it.
-    Returns the stored value."""
+               quote: str | None, origin: str, certainty: str = "explicit") -> str:
+    """Record a character's gender. ``explicit``: a word in the text states it (彼女, 少年 …); ``inferred``: speech
+    style or similar. Explicit evidence outranks inferred; the earliest evidence of the same rank is kept (visible
+    from there on); disagreeing evidence of the same rank makes it 'conflict' (shown to no one). A human setting
+    wins over everything. Returns the stored value."""
     from ..series import pos
 
+    rank = {"inferred": 0, "explicit": 1, "human": 2}
+    new_rank = rank["human"] if origin == "human" else rank.get(certainty, 0)
     row = conn.execute("SELECT * FROM character_gender WHERE character_id=?", (character_id,)).fetchone()
-    if row is None or origin == "human":
+    old_rank = -1 if row is None else rank["human"] if row["origin"] == "human" else rank.get(row["certainty"], 1)
+
+    def put() -> None:
         conn.execute("INSERT OR REPLACE INTO character_gender(character_id, gender, book_id, ordinal, evidence_quote, "
-                     "origin, updated_at) VALUES (?,?,?,?,?,?,?)",
-                     (character_id, gender, book_id, ordinal, (quote or "")[:200] or None, origin, utcnow()))
+                     "origin, updated_at, certainty) VALUES (?,?,?,?,?,?,?,?)",
+                     (character_id, gender, book_id, ordinal, (quote or "")[:200] or None, origin, utcnow(),
+                      "explicit" if origin == "human" else certainty))
+
+    if row is None or new_rank > old_rank or origin == "human":
+        put()
         return gender
-    if row["origin"] == "human":
+    if new_rank < old_rank or row["gender"] == "conflict":
         return str(row["gender"])
     if row["gender"] != gender:
         conn.execute("UPDATE character_gender SET gender='conflict', updated_at=? WHERE character_id=?",
@@ -198,12 +207,18 @@ def set_gender(conn: sqlite3.Connection, book_id: str, character_id: str, gender
 
 def gender_at(conn: sqlite3.Connection, character_id: str, hz: tuple[float, int]) -> str | None:
     """'female' / 'male' once the evidence has appeared by position ``hz``; None if unknown, later or in conflict."""
+    g = gender_view(conn, character_id, hz)
+    return g[0] if g else None
+
+
+def gender_view(conn: sqlite3.Connection, character_id: str, hz: tuple[float, int]) -> tuple[str, str] | None:
+    """(gender, certainty) visible at ``hz``, or None."""
     from ..series import pos
 
     row = conn.execute("SELECT * FROM character_gender WHERE character_id=?", (character_id,)).fetchone()
     if row is None or row["gender"] not in ("female", "male") or pos(conn, row["book_id"], row["ordinal"]) > hz:
         return None
-    return str(row["gender"])
+    return str(row["gender"]), str(row["certainty"])
 
 
 def _merge_address(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> None:
