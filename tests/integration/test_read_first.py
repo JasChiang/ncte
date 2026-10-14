@@ -165,3 +165,25 @@ def test_address_renderings_proposed_per_speaker(conn, cfg, fixtures, low_thresh
     naming.decide(conn, book.id, p[0]["id"], "海斗")
     row = conn.execute("SELECT form_zh, zh_origin FROM address_terms WHERE form_ja='カイト'").fetchone()
     assert tuple(row) == ("海斗", "human")
+
+
+def test_kana_names_do_not_count_inside_words():
+    assert naming.term_pattern("のん").search("このままのんびり") is None
+    assert naming.term_pattern("のん").search("イラスト：のん") is not None
+    assert naming.term_pattern("ヤシロ").search("ヤシロが笑う") is not None
+    assert naming.term_pattern("シロ").search("ヤシロが笑う") is None
+
+
+def test_address_forms_only_from_characters_known_by_then(conn, cfg, fixtures):
+    from ncte.memory.address import name_forms
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    us = _units(conn, book.id)
+    upsert_character(conn, book.id, "カイト", name_zh="海斗", aliases=[], unit_id=us[0]["id"], ordinal=us[0]["ordinal"],
+                     origin="t")
+    upsert_character(conn, book.id, "カイトさん", name_zh="海斗媽媽", aliases=[], unit_id=us[6]["id"],
+                     ordinal=us[6]["ordinal"], origin="t")
+    early, _ = name_forms(conn, book.id, us[3]["ordinal"])
+    assert "カイトさん" not in early and "カイト" in early
+    late, _ = name_forms(conn, book.id, us[6]["ordinal"])
+    assert "カイトさん" in late

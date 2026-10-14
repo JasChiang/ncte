@@ -9,6 +9,7 @@ never overwritten and are not proposed again in later volumes.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from typing import Any
 
@@ -29,6 +30,18 @@ def _book_texts(conn: sqlite3.Connection, book_id: str) -> list[str]:
     return [match_text(r[0]) for r in conn.execute(
         "SELECT plain_text FROM units WHERE book_id=? AND translatable=1 AND kind IN ('text','heading') "
         "AND spine_index IS NOT NULL ORDER BY ordinal", (book_id,))]
+
+
+_HIRA = "\u3041-\u309f"
+_KATA = "\u30a0-\u30ff\u31f0-\u31ff"
+
+
+def term_pattern(term: str) -> re.Pattern[str]:
+    """A kana-only name must not match inside a longer kana word (「のん」 in 「のんびり」)."""
+    for cls in (_HIRA, _KATA):
+        if re.fullmatch(f"[{cls}]+", term):
+            return re.compile(f"(?<![{cls}]){re.escape(term)}(?![{cls}])")
+    return re.compile(re.escape(term))
 
 
 def _proposed(conn: sqlite3.Connection, kind: str) -> set[str]:
@@ -62,7 +75,8 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
         term = g["source_term"]
         if g["category"] not in NAME_CATEGORIES or g["verified"] or g["origin"] == "user" or term in done:
             continue
-        hits = [t for t in texts if term in t]
+        pat = term_pattern(term)
+        hits = [t for t in texts if pat.search(t)]
         if not hits:
             continue
         sib = [{"ja": o["source_term"], "zh": o["target_term"], "form": o["form_type"] or "official"}

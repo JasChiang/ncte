@@ -33,12 +33,17 @@ _PRONOUNS = {"私", "わたし", "僕", "ぼく", "俺", "おれ", "あたし", 
              "彼", "彼女", "あいつ", "こいつ", "そいつ"}
 
 
-def name_forms(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, str], set[str]]:
+def name_forms(conn: sqlite3.Connection, book_id: str, upto: int | None = None) -> tuple[dict[str, str], set[str]]:
     """(form → character id, ambiguous forms). Forms come from character names/aliases and from every glossary
     form of an entity that belongs to a character. A form claimed by two characters, or listed in
-    ``form_senses``, is ambiguous and never attributed automatically."""
-    chars = conn.execute(f"SELECT id, canonical_name, aliases_json FROM characters WHERE {SERIES_SCOPE}",
-                         (book_id,)).fetchall()
+    ``form_senses``, is ambiguous and never attributed automatically. With ``upto`` only characters already known
+    at that story position count: 「安達さん」 first named as someone's mother in volume 2 must not take over
+    volume 1's 「安達さん」 said to a classmate."""
+    chars = conn.execute(f"SELECT id, book_id, canonical_name, aliases_json, known_from_ordinal FROM characters "
+                         f"WHERE {SERIES_SCOPE}", (book_id,)).fetchall()
+    if upto is not None:
+        hz = pos(conn, book_id, upto)
+        chars = [c for c in chars if pos(conn, c["book_id"], c["known_from_ordinal"]) <= hz]
     claims: dict[str, set[str]] = {}
 
     def claim(form: str | None, cid: str) -> None:
@@ -139,7 +144,10 @@ def upsert(conn: sqlite3.Connection, book_id: str, speaker: str, addressee: str,
 def harvest_scene(conn: sqlite3.Connection, book_id: str, scene_id: str,
                   forms: tuple[dict[str, str], set[str]] | None = None) -> int:
     """Program-only pass over the resolved quotes of one scene. Returns the number of new observations."""
-    fmap, _ = forms or name_forms(conn, book_id)
+    if forms is None:
+        end = conn.execute("SELECT end_ordinal FROM scenes WHERE book_id=? AND id=?", (book_id, scene_id)).fetchone()
+        forms = name_forms(conn, book_id, end[0] if end else None)
+    fmap, _ = forms
     if not fmap:
         return 0
     n = 0
@@ -158,8 +166,7 @@ def harvest_scene(conn: sqlite3.Connection, book_id: str, scene_id: str,
 
 
 def harvest_book(conn: sqlite3.Connection, book_id: str) -> int:
-    forms = name_forms(conn, book_id)
-    return sum(harvest_scene(conn, book_id, r[0], forms)
+    return sum(harvest_scene(conn, book_id, r[0])
                for r in conn.execute("SELECT id FROM scenes WHERE book_id=? ORDER BY start_ordinal", (book_id,)).fetchall())
 
 
