@@ -73,6 +73,10 @@ class App:
                 return actions.drop_note(conn, book, ident)
             if kind == "proposals" and ident == "accept-all":
                 return actions.accept_all(conn, book)
+            if kind == "proposals" and op == "apply":
+                return actions.apply_rename(conn, book, int(ident), str(body.get("old", "")), str(body.get("new", "")))
+            if kind == "proposals" and op == "preview":
+                return actions.rename_preview(conn, book, int(ident), str(body.get("old", "")))
             if kind == "proposals" and op == "decide":
                 return actions.decide(conn, book, int(ident), str(body.get("zh", "")))
         raise KeyError(path)

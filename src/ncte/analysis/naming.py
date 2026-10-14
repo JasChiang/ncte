@@ -331,6 +331,14 @@ def decide(conn: sqlite3.Connection, book_id: str, pid: int, zh: str) -> dict[st
     zh = zh.strip() if row["kind"] == "character" else _clean(zh)  # a fix option is a sentence, not a name
     if not zh:
         raise ValueError("empty rendering")
+    old: str | None = None  # the rendering in use until now (to find translations that still carry it)
+    if row["kind"] == "name":
+        g = conn.execute(f"SELECT target_term FROM glossary WHERE {SERIES_SCOPE} AND source_term=?",
+                         (book_id, row["ref"])).fetchone()
+        old = g[0] if g else None
+    elif row["kind"] == "address":
+        a = conn.execute("SELECT form_zh FROM address_terms WHERE id=?", (int(row["ref"]),)).fetchone()
+        old = a[0] if a else None
     if row["kind"] == "character":
         opts = json.loads(row["options_json"])
         opt = next((o for o in opts if o["zh"] == zh), None)
@@ -359,7 +367,12 @@ def decide(conn: sqlite3.Connection, book_id: str, pid: int, zh: str) -> dict[st
                      (zh, utcnow(), int(row["ref"])))
     conn.execute("UPDATE naming_proposals SET status='decided', decided_zh=?, decided_at=? WHERE id=?",
                  (zh, utcnow(), pid))
-    return {"id": pid, "label": row["label"], "zh": zh}
+    out: dict[str, Any] = {"id": pid, "label": row["label"], "zh": zh, "old": old, "affected": 0}
+    if old and old != zh:
+        from ..translation.rename import for_proposal
+
+        out["affected"] = len(for_proposal(conn, book_id, pid, old))
+    return out
 
 
 def suspicious_characters(conn: sqlite3.Connection, book_id: str) -> list[dict[str, str]]:

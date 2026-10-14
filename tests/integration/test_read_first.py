@@ -353,3 +353,16 @@ def test_pronouns_rendered_alike_are_not_collisions(conn, cfg, fixtures):
         conn.execute("INSERT INTO naming_proposals(book_id, kind, ref, label, chosen_zh, options_json, status, created_at) "
                      "VALUES (?,?,?,?,?,?,?,?)", (book.id, "address", str(rid), form, "妳", "[]", "applied", "t"))
     assert naming.flag_collisions(conn, book.id) == 0
+
+
+def test_rename_reaches_existing_translations(conn, cfg, fixtures):
+    from ncte.translation.rename import affected_units, replace_rendering
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    u = conn.execute("SELECT id FROM units WHERE book_id=? AND plain_text LIKE '%カイト%' LIMIT 1", (book.id,)).fetchone()[0]
+    conn.execute("UPDATE translations SET text='海斗來了' WHERE unit_id=?", (u,))
+    units = affected_units(conn, book.id, form="カイト", old_zh="海斗")
+    assert u in {x["unit_id"] for x in units}
+    assert replace_rendering(conn, units, "海斗", "凱特") >= 1
+    t = conn.execute("SELECT text FROM translations WHERE unit_id=? ORDER BY id DESC LIMIT 1", (u,)).fetchone()[0]
+    assert t == "凱特來了"

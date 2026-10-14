@@ -134,11 +134,16 @@ function bindRow(id, el, u) {
 }
 
 // ------------------------------------------------------------ naming
-let namesAll = false;
+let namesAll = false, lastRename = null;
 async function namesView(id) {
   const rows = await api(`book/${id}/proposals${namesAll ? "?all=1" : ""}`);
   const pend = rows.filter(r => r.status === "pending");
-  view.innerHTML = `<div class="row" style="align-items:center;margin-bottom:10px"><strong>待決定 ${pend.length} 項</strong>
+  const banner = lastRename ? `<div class="card" style="border-color:var(--accent)">
+      <strong>已翻譯的 ${lastRename.affected} 段還在用舊譯法「${esc(lastRename.old)}」</strong>（${esc(lastRename.label)} → ${esc(lastRename.zh)}）
+      <div class="row" style="gap:8px;margin-top:8px"><button class="btn primary" id="rnReplace">直接把「${esc(lastRename.old)}」換成「${esc(lastRename.zh)}」</button>
+      <button class="btn" id="rnList">列出段落與重翻指令</button><button class="btn" id="rnSkip">先不要</button></div>
+      <div class="muted small">直接替換只改字，不花錢；想讓語氣一起調整就重翻那些段落。人工修改過的段落不會被改。</div><div id="rnOut"></div></div>` : "";
+  view.innerHTML = banner + `<div class="row" style="align-items:center;margin-bottom:10px"><strong>待決定 ${pend.length} 項</strong>
     ${pend.length ? `<button class="btn" id="acceptAll" title="每一項都選標有「建議」的那個譯法">全部採用建議</button>` : ""}
     <label class="small muted"><input type="checkbox" id="showAll" ${namesAll ? "checked" : ""}> 也顯示已套用、已決定的</label></div>
     ${rows.map(r => `<div class="card" data-pid="${r.id}">
@@ -157,8 +162,10 @@ async function namesView(id) {
           ${c.zh ? `<div class="muted">　目前譯文：${esc(c.zh)}</div>` : ""}</div>`).join("")}</details>` : ""}</div>`).join("")
     || `<p class="muted">沒有待決定的譯法。翻譯前的「定名」階段會在這裡列出需要你選的名字與稱呼。</p>`}`;
   const choose = async (pid, zh) => {
-    try { const r = await api(`book/${id}/proposals/${pid}/decide`, {zh}); invalidate(id); toast(`${r.label} → ${r.zh}`); namesView(id); }
-    catch (e) { toast(e.message); }
+    try {
+      const r = await api(`book/${id}/proposals/${pid}/decide`, {zh}); invalidate(id); toast(`${r.label} → ${r.zh}`);
+      lastRename = r.affected ? {...r, pid} : null; namesView(id);
+    } catch (e) { toast(e.message); }
   };
   view.querySelectorAll("[data-pid]").forEach(card => {
     const pid = card.dataset.pid;
@@ -167,6 +174,20 @@ async function namesView(id) {
   });
   const aa = $("#acceptAll"); if (aa) aa.onclick = async () => { const r = await api(`book/${id}/proposals/accept-all`, {}).catch(e => toast(e.message)); if (r) { invalidate(id); toast(`已採用 ${r.accepted} 項`); namesView(id); } };
   $("#showAll").onchange = e => { namesAll = e.target.checked; namesView(id); };
+  if (lastRename) {
+    const L = lastRename;
+    $("#rnSkip").onclick = () => { lastRename = null; namesView(id); };
+    $("#rnReplace").onclick = async () => {
+      try { const r = await api(`book/${id}/proposals/${L.pid}/apply`, {old: L.old, new: L.zh}); invalidate(id);
+        toast(`已替換 ${r.replaced} 段` + (r.human_left.length ? `；${r.human_left.length} 段人工修改的請自己改` : "")); lastRename = null; namesView(id); }
+      catch (e) { toast(e.message); }
+    };
+    $("#rnList").onclick = async () => {
+      const r = await api(`book/${id}/proposals/${L.pid}/preview`, {old: L.old});
+      $("#rnOut").innerHTML = `<div class="scroll" style="margin-top:8px">${r.units.map(u => `<div class="small"><span class="mono muted">§${u.ordinal}</span> ${u.human ? chip("c-acc", "人工") : ""}${esc(u.zh)}</div>`).join("")}</div>
+        ${r.retranslate ? `<div class="small" style="margin-top:6px">重翻指令：<code>ncte retranslate ${esc(id)} --mode context ${esc(r.retranslate)}</code></div>` : ""}`;
+    };
+  }
 }
 
 // ------------------------------------------------------------ reading (spoiler-aware)

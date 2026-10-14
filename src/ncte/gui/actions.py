@@ -48,6 +48,22 @@ def decide(conn: sqlite3.Connection, book: Book, pid: int, zh: str) -> dict[str,
         return {"ok": True, **_decide(conn, book.id, pid, zh)}
 
 
+def apply_rename(conn: sqlite3.Connection, book: Book, pid: int, old: str, new: str) -> dict[str, Any]:
+    """Replace the old rendering with the new one in the translations a decision left behind."""
+    from ..translation.rename import for_proposal, replace_rendering
+
+    units = for_proposal(conn, book.id, pid, old)
+    n = replace_rendering(conn, units, old, new)
+    return {"ok": True, "replaced": n, "human_left": [u["unit_id"] for u in units if u["human"]]}
+
+
+def rename_preview(conn: sqlite3.Connection, book: Book, pid: int, old: str) -> dict[str, Any]:
+    from ..translation.rename import for_proposal
+
+    units = for_proposal(conn, book.id, pid, old)
+    return {"units": units, "retranslate": " ".join(f"--unit-id {u['unit_id']}" for u in units if not u["human"])}
+
+
 def accept_all(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
     from ..analysis.naming import decide as _decide
     from ..analysis.naming import pending
