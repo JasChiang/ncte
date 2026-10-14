@@ -38,12 +38,12 @@ def _book_texts(conn: sqlite3.Connection, book_id: str) -> list[tuple[int, str]]
 
 def _quotes(conn: sqlite3.Connection, address_id: int, limit: int = 3) -> list[dict[str, Any]]:
     """Example lines for an address term: the quotes it was observed in, spread over the book."""
-    rows = conn.execute("SELECT u.ordinal, ut.quote_text FROM address_observations o JOIN utterances ut ON "
+    rows = conn.execute("SELECT u.ordinal, ut.quote_text, u.id FROM address_observations o JOIN utterances ut ON "
                         "ut.id=o.utterance_id JOIN units u ON u.id=ut.unit_id WHERE o.address_id=? ORDER BY u.ordinal",
                         (address_id,)).fetchall()
     if len(rows) > limit:
         rows = [rows[i * (len(rows) - 1) // (limit - 1)] for i in range(limit)]
-    return [{"at": r[0], "text": match_text(r[1])[:90]} for r in rows]
+    return [{"at": r[0], "text": match_text(r[1])[:90], "unit": r[2]} for r in rows]
 
 
 _HIRA = "\u3041-\u309f"

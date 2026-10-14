@@ -152,8 +152,9 @@ async function namesView(id) {
         <span class="muted small">${esc(o.reason)}</span></div>`; }).join("")}
         ${r.status === "decided" && !r.options.some(o => o.zh === r.decided_zh) ? `<div>${chip("c-ok", "你選的")} ${esc(r.decided_zh)}</div>` : ""}</div>
       <div class="row" style="gap:6px"><input type="text" placeholder="自己填譯法" data-own><button class="btn" data-ownok>用這個</button></div>
-      ${r.context.length ? `<details ${r.status === "pending" ? "open" : ""} style="margin-top:6px"><summary class="small muted">原文例句</summary>
-        ${r.context.map(c => `<div class="ja small">§${c.at}　${esc(c.text)}</div>`).join("")}</details>` : ""}</div>`).join("")
+      ${r.context.length ? `<details ${r.status === "pending" ? "open" : ""} style="margin-top:6px"><summary class="small muted">原文例句與目前譯文</summary>
+        ${r.context.map(c => `<div class="small" style="margin-top:4px"><div class="ja">§${c.at}　${esc(c.text)}</div>
+          ${c.zh ? `<div class="muted">　目前譯文：${esc(c.zh)}</div>` : ""}</div>`).join("")}</details>` : ""}</div>`).join("")
     || `<p class="muted">沒有待決定的譯法。翻譯前的「定名」階段會在這裡列出需要你選的名字與稱呼。</p>`}`;
   const choose = async (pid, zh) => {
     try { const r = await api(`book/${id}/proposals/${pid}/decide`, {zh}); invalidate(id); toast(`${r.label} → ${r.zh}`); namesView(id); }

@@ -253,7 +253,24 @@ def glossary(conn: sqlite3.Connection, book: Book) -> list[dict[str, Any]]:
 
 
 def proposals(conn: sqlite3.Connection, book: Book, *, include_done: bool = False) -> list[dict[str, Any]]:
+    """Proposals with their example sentences; each example also carries the current translation of its paragraph
+    (when it has been translated), so a choice can be checked against how the line reads in Chinese now."""
     from ..analysis.naming import pending
 
-    return [{k: v for k, v in r.items() if k not in ("options_json", "context_json")}
-            for r in pending(conn, book.id, include_done=include_done)]
+    best = latest_texts(conn, book.id)
+    out = []
+    for r in pending(conn, book.id, include_done=include_done):
+        for c in r["context"]:
+            uid = c.get("unit")
+            if not uid:
+                row = conn.execute("SELECT id FROM units WHERE book_id=? AND ordinal=?", (r["book_id"], c["at"])).fetchone()
+                uid = row[0] if row else None
+            tr = best.get(uid) if uid else None
+            if tr is None and uid:
+                t = conn.execute("SELECT text FROM translations t JOIN units u ON u.id=t.unit_id WHERE t.unit_id=? AND "
+                                 "t.source_hash=u.source_hash ORDER BY t.id DESC LIMIT 1", (uid,)).fetchone()
+                c["zh"] = plain(t[0]) if t else ""
+            else:
+                c["zh"] = plain(tr["text"]) if tr is not None else ""
+        out.append({k: v for k, v in r.items() if k not in ("options_json", "context_json")})
+    return out
