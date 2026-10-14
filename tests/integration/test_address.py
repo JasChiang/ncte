@@ -161,8 +161,8 @@ def test_memory_model_reassigns_the_name_owner_guess(conn, cfg, fixtures):
 
     book, _ = import_book(conn, cfg, fixtures["basic"])
     u0 = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
-    mom = upsert_character(conn, book.id, "カイトの母", name_zh="海斗的母親", aliases=[], unit_id=u0[0], ordinal=u0[1],
-                           origin="t")[0]
+    mom = upsert_character(conn, book.id, "カイトの母", name_zh="海斗的母親", aliases=["カイト"], unit_id=u0[0],
+                           ordinal=u0[1], origin="t")[0]  # her family name is a form of address for her too
     run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "memory_update": mem}), mode="context")
     line = conn.execute("SELECT id FROM utterances WHERE quote_text LIKE '%カイト、遅いですよ%'").fetchone()[0]
     to = conn.execute("SELECT a.addressee_id FROM address_observations o JOIN address_terms a ON a.id=o.address_id "
@@ -185,3 +185,35 @@ def test_nickname_with_honorific_builds_on_the_decided_spelling(conn, cfg, fixtu
            form_zh="安達仔～～")
     upsert(conn, book.id, hino, adachi, "あだっつぃーくん", ordinal=u[1], unit_id=u[0], origin="llm", certainty="inferred")
     assert decided_variants(conn, hino, adachi, "あだっつぃーくん") == [{"ja": "あだっつぃー", "zh": "安達仔～～"}]
+
+
+
+def test_listener_reported_as_addressee_does_not_move_a_name(conn, cfg, fixtures):
+    # 「永藤は？」 asked of 日野: the model reported the listener; 永藤 is not a name of 日野, so nothing moves
+    def mem(payload, req):
+        out = memory_update(payload, req)
+        u, mina, kaito = uid(payload, "カイト、遅いですよ"), known(payload, "ミナ"), known(payload, "カイト")
+        if u and mina and kaito:
+            out["address_terms"] = [{"speaker_ref": mina, "addressee_ref": mina, "term": "カイト", "term_zh": "海斗",
+                                     "note": "", "evidence_unit_ids": [u], "evidence_quote": "カイト、遅いですよ"}]
+        return out
+
+    from ncte.memory.address import reassign_scene
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "memory_update": mem}),
+                          mode="context")
+    ids = {r[0]: r[1] for r in conn.execute("SELECT canonical_name, id FROM characters")}
+    sid = conn.execute("SELECT scene_id FROM utterances WHERE quote_text LIKE '%カイト、遅いですよ%'").fetchone()[0]
+    assert reassign_scene(conn, book.id, sid, ids["ミナ"], "カイト", ids["ミナ"]) == 0
+
+
+def test_family_name_can_name_a_relative(conn, cfg, fixtures):
+    from ncte.library import import_book
+    from ncte.memory.address import _can_name
+    from ncte.memory.repository import upsert_character
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
+    mk = lambda n: upsert_character(conn, book.id, n, name_zh=n, aliases=[], unit_id=u[0], ordinal=u[1], origin="t")[0]  # noqa: E731
+    mom, hino = mk("安達の母"), mk("日野")
+    assert _can_name(conn, "安達さん", mom) and not _can_name(conn, "永藤", hino)

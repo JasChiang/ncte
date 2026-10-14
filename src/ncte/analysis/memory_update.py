@@ -167,6 +167,7 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
 
     stats["address_terms"] = 0
     stats["address_reassigned"] = 0
+    from ..memory.address import _can_name as can_name
     from ..memory.address import reassign_scene
 
     # one addressee per (speaker, form) in this scene: the model's reading replaces the program's name-owner guess
@@ -182,6 +183,12 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         if not ev or len(quote) < 2 or quote not in _norm("".join(text_of[u] for u in ev)) \
                 or _norm(at.term) not in quote or not acceptable_glossary_term(at.term):
             rej(at.model_dump(), "address term: term/evidence_quote not found verbatim")
+            continue
+        term0 = clean(at.term).strip()
+        if at.speaker_ref != at.addressee_ref and not can_name(conn, term0, at.addressee_ref) and any(
+                can_name(conn, term0, other) for other in chars if other != at.addressee_ref):
+            # 「永藤は？」 asked of 日野 reported as 日野's address: the form names someone else
+            rej(at.model_dump(), "address term: the form is another character's name (listener reported?)")
             continue
         # a pronoun (「あなた」「お前」) is kept per speaker → addressee, but its rendering (妳／你／您／老公 …)
         # depends on who is addressed: naming decides it, the memory model's guess is not kept

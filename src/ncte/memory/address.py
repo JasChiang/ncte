@@ -165,11 +165,29 @@ def harvest_scene(conn: sqlite3.Connection, book_id: str, scene_id: str,
     return n
 
 
+def _can_name(conn: sqlite3.Connection, form: str, cid: str) -> bool:
+    """True if 「form」 (with or without an honorific) is a name of character ``cid`` or a shared form."""
+    c = conn.execute("SELECT canonical_name, aliases_json, book_id FROM characters WHERE id=?", (cid,)).fetchone()
+    if c is None:
+        return False
+    names = {c["canonical_name"], *json.loads(c["aliases_json"] or "[]")}
+    base = _HONORIFIC_END.sub("", form)
+    if form in names or base in names or any(variant_key(n) == variant_key(form) for n in names):
+        return True
+    if len(base) >= 2 and any(n.startswith(base + "の") or n.startswith(base + "（") for n in names):
+        return True  # a relative named after the family: 「安達さん」 for 安達の母, しまむら（妹）
+    return conn.execute(f"SELECT 1 FROM form_senses WHERE {SERIES_SCOPE} AND term IN (?,?)",
+                        (c["book_id"], form, base)).fetchone() is not None
+
+
 def reassign_scene(conn: sqlite3.Connection, book_id: str, scene_id: str, speaker: str, form: str,
                    addressee: str) -> int:
     """The memory model read the scene and says ``speaker``'s 「form」 there is for ``addressee``: the program's
-    guess (whoever owns the name — 「安達さん」 → 安達, though it was said to her mother) follows. Returns the
-    number of observations moved."""
+    guess (whoever owns the name — 「安達さん」 → 安達, though it was said to her mother) follows. Only when the
+    form can name ``addressee`` at all (one of their names, or a form recorded as shared): the model sometimes
+    reports the listener instead of the person named (「永藤は？」 asked of 日野). Returns observations moved."""
+    if not _can_name(conn, form, addressee):
+        return 0
     rows = conn.execute(
         "SELECT o.utterance_id, o.address_id, a.addressee_id, a.uses FROM address_observations o "
         "JOIN address_terms a ON a.id=o.address_id JOIN utterances ut ON ut.id=o.utterance_id "
