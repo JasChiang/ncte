@@ -75,6 +75,9 @@ def clean_note(note: str) -> str:
     return note[:120]
 
 
+SLIM_KEYS = ("context_before", "context_after", "glossary", "style", "known_headings", "note", "review_feedback")
+
+
 @dataclass
 class UnitResult:
     text: str
@@ -207,6 +210,7 @@ class Translator:
         return result
 
     def _payload(self, units: list[UnitInput], context: dict[str, Any]) -> dict[str, Any]:
+        context = {k: v for k, v in context.items() if not k.startswith("_")}
         return {"task": "translate", "target_language": "zh-TW", **context,
                 "units": [{"unit_id": u.unit_id, "source": u.source_text} for u in units]}
 
@@ -275,6 +279,12 @@ class Translator:
                 return
             group = bad
             correction = last_error
+        # a content filter may react to the memory sent along (scene facts, summaries), not to the text itself:
+        # retry once with the text, its neighbours and the glossary only
+        if rejected and last_error.startswith("content_blocked") and not context.get("_slim"):
+            slim = {k: v for k, v in context.items() if k in SLIM_KEYS}
+            self._run(group, {**slim, "_slim": True}, result, qa_glossary, allowed_kana, depth)
+            return
         # still failing after one corrective retry (or refused) → split to isolate, or give up
         if rejected and len(group) == 1:
             result.blocked.add(group[0].unit_id)

@@ -31,3 +31,23 @@ def test_retranslating_one_unit_sees_its_scene(conn, cfg, fixtures):
     around = {u["unit_id"] for u in p["context_before"] + p["context_after"]}
     assert [u["unit_id"] for u in p["units"]] == [target["id"]]
     assert around == {r["id"] for r in members} - {target["id"]}  # the whole (small) scene, nothing outside it
+
+
+def test_content_block_retried_without_memory(conn, cfg, fixtures):
+    """A filter that reacts to the memory sent along: the batch is retried with text, neighbours and glossary."""
+    from ncte.errors import ContentBlockedError
+    from ncte.llm.fake import FakeLLM, default_translate
+
+    from ..helpers import run_book
+    from ..scripted import RESPONDERS
+
+    def picky(payload, req):
+        if "memory" in payload or "characters" in payload:
+            raise ContentBlockedError("HTTP 403 content filter: fake PROHIBITED_CONTENT")
+        return default_translate(payload, req)
+
+    _, rid, s = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "translate": picky}),
+                         mode="context")
+    failed = conn.execute("SELECT COUNT(*) FROM jobs WHERE run_id=? AND stage='translate' AND status='failed'",
+                          (rid,)).fetchone()[0]
+    assert failed == 0 and s.status == "completed"
