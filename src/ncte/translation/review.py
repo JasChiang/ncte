@@ -187,12 +187,12 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
             status = "needs_review" if sev == "high" else "succeeded"
             orch.conn.execute(
                 "INSERT INTO translations(unit_id, target_lang, text, source_hash, prompt_version, model_id, "
-                "glossary_version, mode, status, run_id, request_id, flags_json, notes_json, created_at) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "glossary_version, mode, status, run_id, request_id, flags_json, notes_json, created_at, translator_note) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (uid, orch.cfg.app.language, ur.text, r["source_hash"], orch.prompt.version_id, orch.model,
                  glossary_hash(relevant_glossary(orch.glossary, r["plain_text"])), orch.opts.mode, status,
                  orch.run_id, ur.request_id, json.dumps(ur.flags + ["review_retranslation"], ensure_ascii=False),
-                 json.dumps(ur.notes, ensure_ascii=False), utcnow()))
+                 json.dumps(ur.notes, ensure_ascii=False), utcnow(), ur.translator_note or None))
             if status == "succeeded":
                 stats["fixed"] += 1
                 orch.conn.execute("UPDATE qa_findings SET status='resolved' WHERE run_id=? AND unit_id=? AND "

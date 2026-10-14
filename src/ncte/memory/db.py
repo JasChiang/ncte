@@ -444,6 +444,9 @@ CREATE TABLE naming_proposals (
     (9, "naming proposals keep example sentences to show while choosing", """
 ALTER TABLE naming_proposals ADD COLUMN context_json TEXT NOT NULL DEFAULT '[]';
 """),
+    (10, "translator's notes (reader-facing, exported in parentheses)", """
+ALTER TABLE translations ADD COLUMN translator_note TEXT;
+"""),
 ]
 
 

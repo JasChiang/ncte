@@ -69,6 +69,12 @@ class UnitInput:
         return cls(r["id"], r["kind"], r["source_text"], r["plain_text"], imap, r["ruby_count"])
 
 
+def clean_note(note: str) -> str:
+    """A translator's note is plain reader-facing text: no placeholders, no brackets of its own, kept short."""
+    note = re.sub(r"⟦/?\d+/?⟧", "", note or "").strip().strip("（）()")
+    return note[:120]
+
+
 @dataclass
 class UnitResult:
     text: str
@@ -76,6 +82,7 @@ class UnitResult:
     notes: list[str]
     findings: list[Finding]
     request_id: int | None
+    translator_note: str = ""
 
 
 @dataclass
@@ -259,7 +266,7 @@ class Translator:
                 else:
                     texts[u.unit_id] = t.translated_text
                     pending_ok[u.unit_id] = UnitResult(t.translated_text, list(t.flags), list(t.notes),
-                                                       findings, rid)
+                                                       findings, rid, clean_note(t.translator_note))
             for f in check_batch(texts, {u.unit_id: u.source_text for u in group}):
                 if f.unit_id in pending_ok:
                     pending_ok[f.unit_id].findings.append(f)

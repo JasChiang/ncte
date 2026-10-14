@@ -43,7 +43,10 @@ def export_book(conn: sqlite3.Connection, cfg: Config, book: Book, *, output: Pa
     patches: dict[tuple[str, str], TranslationPatch] = {}
     for uid, tr in best.items():
         u = units[uid]
-        patches[(u["resource_href"], u["xpath"])] = TranslationPatch(tr["text"], u["source_hash"], uid)
+        text = tr["text"]
+        if tr["status"] != "human" and tr["translator_note"]:  # ADR-025: notes go in parentheses after the text
+            text = f"{text}（註：{tr['translator_note']}）"
+        patches[(u["resource_href"], u["xpath"])] = TranslationPatch(text, u["source_hash"], uid)
     translatable = [u for u in units.values() if u["translatable"]]
     missing = [u["id"] for u in translatable if u["id"] not in best]
     if strict and missing:

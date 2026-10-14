@@ -18,6 +18,7 @@ class UnitTranslation(_M):
     translated_text: str
     flags: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+    translator_note: str = ""  # ADR-025: a reader-facing note, only when the series style allows notes
 
 
 class TranslationBatchOutput(_M):

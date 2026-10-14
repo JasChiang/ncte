@@ -738,6 +738,46 @@ def names_propose(epub: Annotated[str, typer.Argument()],
     typer.echo(f"see: ncte names proposals {epub}")
 
 
+# --------------------------------------------------------------------------- translator's notes (ADR-025)
+notes_app = typer.Typer(help="Translator's notes (exported in parentheses after the paragraph).", no_args_is_help=True)
+app.add_typer(notes_app, name="notes")
+
+
+@notes_app.command("list")
+def notes_list(epub: Annotated[str, typer.Argument()], as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
+    """Notes in the current translations, in reading order."""
+    from .translation.cache import latest_texts
+
+    book = _book(epub)
+    best = latest_texts(state.conn, book.id)
+    units = {r["id"]: r for r in state.conn.execute("SELECT id, ordinal, plain_text FROM units WHERE book_id=?", (book.id,))}
+    rows = sorted(({"unit_id": uid, "ordinal": units[uid]["ordinal"], "ja": units[uid]["plain_text"][:60],
+                    "zh": tr["text"][:60], "note": tr["translator_note"]}
+                   for uid, tr in best.items() if tr["translator_note"] and tr["status"] != "human"),
+                  key=lambda r: r["ordinal"])
+    if as_json:
+        echo_json(rows)
+        return
+    for r in rows:
+        typer.echo(f"§{r['ordinal']} {r['unit_id']}\n    {r['ja']}\n    {r['zh']}\n    （註：{r['note']}）")
+    if not rows:
+        typer.echo("no notes")
+
+
+@notes_app.command("drop")
+def notes_drop(epub: Annotated[str, typer.Argument()], unit_id: Annotated[str, typer.Argument()]) -> None:
+    """Remove the note of one unit's current translation (the translation itself stays)."""
+    from .translation.cache import latest_texts
+
+    book = _book(epub)
+    tr = latest_texts(state.conn, book.id).get(unit_id)
+    if tr is None or not tr["translator_note"]:
+        raise NCTEError(f"{unit_id} has no note")
+    with Transaction(state.conn):
+        state.conn.execute("UPDATE translations SET translator_note=NULL WHERE id=?", (tr["id"],))
+    typer.echo(f"removed the note of {unit_id}")
+
+
 # --------------------------------------------------------------------------- series style guide (ADR-022)
 
 style_app = typer.Typer(help="Series style guide: honorifics, house rules, character voices (all volumes).",
@@ -753,6 +793,7 @@ def _print_style(style: Any) -> None:
         typer.echo(f"rule {i}: {r}")
     for k, v in style.voices.items():
         typer.echo(f"voice {k}: {v}")
+    typer.echo(f"notes: {style.notes}" + ("（譯註以括號附在段落後）" if style.notes == "inline" else "（不加譯註）"))
 
 
 @style_app.command("show")
@@ -775,7 +816,8 @@ def style_set(epub: Annotated[str, typer.Argument()],
               rule: Annotated[list[str] | None, typer.Option("--rule", help="add a house rule (repeatable)")] = None,
               remove_rule: Annotated[list[int] | None, typer.Option("--remove-rule", help="rule number to remove")] = None,
               voice: Annotated[list[str] | None, typer.Option("--voice", help="NAME=how they sound (repeatable)")] = None,
-              remove_voice: Annotated[list[str] | None, typer.Option("--remove-voice")] = None) -> None:
+              remove_voice: Annotated[list[str] | None, typer.Option("--remove-voice")] = None,
+              notes: Annotated[str | None, typer.Option("--notes", help="off | inline: translator's notes in parentheses")] = None) -> None:
     """Change the series style guide. New translations follow it; existing ones are kept until retranslated."""
     from pydantic import ValidationError
 
@@ -787,6 +829,8 @@ def style_set(epub: Annotated[str, typer.Argument()],
     data = style.model_dump()
     if honorifics:
         data["honorifics"] = honorifics
+    if notes:
+        data["notes"] = notes
     drop = {n - 1 for n in remove_rule or []}
     if any(n < 0 or n >= len(data["rules"]) for n in drop):
         raise NCTEError(f"--remove-rule must be between 1 and {len(data['rules'])}")

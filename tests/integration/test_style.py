@@ -46,6 +46,38 @@ def test_style_cli(tmp_path, fixtures):
     assert out.exit_code == 0, out.output
     assert r.invoke(app, ["-w", str(ws), "style", "set", epub, "--remove-rule", "1"]).exit_code == 0
     data = json.loads(r.invoke(app, ["-w", str(ws), "style", "show", epub, "--json"]).output)
-    assert data == {"honorifics": "explicit", "rules": ["B"], "voices": {"ミナ": "禮貌"}}
+    assert data == {"honorifics": "explicit", "rules": ["B"], "voices": {"ミナ": "禮貌"}, "notes": "off"}
     bad = r.invoke(app, ["-w", str(ws), "style", "set", epub, "--honorifics", "polite"])
     assert bad.exit_code != 0 and "invalid style" in str(bad.exception)
+
+
+def test_translator_notes_only_when_allowed_and_exported_in_parentheses(conn, cfg, fixtures, tmp_path):
+    import json
+
+    from ncte.exporter import export_book
+    from ncte.memory.style import SeriesStyle, save_style
+
+    def tr(payload, req):
+        out = {"translations": []}
+        for u in payload["units"]:
+            note = "日文「鍵」也有關鍵之意" if payload.get("style", {}).get("notes") and "銀の鍵" in u["source"] else ""
+            out["translations"].append({"unit_id": u["unit_id"], "translated_text": "譯" + u["unit_id"][-4:],
+                                        "flags": [], "notes": [], "translator_note": note})
+        return out
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "translate": tr}),
+                          mode="context")
+    assert conn.execute("SELECT COUNT(*) FROM translations WHERE translator_note IS NOT NULL").fetchone()[0] == 0
+    save_style(conn, book.id, SeriesStyle(notes="inline"))
+    fake = FakeLLM(responders={**RESPONDERS, "translate": tr})
+    run_book(conn, cfg, fixtures["basic"], fake, mode="context", force=True)
+    assert any(json.loads(c.messages[1]["content"]).get("style", {}).get("notes")
+               for c in fake.calls if c.stage.startswith("translate"))
+    noted = conn.execute("SELECT unit_id, translator_note FROM translations WHERE translator_note IS NOT NULL").fetchall()
+    assert noted and noted[0]["translator_note"] == "日文「鍵」也有關鍵之意"
+    out = tmp_path / "o.epub"
+    export_book(conn, cfg, book, output=out, run_epubcheck=False)
+    import zipfile
+    blob = "".join(zipfile.ZipFile(out).read(n).decode("utf-8", "ignore") for n in zipfile.ZipFile(out).namelist()
+                   if n.endswith("html"))
+    assert "（註：日文「鍵」也有關鍵之意）" in blob

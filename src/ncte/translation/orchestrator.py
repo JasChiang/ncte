@@ -415,11 +415,12 @@ class Orchestrator:
                 gh = glossary_hash(relevant_glossary(self.glossary, r["plain_text"]))
                 self.conn.execute(
                     "INSERT INTO translations(unit_id, target_lang, text, source_hash, context_hash, prompt_version, "
-                    "model_id, glossary_version, mode, status, run_id, request_id, flags_json, notes_json, created_at) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    "model_id, glossary_version, mode, status, run_id, request_id, flags_json, notes_json, created_at, "
+                    "translator_note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (uid, self.cfg.app.language, ur.text, r["source_hash"], ctx_hash, self.prompt.version_id,
                      self.model, gh, self.opts.mode, status, self.run_id, ur.request_id,
-                     json.dumps(ur.flags, ensure_ascii=False), json.dumps(ur.notes, ensure_ascii=False), utcnow()))
+                     json.dumps(ur.flags, ensure_ascii=False), json.dumps(ur.notes, ensure_ascii=False), utcnow(),
+                     ur.translator_note or None))
                 for f in ur.findings:
                     if f.severity != "info":
                         self._finding(uid, f.type, f.severity, f.evidence)

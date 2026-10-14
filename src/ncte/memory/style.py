@@ -31,6 +31,7 @@ class SeriesStyle(BaseModel):
     honorifics: Literal["natural", "explicit", "omit"] = "natural"
     rules: list[str] = Field(default_factory=list)  # free-form house rules, e.g. 「先輩一律譯學姊」
     voices: dict[str, str] = Field(default_factory=dict)  # character name → how they should sound
+    notes: Literal["off", "inline"] = "off"  # ADR-025: translator's notes, exported in parentheses
 
     def is_default(self) -> bool:
         return self == SeriesStyle()
@@ -70,6 +71,9 @@ def style_payload(style: SeriesStyle, text: str, names: list[str] = ()) -> dict[
     out: dict[str, Any] = {"honorifics": HONORIFICS_ZH[style.honorifics]}
     if style.rules:
         out["rules"] = list(style.rules)
+    if style.notes == "inline":
+        out["notes"] = ("允許譯註：原文的雙關、文字遊戲或文化指涉在譯文中無法傳達、讀者會看不懂時，"
+                        "可在 translator_note 寫一句簡短說明（不寫劇情、不劇透）；能用譯文本身表達的就不要加註。")
     voices = {k: v for k, v in style.voices.items() if k in t or k in names}
     if voices:
         out["voices"] = voices
