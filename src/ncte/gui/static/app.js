@@ -35,6 +35,7 @@ window.addEventListener("hashchange", route);
 async function route() {
   const [, b, id, tab = "overview"] = location.hash.replace(/^#\/?/, "#/").split("/");
   try {
+    if (b === "settings") { $("#tabs").hidden = true; $("#posbar").hidden = true; $("#crumb").textContent = "設定"; return await settingsView(); }
     if (b !== "b" || !id) { $("#tabs").hidden = true; $("#posbar").hidden = true; $("#crumb").textContent = ""; return await libraryView(); }
     const tabs = $("#tabs"); tabs.hidden = false;
     tabs.innerHTML = TABS.map(t => t.length === 1 ? `<span class="grp">${t[0]}</span>`
@@ -50,28 +51,152 @@ async function route() {
 // ------------------------------------------------------------ library
 async function libraryView() {
   const lib = await api("library");
-  view.innerHTML = `<h2>書庫</h2>` + (lib.map(s => `<div class="card"><strong>${esc(s.title)}</strong>
+  view.innerHTML = `<h2>書庫</h2>
+    <div class="card drop" id="drop"><strong>加入一本書</strong>
+      <p class="muted small">把日文 EPUB（無 DRM）拖到這裡，或 <label class="link">選擇檔案<input type="file" id="file" accept=".epub" hidden></label>。檔案只存在這台電腦。</p>
+      <div id="upl"></div></div>` + (lib.map(s => `<div class="card"><strong>${esc(s.title)}</strong>
     <span class="muted small">　${s.volumes.length} 集</span>
     ${s.volumes.map(v => { const p = v.translatable ? Math.round(100 * v.translated / v.translatable) : 0;
       return `<div style="margin-top:8px"><a href="#/b/${esc(v.book_id)}/overview">第 ${v.volume_index} 集　${esc(v.title)}</a>
       <span class="muted small">　${v.translatable == null ? "（找不到資料夾）" : `${v.translated} / ${v.translatable} 段`}</span>
       <div class="bar"><i style="width:${p}%"></i></div></div>`; }).join("")}</div>`).join("")
-    || `<p class="muted">書庫是空的。用 <code>ncte import 書.epub</code> 匯入。</p>`);
+    || `<p class="muted">書庫是空的。先在上面加入一本書。</p>`);
+  const drop = $("#drop"), file = $("#file");
+  file.onchange = () => file.files[0] && upload(file.files[0]);
+  drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); const f = e.dataTransfer.files[0]; if (f) upload(f); };
+}
+async function upload(f) {
+  const box = $("#upl"); box.innerHTML = `<p class="muted">上傳並檢查「${esc(f.name)}」…</p>`;
+  try {
+    const r = await fetch("/api/upload", {method: "POST", body: f, headers: {"X-NCTE-Token": TOKEN, "X-Filename": encodeURIComponent(f.name)}});
+    const u = await r.json(); if (!r.ok) throw new Error(u.error || r.statusText);
+    if (u.imported_as) { box.innerHTML = `<p>這本書已經在書庫裡了：<a href="#/b/${esc(u.imported_as)}/overview">打開</a></p>`; return; }
+    const s = u.suggestion;
+    box.innerHTML = `<p><strong>${esc(u.title)}</strong></p>
+      <p class="small">放在哪個系列？同一系列的各集共用角色、譯名和劇情記憶。</p>
+      <label><input type="radio" name="ser" value="" ${s ? "" : "checked"}> 單獨一本（新系列）</label><br>
+      ${s ? `<label><input type="radio" name="ser" value="${esc(s.series)}" checked> 「${esc(s.series)}」${s.existing ? "（書庫已有）" : "（新系列）"}${s.volume != null ? `第 ${s.volume} 集` : ""}
+        <span class="muted small">— 依據：${esc(s.evidence)}</span></label><br>` : ""}
+      ${u.series.filter(t => !s || t !== s.series).map(t => `<label><input type="radio" name="ser" value="${esc(t)}"> 「${esc(t)}」</label><br>`).join("")}
+      <p class="small">集數 <input type="text" id="vol" size="4" value="${s && s.volume != null ? s.volume : ""}" placeholder="自動"></p>
+      <button class="btn primary" id="doImport">加入書庫</button>`;
+    $("#doImport").onclick = async () => {
+      const series = (document.querySelector('input[name="ser"]:checked') || {}).value || null;
+      try {
+        const r = await api("import", {upload: u.upload, series, volume: $("#vol").value.trim() || null});
+        location.hash = `#/b/${r.book_id}/overview`;
+      } catch (e) { toast("加入失敗：" + e.message); }
+    };
+  } catch (e) { box.innerHTML = `<p class="issue">無法使用這個檔案：${esc(e.message)}</p>`; }
+}
+
+// ------------------------------------------------------------ settings
+async function settingsView() {
+  const k = await api("settings");
+  view.innerHTML = `<h2>設定</h2><div class="card"><strong>OpenRouter 金鑰</strong>
+    <p class="small">${k.set ? `已設定（結尾 ${esc(k.hint)}）` : "尚未設定。到 openrouter.ai 的 Keys 頁面建立一把金鑰，貼在下面。"}</p>
+    <p><input type="password" id="key" size="48" placeholder="sk-or-…" autocomplete="off"> <button class="btn primary" id="saveKey">儲存</button></p>
+    <p class="muted small">只存在這台電腦的 ${esc(k.file)}，不會顯示在畫面上，也不會寫進紀錄。</p>
+    <div id="bal" class="small"></div></div>
+    <div class="card"><strong>翻譯設定</strong><p class="small">模型與推理程度用預設（目前測試結果最好的組合），不需要選。預算上限會依每本書的估價自動設定。</p></div>`;
+  $("#saveKey").onclick = async () => {
+    try { await api("settings/key", {key: $("#key").value}); toast("已儲存"); settingsView(); }
+    catch (e) { toast(e.message); }
+  };
+  if (k.set) {
+    $("#bal").textContent = "查詢餘額…";
+    try { const b = await api("balance");
+      $("#bal").innerHTML = [b.account_usd != null ? `帳戶餘額 US$${b.account_usd.toFixed(2)}` : "",
+        b.key_limit_usd != null ? `這把金鑰還能用 US$${b.key_limit_usd.toFixed(2)}` : ""].filter(Boolean).join("　") || "查不到餘額";
+    } catch (e) { $("#bal").textContent = "查不到餘額：" + e.message; }
+  }
 }
 
 // ------------------------------------------------------------ overview
+const RUNSTATUS = {completed: "完成", completed_with_failures: "完成（有段落失敗，可再試一次）", running: "進行中",
+  interrupted: "已暫停", budget_exhausted: "達到預算上限", awaiting_names: "等你決定譯法", stopped_fatal: "停止（連線或帳戶問題）", created: "準備中"};
+let poll = null;
 async function overviewView(id) {
   const o = await loadBook(id, "overview");
   const stat = (label, v, extra = "") => `<div class="card stat"><span class="muted small">${label}</span><b>${v}</b>${extra}</div>`;
-  view.innerHTML = `<div class="row">
+  view.innerHTML = `<div class="card" id="runcard"><p class="muted">讀取翻譯狀態…</p></div><div class="row">
     ${stat("已翻譯", `${o.translated} / ${o.translatable}`)}${stat("已花費", "US$" + o.spent_usd.toFixed(2))}
     ${stat("有疑點的段落", o.flagged_units, `<a class="small" href="#/b/${id}/review?f=flagged">去看</a>`)}
     ${stat("待決定的譯法", o.pending_names, `<a class="small" href="#/b/${id}/names">去決定</a>`)}
     ${stat("說話者未定", o.unknown_speakers)}${stat("譯註", o.notes)}${stat("人工修改", o.human_edits)}</div>
-    <div class="card"><strong>執行紀錄</strong><div class="scroll"><table><tr><th>run</th><th>模式</th><th>模型</th><th>狀態</th><th>待處理</th><th>費用</th></tr>
+    <details class="card"><summary><strong>執行紀錄</strong></summary><div class="scroll"><table><tr><th>run</th><th>模式</th><th>模型</th><th>狀態</th><th>待處理</th><th>費用</th></tr>
     ${o.runs.map(r => `<tr><td class="mono small">${esc(r.id)}</td><td>${esc(r.mode)}</td><td>${esc(r.model)}</td>
-      <td>${esc(r.status)}</td><td class="mono">${r.pending}</td><td class="mono">$${(r.cost_usd || 0).toFixed(3)}</td></tr>`).join("")}
-    </table></div><p class="muted small">繼續中斷的翻譯：<code>ncte resume --run-id …</code>　匯出：<code>ncte export ${esc(id)}</code></p></div>`;
+      <td>${esc(RUNSTATUS[r.status] || r.status)}</td><td class="mono">${r.pending}</td><td class="mono">$${(r.cost_usd || 0).toFixed(3)}</td></tr>`).join("")}
+    </table></div></details>`;
+  await runCard(id, o);
+}
+async function runCard(id, o) {
+  clearTimeout(poll);
+  const card = $("#runcard"); if (!card) return;
+  const p = await api(`book/${id}/run`), r = p.run;
+  const money = v => "US$" + (+v || 0).toFixed(2);
+  const bars = (p.stages || []).map(s => { const pc = Math.round(100 * s.done / s.total);
+    return `<div class="small" style="margin-top:6px">${esc(s.label)}　${s.done} / ${s.total}${s.failed ? `　<span class="issue">失敗 ${s.failed}</span>` : ""}<div class="bar"><i style="width:${pc}%"></i></div></div>`; }).join("");
+  const exportBtns = o.translated ? `<button class="btn" id="exp">匯出 EPUB</button> <span id="expres" class="small"></span>` : "";
+  let body;
+  if (p.busy) {
+    body = `<strong>翻譯中</strong>　<span class="muted small">已花 ${money(r.spent_usd)}／上限 ${money(r.budget_usd)}</span>
+      <p class="muted small">先讀完整本（說話者、角色、稱呼、劇情）再定名、翻譯；讀的階段還看不到譯文。可以關掉這個分頁，但不要關掉 NCTE 視窗。</p>
+      ${bars}<pre class="log small">${esc((p.log || []).join("\n"))}</pre><button class="btn" id="pause">暫停</button>`;
+  } else if (!r) {
+    const k = await api("settings");
+    body = `<strong>開始翻譯</strong><div id="est" class="small muted">估價中…</div>
+      ${k.set ? "" : `<p class="issue">還沒設定 OpenRouter 金鑰：<a href="#/settings">去設定</a></p>`}
+      <button class="btn primary" id="start" disabled>開始翻譯</button>`;
+  } else {
+    const st = RUNSTATUS[r.status] || r.status;
+    let action = "";
+    if (r.status === "awaiting_names") action = `<p class="small">有些名字和稱呼的譯法要你決定：<a href="#/b/${id}/names">去定名</a>，決定完回來按繼續。</p><button class="btn primary" data-go>繼續翻譯</button>`;
+    else if (r.status === "budget_exhausted") { const more = Math.round((r.spent_usd + (r.left_usd || 0) * 1.5) * 100) / 100;
+      action = `<p class="small">已花 ${money(r.spent_usd)}，達到這次的上限 ${money(r.budget_usd)}。${r.left_usd ? `估計剩下的部分還要約 ${money(r.left_usd)}。` : ""}已完成的部分都保留著，繼續會從停下的地方接著做。</p>
+        <button class="btn primary" data-go data-budget="${Math.max(more, r.budget_usd + 1)}">把上限提高到 ${money(Math.max(more, r.budget_usd + 1))} 並繼續</button>`; }
+    else if (r.status !== "completed") action = `<button class="btn primary" data-go>繼續翻譯</button>`;
+    body = `<strong>${esc(st)}</strong>　<span class="muted small">已花 ${money(r.spent_usd)}／上限 ${money(r.budget_usd)}</span>
+      ${p.error ? `<p class="issue">${esc(p.error)}</p>` : ""}${r.status === "stopped_fatal" ? `<p class="small">如果是餘額不足，儲值後按繼續即可。</p>` : ""}
+      ${bars}<div style="margin-top:10px">${action} ${exportBtns}</div>`;
+  }
+  if (p.other_busy) body += `<p class="muted small">另一本書正在翻譯，同時只能翻一本。</p>`;
+  card.innerHTML = body;
+  const on = (sel, fn) => { const b = card.querySelector(sel); if (b) b.onclick = fn; };
+  on("#pause", async () => { await api("run/pause", {}); toast("會在目前這個請求完成後暫停"); });
+  on("[data-go]", async e => {
+    const b = e.target.dataset.budget;
+    try { await api(`run/${r.id}/continue`, b ? {budget: +b} : {}); runCard(id, o); } catch (err) { toast(err.message); }
+  });
+  on("#start", async () => { try { await api(`book/${id}/start`, {}); runCard(id, o); } catch (err) { toast(err.message); } });
+  on("#exp", async () => {
+    const out = $("#expres"); out.textContent = "匯出並檢查中…";
+    try { const x = await api(`book/${id}/export`, {});
+      out.innerHTML = `${x.ok ? "完成" : "完成，但檢查有問題"}（EPUBCheck：${esc(x.epubcheck || "未安裝")}） <button class="btn" id="dl">下載</button>
+        <span class="muted">${esc(x.path)}</span>${x.errors.map(e => `<div class="issue">${esc(e)}</div>`).join("")}`;
+      $("#dl").onclick = () => download(id, x.name);
+    } catch (err) { out.textContent = "匯出失敗：" + err.message; }
+  });
+  if ($("#est")) {
+    try { const e = await api(`book/${id}/estimate`, {});
+      $("#est").innerHTML = `${e.units} 段要翻譯。預估約 <b>${money(e.estimate_usd)}</b>${e.calibrated ? "（依你之前的實際花費校正）" : "（保守估計）"}；上限自動設為 ${money(e.budget_usd)}，到了會先問你。`;
+      const k = await api("settings"); $("#start").disabled = !k.set || !e.units;
+    } catch (err) { $("#est").textContent = "無法估價：" + err.message; }
+  }
+  const here = location.hash.startsWith(`#/b/${id}/overview`) || location.hash === `#/b/${id}`;
+  if (p.busy && here) poll = setTimeout(async () => {
+    const q = await api(`book/${id}/run`);
+    if (!q.busy) { invalidate(id); return overviewView(id); }
+    runCard(id, o);
+  }, 3000);
+}
+async function download(id, name) {
+  const r = await fetch(`/api/book/${id}/download`, {headers: {"X-NCTE-Token": TOKEN}});
+  if (!r.ok) { toast("下載失敗"); return; }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(await r.blob()); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
 }
 
 // ------------------------------------------------------------ review

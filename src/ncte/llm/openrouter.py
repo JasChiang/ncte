@@ -124,6 +124,23 @@ class OpenRouterClient:
         data = resp.json().get("data")
         return data if isinstance(data, dict) else None
 
+    def balance(self) -> dict[str, Any]:
+        """Credits left on the account (/credits) and on this key's own limit (/key); either can stop a run."""
+        out: dict[str, Any] = {}
+        for path in ("credits", "key"):
+            try:
+                resp = self._http.get(f"{self.base_url}/{path}", headers=self._auth())
+            except httpx.HTTPError:
+                continue
+            data = resp.json().get("data") if resp.status_code == 200 else None
+            if not isinstance(data, dict):
+                continue
+            if path == "credits" and data.get("total_credits") is not None:
+                out["account_usd"] = round(float(data["total_credits"]) - float(data.get("total_usage") or 0), 2)
+            if path == "key" and data.get("limit_remaining") is not None:
+                out["key_limit_usd"] = round(float(data["limit_remaining"]), 2)
+        return out
+
     def build_payload(self, req: LLMRequest) -> dict[str, Any]:
         payload: dict[str, Any] = {"model": req.model, "messages": req.messages, "stream": False}
         if req.temperature is not None:

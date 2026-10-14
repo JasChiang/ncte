@@ -1054,7 +1054,7 @@ def names_sync(epub: Annotated[str, typer.Argument()]) -> None:
 @app.command()
 def gui(port: Annotated[int, typer.Option("--port")] = 8780,
         no_open: Annotated[bool, typer.Option("--no-open", help="do not open the browser")] = False) -> None:
-    """Open the local web UI: review and edit translations, choose renderings, read the story (this computer only)."""
+    """Open the local web UI: add books, translate, export, review and edit, choose renderings (this computer only)."""
     from .gui.server import serve
 
     serve(state.ws, port=port, open_browser=not no_open)

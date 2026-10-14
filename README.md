@@ -1,6 +1,17 @@
 # NCTE — Novel Context Translation Engine
 
-把**有權使用、無 DRM** 的日文 EPUB 輕小說，透過 OpenRouter 上的模型翻成臺灣繁體中文，並輸出可在一般閱讀器開啟的完整 EPUB。macOS 本機 CLI，資料全部存在本機 SQLite。
+把**有權使用、無 DRM** 的日文 EPUB 輕小說，透過 OpenRouter 上的模型翻成臺灣繁體中文，並輸出可在一般閱讀器開啟的完整 EPUB。macOS 本機執行（網頁介面或指令），資料全部存在本機 SQLite。
+
+## 不用指令的用法（網頁介面）
+1. 安裝 [Python 3.12 以上](https://www.python.org/downloads/)，下載本專案資料夾。
+2. 在 Finder 雙擊 **`NCTE.command`**（第一次會自動安裝，約幾分鐘；macOS 若擋下，請按右鍵 →「打開」）。瀏覽器會打開 NCTE。
+3. 右上角「設定」貼上 [OpenRouter](https://openrouter.ai/keys) 金鑰並儲值；書庫頁把 EPUB 拖進去 → 選系列 → 書的概況頁按「開始翻譯」。
+   - 開始前會顯示估價；預算上限自動設為估價的 1.5 倍，到了會先停下來問你。
+   - 先讀完整本再翻：讀的階段（約占費用一半）還看不到譯文。中途要你決定名字譯法時會停下，到「定名」頁選完再按「繼續」。
+   - 可以暫停；關掉視窗也不會遺失進度，下次按「繼續」接著做。
+4. 翻完在概況頁按「匯出 EPUB」→「下載」。「對照審稿」可以逐段修改譯文。
+
+模型與推理程度不用選：預設 `google/gemini-3.8-flash`（推理 medium，模型自己的預設）。比較紀錄見 [`docs/changelog.md`](docs/changelog.md)：同一章節裡，便宜的模型會忽略角色性別（你／妳）、或整批改寫成簡體。
 
 > 開發狀態與測試紀錄：[`docs/changelog.md`](docs/changelog.md)　決策：[`docs/decisions.md`](docs/decisions.md)　架構：[`docs/architecture.md`](docs/architecture.md)
 
@@ -16,11 +27,11 @@
 
 之後新增：系列書（多集共用記憶、跨集防劇透）、實體卡（正式名稱／愛稱／通稱）、名詞索引、人物關係圖。
 
-**實測紀錄**：一本約 11.6 萬字的日文輕小說，以 `--mode context --reasoning-effort low` 翻譯，總花費約 US$4（含試翻與修正），輸出 EPUB 沒有新增任何 EPUBCheck 錯誤。過程中發現並修正的問題記錄在 [`docs/changelog.md`](docs/changelog.md)。
-**尚未有的數據**：記憶與說話者分析是否確實提升品質，需以真實模型跑 `ncte eval run`（人工標註指標）驗證，目前尚未執行。
+**實測紀錄**：三本日文輕小說（青春、奇幻；其中兩本有正式中文版可對照）。奇幻一本（約 3,700 段、對話多）以 context 模式：讀 US$2.8＋翻譯與審稿 US$2.8；與正式版逐段比對後找到的問題（對女性用「你」、同一人被建成兩個角色、程式標記把說話者鎖錯…）都改成通用的修正，記錄在 [`docs/changelog.md`](docs/changelog.md) 與 [`docs/decisions.md`](docs/decisions.md)。
+**尚未有的數據**：`ncte eval run`（人工標註指標）的正式評測尚未執行；目前的品質判斷來自與正式中文版的逐段比對。
 
 ## 隱私與權利（請先讀）
-- 翻譯時，**所需的原文段落與上下文會送到 OpenRouter**，再由 OpenRouter 路由給第三方模型供應商（例如 Google）。各供應商的資料保留／訓練政策不同，請在 OpenRouter 帳號的 Privacy 設定中確認。目前沒有純本機模型模式。
+- 翻譯時（包括從網頁介面開始的翻譯），**所需的原文段落與上下文會送到 OpenRouter**，再由 OpenRouter 路由給第三方模型供應商（例如 Google）。各供應商的資料保留／訓練政策不同，請在 OpenRouter 帳號的 Privacy 設定中確認。目前沒有純本機模型模式。
 - 只處理你有權使用的無 DRM EPUB。翻譯輸出不代表你取得再散布或公開分享的權利。
 - 原始 EPUB、資料庫、匯出檔都在 `./workspace/`（已列入 `.gitignore`）。API Key 不會寫入 log、報告或錯誤訊息。
 
@@ -77,6 +88,7 @@ ncte report --run-id <run-id> --reconcile        # 以 /generation 回填最終�
 
 # 7. 只重翻部分單元（其他譯文不受影響）
 ncte retranslate ./samples/book.epub --unit-id u_xxxxxxxx --budget-usd 0.5
+#   --model / --reasoning-effort low|medium|high|default 可用來比較模型（default＝模型自己的預設）
 ```
 
 ### 系列書（多集共用角色、譯名、劇情記憶）
@@ -98,6 +110,9 @@ ncte names link 書.epub ソラっち --to ソラ --type nickname --zh 小索拉
 ncte names link 書.epub しまちゃん --to しまむら妹 --shared   # 兩個人共用的稱呼（不合併，翻譯時依上下文判斷）
 ncte names address 書.epub --character 安達                   # 誰怎麼稱呼誰（含敬稱、譯法、使用次數、首次出現）
 ncte names address-set 書.epub --speaker 日野 --to 安達 --ja あだっち --zh 小安達
+ncte names gender 書.epub                    # 角色性別（原文明寫／推測／人工）與依據；翻譯時決定「你／妳」「他／她」
+ncte names gender 書.epub エルリア female      # 人工設定（unknown＝不提供，翻譯用「你」）
+ncte names gender-scan 書.epub               # 已讀過的舊書補記性別（只呼叫記憶更新，不動其他記憶）
 ```
 
 ### 系列翻譯風格（每一集都適用）
@@ -119,7 +134,7 @@ ncte memory     ./samples/book.epub --facts --at u_xxx                        # 
 ncte memory     ./samples/book.epub --search 銀の鍵
 ```
 
-**先讀再翻**（預設）：context 模式會先把整集依序讀完（說話者、角色、稱呼、事實、摘要），再請模型為名字與稱呼提出譯法（含其他選項與理由），最後才逐場景翻譯。重要且有不同譯法的項目（例如主要角色名、常用稱呼、中文只剩一個字的人名）會先停下來等你決定：
+**先讀再翻**（預設）：context 模式會先把整集依序讀完（說話者、角色、性別、稱呼、事實、摘要），把有爭議的判斷帶著前後文再覆核一次（ADR-033，沒有爭議時不發請求），再請模型為名字與稱呼提出譯法（含其他選項與理由），最後才逐場景翻譯。重要且有不同譯法的項目（例如主要角色名、常用稱呼、中文只剩一個字的人名）會先停下來等你決定：
 ```bash
 ncte names proposals 書.epub                 # 待確認的譯法與選項
 ncte names decide 書.epub --id 3 --pick 2    # 選第 2 個選項；或 --zh 自訂譯法；或 --accept-all 全部採用建議
@@ -131,9 +146,9 @@ ncte names proposals 書.epub --all --context   # 所有提案（含已套用的
 
 ### 本機網頁介面
 ```bash
-ncte gui            # 開啟 http://127.0.0.1:8780/ （只有這台電腦能開；Ctrl+C 結束）
+ncte gui            # 開啟 http://127.0.0.1:8780/ （只有這台電腦能開；Ctrl+C 結束）；或雙擊 NCTE.command
 ```
-對照審稿（點譯文直接修改、刪除譯註）、定名（看例句選譯法）、故事進度、角色檔案、人物關係圖（拖動「讀到」滑桿防劇透）、名詞與稱呼。翻譯與匯出目前仍用指令。
+上傳 EPUB、開始／暫停／繼續翻譯（各階段進度與花費）、匯出與下載、金鑰與餘額；對照審稿（點譯文直接修改、刪除譯註；標出程式與 LLM 有爭議的台詞與覆核結果）、定名（看例句選譯法；同一暱稱已定的譯法）、故事進度、角色檔案（性別與依據，可修改）、人物關係圖（拖動「讀到」滑桿防劇透）、名詞與稱呼。網頁開始的翻譯固定用預設模型，預算依估價自動設定（ADR-034）。
 
 ### 品質控制與人工校正
 ```bash
@@ -176,10 +191,12 @@ ncte export tests/fixtures/basic.epub
 ## 已知限制
 - 真實模型的 A/B 評測尚未執行；目前只用一本書實測過，其他出版社的 EPUB 格式可能遇到新的狀況。
 - 內容審查：雲端模型可能誤擋正常段落；被擋的段落會保留原文並列入報告（可再重送或人工翻譯）。
-- Gemini 等推理模型的推理 token 以輸出價計費；可用 `--reasoning-effort low` 降低成本（試算會以實際花費校正）。
+- Gemini 等推理模型的推理 token 以輸出價計費（翻譯的輸出約一半是推理）。試算會以同一工作區的實際花費校正；全新工作區沒有校正資料時估價偏低（英雄賢者試算上限 $4.3，實際約 $5.6）。
+- 更便宜的模型目前不建議：第二章比較中 claude-haiku-5.5 忽略角色卡的性別（你／妳錯 36 句），deepseek-v4-flash、qwen3.8-flash 會整批改寫成簡體（現在會被程式擋下重翻，但多花費用）。
 - context 模式依場景順序執行（為了讓記憶依序更新），不使用併發；baseline 可併發。先讀再翻時，第一段譯文要等整集讀完（約占總費用四成）才會出現；預算若在讀的階段用完，不會有任何譯文。
-- 說話者 `explicit` 只來自規則可驗證的發話標記；較隱晦的標記只會是 `inferred`（刻意保守）。
-- 同一角色的不同稱呼只在有原文證據（或人工連結）時才合併，後文才揭露的身分不會提前合併。
+- 說話者 `explicit` 只在程式的發話標記與 LLM 一致時成立；LLM 有異議時採用 LLM 的判斷並標為 `inferred`（ADR-031）。
+- 同一角色的不同稱呼只在有原文證據（或人工連結）時才合併；名字揭曉時的合併只在揭曉位置之後可見（ADR-032），被覆核質疑的合併會列為待確認，不會自動拆開。
+- 網頁介面同時只翻一本書；翻譯中關掉 NCTE 會在下次「繼續」時從最後完成的請求接著做（中斷的那個請求可能已計費）。
 - 人工譯文永遠優先；目前沒有「撤銷人工譯文」指令，需再以 `ncte edit` 覆寫。
 - 不支援 fixed-layout、DRM、段落內 SVG/MathML、複雜 ruby（這些單元保留原文並列在報告中）。
 - 譯本不輸出 ruby；讀音只作為翻譯提示。
@@ -188,14 +205,16 @@ ncte export tests/fixtures/basic.epub
 
 ## 專案結構
 ```
-src/ncte/  cli.py config.py library.py exporter.py samples.py
-  epub/        security parser units reassemble validate
+src/ncte/  cli.py cli_memory.py config.py library.py workspace.py series.py lexicon.py exporter.py samples.py
+  epub/        security parser units reassemble validate matter series_meta
   llm/         base openrouter fake schemas prompt_loader cost
-  translation/ orchestrator context_pipeline translator context_builder review edits cache dryrun
-  analysis/    scene dialogue speaker reference_resolution memory_update
-  memory/      db repository retrieval visibility
-  qa/rules.py  reports/ (cost, qa, html)   eval/ (dataset, metrics, runner, data/ncte_eval_v1.json)
-prompts/<task>/v1.md   版本化 prompt（translate / scene_analyze / memory_update / review）
+  translation/ orchestrator context_pipeline translator context_builder review rename edits cache dryrun
+  analysis/    scene dialogue speaker reference_resolution memory_update naming verify
+  memory/      db repository retrieval visibility entities address style
+  gui/         server data actions manage runner static/
+  qa/          rules recheck   reports/ (cost, qa, html)   eval/ (dataset, metrics, runner, data/ncte_eval_v1.json)
+prompts/<task>/v1.md   版本化 prompt（translate / scene_analyze / memory_update / naming / verify / review）
+NCTE.command           Finder 雙擊啟動網頁介面
 tests/                 unit / integration / eval（全部離線）
 scripts/make_sample_epub.py   產生自製測試 EPUB
 ```

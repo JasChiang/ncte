@@ -2,7 +2,8 @@
 
 Only for the person at this computer: it binds to 127.0.0.1, accepts only ``Host: 127.0.0.1/localhost`` (no DNS
 rebinding) and requires a per-start random token on every API call (another web page in the same browser cannot
-read or change the workspace). Requests are handled one at a time, so the SQLite connections need no locking.
+read or change the workspace). Requests are handled one at a time, so the SQLite connections need no locking; a
+translation started from the page runs in a background thread with connections of its own (``runner``).
 """
 
 from __future__ import annotations
@@ -11,11 +12,13 @@ import json
 import secrets
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from importlib import resources
+from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from ..errors import NCTEError
-from . import actions, data
+from . import actions, data, manage
+from .runner import Runner
 
 STATIC = {"/": ("index.html", "text/html; charset=utf-8"), "/app.js": ("app.js", "text/javascript; charset=utf-8"),
           "/app.css": ("app.css", "text/css; charset=utf-8")}
@@ -25,10 +28,20 @@ def _static(name: str) -> bytes:
     return resources.files("ncte.gui").joinpath("static", name).read_bytes()
 
 
+class File:
+    """A binary answer (the exported EPUB)."""
+
+    def __init__(self, path: Path, ctype: str = "application/epub+zip"):
+        self.path, self.ctype = path, ctype
+
+
 class App:
-    def __init__(self, ws: Any, token: str | None = None):
+    def __init__(self, ws: Any, token: str | None = None, *, runner: Runner | None = None,
+                 env_path: Path | None = None):
         self.ws = ws
         self.token = token or secrets.token_urlsafe(24)
+        self.runner = runner or Runner(ws.cfg)
+        self.env_path = env_path or Path(".env")
 
     def book(self, ref: str) -> tuple[Any, Any]:
         return self.ws.open_book(ref)
@@ -37,6 +50,10 @@ class App:
         parts = [p for p in path.split("/") if p][1:]  # drop "api"
         if parts == ["library"]:
             return data.library(self.ws)
+        if parts == ["settings"]:
+            return manage.key_status(self.env_path)
+        if parts == ["balance"]:
+            return manage.balance(self.runner.client_factory(self.ws.cfg))
         if len(parts) >= 3 and parts[0] == "book":
             conn, book = self.book(parts[1])
             what = parts[2]
@@ -56,10 +73,37 @@ class App:
                 return data.glossary(conn, book)
             if what == "proposals":
                 return data.proposals(conn, book, include_done=q.get("all") == "1")
+            if what == "run":
+                return self.runner.progress(self.ws, conn, book.id)
+            if what == "download":
+                return File(manage.exported_file(self.ws.cfg, book))
         raise KeyError(path)
+
+    def upload(self, filename: str, body: bytes) -> Any:
+        return manage.save_upload(self.ws, filename, body)
 
     def post(self, path: str, body: dict[str, Any]) -> Any:
         parts = [p for p in path.split("/") if p][1:]
+        if parts == ["import"]:
+            vol = body.get("volume")
+            return manage.import_upload(self.ws, str(body.get("upload", "")), body.get("series") or None,
+                                        float(vol) if vol not in (None, "") else None)
+        if parts == ["settings", "key"]:
+            return manage.set_key(self.env_path, str(body.get("key", "")))
+        if parts == ["run", "pause"]:
+            return {"pausing": self.runner.pause()}
+        if len(parts) == 3 and parts[0] == "run" and parts[2] == "continue":
+            b = body.get("budget")
+            return {"run_id": self.runner.resume(self.ws, parts[1], float(b) if b else None)}
+        if len(parts) == 3 and parts[0] == "book" and parts[2] in ("estimate", "start", "export"):
+            if parts[2] == "estimate":
+                return self.runner.estimate(self.ws, parts[1])
+            if parts[2] == "start":
+                return {"run_id": self.runner.start(self.ws, parts[1])}
+            if self.runner.busy and self.runner.book_id == parts[1]:
+                raise NCTEError("翻譯進行中，完成或暫停後再匯出")
+            conn, book = self.book(parts[1])
+            return manage.export(conn, self.ws.cfg, book)
         if len(parts) >= 4 and parts[0] == "book":
             conn, book = self.book(parts[1])
             kind, ident = parts[2], parts[3]
@@ -132,6 +176,14 @@ def make_handler(app: App, port: int) -> type[BaseHTTPRequestHandler]:
             if not self._guard():
                 return
             url = urlparse(self.path)
+            if url.path == "/api/upload":  # raw EPUB bytes; the file name travels in a header
+                n = int(self.headers.get("Content-Length") or 0)
+                if n > manage.MAX_UPLOAD:
+                    self._json(413, {"error": "檔案太大"})
+                    return
+                raw = self.rfile.read(n) if n else b""
+                self._api(lambda: app.upload(unquote(self.headers.get("X-Filename", "")), raw))
+                return
             try:
                 n = int(self.headers.get("Content-Length") or 0)
                 body = json.loads(self.rfile.read(n) or b"{}") if n else {}
@@ -145,7 +197,18 @@ def make_handler(app: App, port: int) -> type[BaseHTTPRequestHandler]:
                 self._json(403, {"error": "missing or wrong token"})
                 return
             try:
-                self._json(200, fn())
+                out = fn()
+                if isinstance(out, File):
+                    self.send_response(200)
+                    body = out.path.read_bytes()
+                    self.send_header("Content-Type", out.ctype)
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(out.path.name)}")
+                    self.send_header("Cache-Control", "no-store")
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self._json(200, out)
             except KeyError as exc:
                 self._json(404, {"error": f"not found: {exc}"})
             except (NCTEError, ValueError) as exc:
@@ -168,6 +231,7 @@ def serve(ws: Any, *, port: int = 8780, open_browser: bool = True) -> None:
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
-        pass
+        if app.runner.busy:
+            print("translation stopped; it continues from where it was when you press 繼續 next time")
     finally:
         httpd.server_close()

@@ -7,9 +7,14 @@ EPUB ──► epub/security (Zip Slip/Bomb, XXE, DRM, fixed-layout)
      ──► library.import_book → SQLite: books, resources, units, memory_fts
      ──► analysis/scene.segment_book (deterministic scenes)
 
-translate (baseline)                          translate (context)
-  orchestrator: jobs → batches                  per scene, in reading order:
-  (per chapter, ~1400 JA chars, parallel)         scene_analyze  → analysis/scene.apply_scene_analysis
+translate (baseline)                          translate (context, read first — default)
+  orchestrator: jobs → batches                  1. read: every scene in order (scene_analyze → memory_update)
+  (per chapter, ~1400 JA chars, parallel)       2. verify: disputed speakers / inferred genders / reveal merges
+                                                   asked again with the surrounding text (ADR-033)
+                                                3. naming: renderings for names and address terms (may pause
+                                                   for the person's choice)
+                                                4. translate, per scene in reading order:
+                                                  scene_analyze  → analysis/scene.apply_scene_analysis
   context_builder: neighbours (same scene)                          (dialogue.find_quotes, detect_tags,
   + relevant glossary                                                speaker.resolve, reference_resolution)
                                                   translate batches (sequential) with memory/retrieval
@@ -24,6 +29,8 @@ translate (baseline)                          translate (context)
 export ──► epub/reassemble (rebuild only validated text nodes; other files byte-for-byte; mimetype first)
        ──► epub/validate (internal + EPUBCheck) ──► reports (cost / QA / HTML)
 eval   ──► eval/runner (A/B/C/D in fresh workspaces) ──► eval/metrics (annotation-based)
+gui    ──► gui/server (127.0.0.1, token) ── data (reads) · actions (edits) · manage (upload, export, key)
+                                         └─ runner (one translation at a time in a background thread)
 ```
 
 ## 資料流與交易邊界
@@ -37,11 +44,12 @@ eval   ──► eval/runner (A/B/C/D in fresh workspaces) ──► eval/metric
 |---|---|---|
 | explicit | 程式偵測的發話標記、explicit 引號的續段、逐字證據支持的事實 | 是 |
 | human_verified | `ncte speaker-set`、`ncte edit`、`ncte glossary set` | 是（最高優先） |
-| inferred | 動作敘述、LLM 推測、只有弱證據 | 否（只作為翻譯提示，標註為推測） |
+| inferred | 動作敘述、LLM 推測、LLM 推翻程式標記（ADR-031）、覆核後的答案 | 否（只作為翻譯提示，標註為推測） |
 | unknown | 無證據或證據衝突 | 否；`speaker_id = NULL` |
 | contradicted | 後續事實撤回（`facts.retracted_by`） | 撤回點之後不可見 |
 
 ## 主要資料表
 `books, resources, units, scenes, scene_overrides, glossary, runs, jobs, translations, llm_requests, qa_findings,
 human_edits, model_snapshots` (migration 1) · `characters, utterances, speaker_hypotheses, speech_examples, facts,
-chapter_summaries, prop_states, memory_rejections, memory_fts` (migration 2)。
+chapter_summaries, prop_states, memory_rejections, memory_fts` (migration 2) · 之後：系列（series）、實體連結（entity_links）、
+稱呼（address_terms、address_observations、form_senses）、定名提案（naming_proposals）、譯註（reader_notes）、性別（character_gender，migration 12–13）。
