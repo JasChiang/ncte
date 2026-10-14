@@ -306,6 +306,8 @@ def _run(book: Book, opts: Any, *, fake: bool, as_json: bool = False, run_id: st
                       if summary.unknown_cost_requests else ""))
         for n in summary.notes:
             typer.echo(f"  note: {n}")
+        if summary.status == "awaiting_names":
+            typer.echo(f"  choose renderings first: ncte names proposals {book.id}  /  ncte names decide {book.id} …")
         if summary.status not in ("completed",):
             typer.echo(f"  continue with: ncte resume --run-id {summary.run_id}")
     if summary.status == "interrupted":

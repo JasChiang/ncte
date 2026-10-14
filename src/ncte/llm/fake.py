@@ -64,6 +64,10 @@ def default_memory_update(payload: dict[str, Any], req: LLMRequest) -> dict[str,
             "prop_states": [], "name_links": [], "address_terms": []}
 
 
+def default_naming(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:
+    return {"names": [], "address": []}
+
+
 def default_review(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:
     return {"issues": []}
 
@@ -72,6 +76,7 @@ DEFAULTS: dict[str, Responder] = {
     "translate": default_translate,
     "scene_analyze": default_scene_analyze,
     "memory_update": default_memory_update,
+    "naming": default_naming,
     "review": default_review,
 }
 

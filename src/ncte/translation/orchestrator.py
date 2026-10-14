@@ -53,6 +53,7 @@ class RunOptions:
     client: str = "openrouter"
     include_meta: bool = True
     review_only: bool = False
+    naming_only: bool = False  # ADR-023: `ncte names propose` (context mode, read pass already done)
 
 
 @dataclass
@@ -466,6 +467,8 @@ class Orchestrator:
             self.prepare()
             if self.opts.review_only:
                 self.review_existing()
+            elif self.opts.naming_only:
+                self.propose_names()
             else:
                 self.ensure_jobs()
                 self.execute()
@@ -522,6 +525,9 @@ class Orchestrator:
             body = [u for u in body if u in set(self.opts.unit_ids)]
         stats = review_scope(self, body, any_run=True)
         self.log(f"review: {stats}")
+
+    def propose_names(self) -> None:
+        raise NCTEError("naming proposals need context mode")
 
     def review(self, unit_ids: list[str]) -> None:
         from .review import review_scope

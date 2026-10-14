@@ -124,8 +124,8 @@ def upsert(conn: sqlite3.Connection, book_id: str, speaker: str, addressee: str,
         sets.update(last_book_id=book_id, last_ordinal=ordinal)
     if certainty == "explicit" and row["certainty"] != "explicit" and row["origin"] != "human":
         sets["certainty"] = "explicit"
-    # a rendering from a better source replaces a glossary default; a human rendering is never replaced
-    rank = {None: 0, "glossary": 1, "llm": 2, "human": 3}
+    # a rendering from a better source replaces a weaker one (glossary < llm < naming < human); human is final
+    rank = {None: 0, "glossary": 1, "llm": 2, "naming": 3, "human": 4}
     if form_zh and rank.get(origin, 0) >= rank.get(row["zh_origin"], 0) and row["zh_origin"] != "human":
         sets.update(form_zh=form_zh, zh_origin=origin)
     if note and not row["note"]:

@@ -21,10 +21,11 @@ import sqlite3
 from typing import Any
 
 from ..analysis.memory_update import apply_memory_update, build_memory_payload
+from ..analysis.naming import apply_naming, build_naming_payload, pending
 from ..analysis.scene import apply_scene_analysis, build_analysis_payload, get_scene
 from ..errors import FatalAPIError, LLMError, ModelOutputError
 from ..llm.prompt_loader import load_prompt
-from ..llm.schemas import MemoryUpdateOutput, SceneAnalysisOutput
+from ..llm.schemas import MemoryUpdateOutput, NamingOutput, SceneAnalysisOutput
 from ..memory.db import Transaction, utcnow
 from ..memory.retrieval import memory_context
 from .context_builder import BODY_KINDS
@@ -37,6 +38,7 @@ class ContextOrchestrator(Orchestrator):
         super().prepare()
         self.analyze_prompt = load_prompt("scene_analyze")
         self.memory_prompt = load_prompt("memory_update")
+        self.naming_prompt = load_prompt("naming")
 
     # ------------------------------------------------------------ jobs
     def create_extra_jobs(self) -> None:
@@ -56,6 +58,11 @@ class ContextOrchestrator(Orchestrator):
                 self.conn.execute(
                     "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
                     (self.book.id, self.run_id, stage, sid, seq, st, utcnow()))
+        if self.cfg.context.read_first and self.cfg.context.naming != "off" and not self.opts.unit_ids:
+            # naming is a whole-volume step; retranslating chosen units keeps the existing renderings
+            self.conn.execute(
+                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (self.book.id, self.run_id, "naming", self.book.id, len(scene_ids), "pending", utcnow()))
 
     def _job(self, stage: str, sid: str) -> sqlite3.Row | None:
         with self.lock:
@@ -118,7 +125,49 @@ class ContextOrchestrator(Orchestrator):
 
     def naming_pass(self) -> bool:
         """Pass 2: propose renderings. False when the run stops here for the user's choices."""
+        if self.cfg.context.naming == "off":
+            return True
+        job = self._job("naming", self.book.id)
+        if job is not None and job["status"] in ("pending", "running"):
+            self.stage_naming()
+        if self.cfg.context.naming == "review" and not self.opts.unit_ids:
+            with self.lock:
+                left = pending(self.conn, self.book.id)
+            if left:
+                self._stop_reason = "awaiting_names"
+                self.log(f"⏸ {len(left)} name/address renderings wait for your choice: ncte names proposals "
+                         f"{self.book.id}  →  ncte names decide …  →  ncte resume --run-id {self.run_id}")
+                return False
         return True
+
+    def stage_naming(self, *, record_job: bool = True) -> dict[str, int]:
+        with self.lock:
+            payload = build_naming_payload(self.conn, self.book.id)
+        if not payload["names"] and not payload["address"]:
+            stats = {"names": 0, "address": 0, "pending": 0, "rejected": 0}
+        else:
+            try:
+                parsed = self._llm("naming", self.naming_prompt, payload, [])
+            except FatalAPIError:
+                raise
+            except LLMError as exc:  # renderings then stay as proposed by the read pass
+                if record_job:
+                    self._set_job("naming", self.book.id, "failed", f"{type(exc).__name__}: {exc}")
+                self._finding(None, "naming_failed", "medium", str(exc)[:400])
+                return {"names": 0, "address": 0, "pending": 0, "rejected": 0}
+            assert isinstance(parsed, NamingOutput)
+            with self.lock, Transaction(self.conn):
+                stats = apply_naming(self.conn, self.book.id, payload, parsed, run_id=self.run_id)
+            self.reload_glossary()
+        if record_job:
+            self._set_job("naming", self.book.id, "succeeded", None, stats)
+        self.log(f"naming: {stats}")
+        return stats
+
+    def propose_names(self) -> None:
+        """``ncte names propose``: naming for a volume whose read pass is already done."""
+        stats = self.stage_naming(record_job=False)
+        self.log(f"proposals: {stats}")
 
     def translate_pass(self, scenes: list[str]) -> None:
         positions = self.body_positions()

@@ -420,6 +420,27 @@ CREATE TABLE form_senses (
 );
 ALTER TABLE series ADD COLUMN style_json TEXT NOT NULL DEFAULT '{}';
 """),
+    (8, "naming proposals: renderings for names and address terms chosen before translating (ADR-023)", """
+CREATE TABLE naming_proposals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    label TEXT NOT NULL,
+    previous_zh TEXT,
+    chosen_zh TEXT NOT NULL,
+    options_json TEXT NOT NULL,
+    reason TEXT,
+    importance INTEGER NOT NULL DEFAULT 0,
+    needs_review INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL,
+    decided_zh TEXT,
+    run_id TEXT,
+    created_at TEXT NOT NULL,
+    decided_at TEXT,
+    UNIQUE(kind, ref)
+);
+"""),
 ]
 
 

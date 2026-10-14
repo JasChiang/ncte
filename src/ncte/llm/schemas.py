@@ -143,6 +143,24 @@ class MemoryUpdateOutput(_M):
     address_terms: list[AddressTermOut] = Field(default_factory=list)
 
 
+# ------------------------------------------------------------------ naming (ADR-023)
+class NamingOption(_M):
+    zh: str
+    reason: str
+
+
+class NamingItem(_M):
+    ref: str
+    zh: str
+    reason: str
+    alternatives: list[NamingOption] = Field(default_factory=list)
+
+
+class NamingOutput(_M):
+    names: list[NamingItem] = Field(default_factory=list)
+    address: list[NamingItem] = Field(default_factory=list)
+
+
 # ------------------------------------------------------------------ review
 IssueType = Literal["mistranslation", "omission", "addition", "speaker_error", "name_inconsistency",
                     "subject_object_error", "spoiler", "placeholder", "style", "other"]
@@ -165,6 +183,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "translate": TranslationBatchOutput,
     "scene_analyze": SceneAnalysisOutput,
     "memory_update": MemoryUpdateOutput,
+    "naming": NamingOutput,
     "review": ReviewOutput,
 }
 

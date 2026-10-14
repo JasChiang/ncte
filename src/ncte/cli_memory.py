@@ -615,7 +615,7 @@ def names_address(epub: Annotated[str, typer.Argument()],
         if (d["speaker"], d["to"]) != pair:
             pair = (d["speaker"], d["to"])
             typer.echo(f"■ {d['speaker']} → {d['to']}")
-        mark = {"human": " ✔", "llm": "", "glossary": " (譯名表)", None: ""}.get(d["zh_origin"], "")
+        mark = {"human": " ✔", "llm": "", "naming": " (定名)", "glossary": " (譯名表)", None: ""}.get(d["zh_origin"], "")
         typer.echo(f"    {d['ja']:<14} → {d['zh'] or '?'}{mark}   ×{d['uses']}  第{d['first'][0]:g}集 §{d['first'][1]}"
                    + ("  (推測說話者)" if d["certainty"] == "inferred" else "")
                    + (f"   {d['note']}" if d["note"] else ""))
@@ -647,6 +647,82 @@ def names_address_set(epub: Annotated[str, typer.Argument()],
                          "WHERE id=?", (zh, note, utcnow(), row["id"]))
     typer.echo(f"{speaker} → {to}: {ja} → {zh} (kept for later translations; existing ones are not changed — "
                "use `ncte retranslate` for specific units)")
+
+
+# --------------------------------------------------------------------------- naming before translating (ADR-023)
+@names_app.command("proposals")
+def names_proposals(epub: Annotated[str, typer.Argument()],
+                    show_all: Annotated[bool, typer.Option("--all", help="also proposals already applied or decided")] = False,
+                    as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
+    """Renderings proposed after the read pass; pending ones wait for your choice before translating."""
+    from .analysis.naming import pending
+
+    book = _book(epub)
+    rows = pending(state.conn, book.id, include_done=show_all)
+    if as_json:
+        echo_json([{k: v for k, v in r.items() if k != "options_json"} for r in rows])
+        return
+    if not rows:
+        typer.echo("no proposals waiting" if not show_all else "no proposals")
+        return
+    for r in rows:
+        state_mark = {"pending": "待確認", "applied": "已套用", "decided": "已決定"}.get(r["status"], r["status"])
+        current = r["decided_zh"] or r["chosen_zh"]
+        typer.echo(f"#{r['id']} [{state_mark}] {r['label']}  ×{r['importance']}  → {current}")
+        for i, o in enumerate(r["options"], 1):
+            typer.echo(f"    {i}. {o['zh']}　{o['reason']}")
+    if any(r["status"] == "pending" for r in rows):
+        typer.echo("\nchoose: ncte names decide <book> --id N --pick K   (or --zh TEXT, or --accept-all)")
+
+
+@names_app.command("decide")
+def names_decide(epub: Annotated[str, typer.Argument()],
+                 pid: Annotated[int | None, typer.Option("--id", help="proposal id (see `names proposals`)")] = None,
+                 pick: Annotated[int | None, typer.Option("--pick", help="option number")] = None,
+                 zh: Annotated[str | None, typer.Option("--zh", help="your own rendering")] = None,
+                 accept_all: Annotated[bool, typer.Option("--accept-all", help="take the suggestion for every pending item")] = False) -> None:
+    """Choose a rendering (human decision: kept for this and later volumes, never overwritten)."""
+    from .analysis.naming import decide, pending
+
+    book = _book(epub)
+    conn = state.conn
+    if accept_all:
+        rows = pending(conn, book.id)
+        with Transaction(conn):
+            for r in rows:
+                decide(conn, book.id, r["id"], r["chosen_zh"])
+        typer.echo(f"accepted {len(rows)} suggestion(s)")
+        return
+    if pid is None or (pick is None) == (zh is None):
+        raise NCTEError("give --id with exactly one of --pick or --zh (or use --accept-all)")
+    row = next((r for r in pending(conn, book.id, include_done=True) if r["id"] == pid), None)
+    if row is None:
+        raise NCTEError(f"unknown proposal id {pid}")
+    if pick is not None:
+        if not 1 <= pick <= len(row["options"]):
+            raise NCTEError(f"--pick must be 1–{len(row['options'])}")
+        zh = row["options"][pick - 1]["zh"]
+    assert zh is not None
+    with Transaction(conn):
+        out = decide(conn, book.id, pid, zh)
+    left = len(pending(conn, book.id))
+    typer.echo(f"{out['label']} → {out['zh']}" + (f"   ({left} still pending)" if left else "   (all decided)"))
+
+
+@names_app.command("propose")
+def names_propose(epub: Annotated[str, typer.Argument()],
+                  budget_usd: Annotated[float, typer.Option("--budget-usd")] = 0.5,
+                  fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
+    """Propose renderings for a volume that was already read (analysed) — e.g. before retranslating it."""
+    from .cli import _run
+    from .translation.orchestrator import RunOptions
+
+    cfg = state.cfg
+    book = _book(epub)
+    opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
+                      client="fake" if fake else "openrouter", naming_only=True)
+    _run(book, opts, fake=fake, cfg=cfg)
+    typer.echo(f"see: ncte names proposals {epub}")
 
 
 # --------------------------------------------------------------------------- series style guide (ADR-022)

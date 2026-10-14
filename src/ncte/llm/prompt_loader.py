@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ..errors import ConfigError
 
-TASKS = ("translate", "scene_analyze", "memory_update", "review")
+TASKS = ("translate", "scene_analyze", "memory_update", "naming", "review")
 
 
 @dataclass(frozen=True)
