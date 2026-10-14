@@ -125,3 +125,19 @@ def test_pronoun_address_kept_without_the_models_rendering(conn, cfg, fixtures):
     row = conn.execute("SELECT form_zh, origin FROM address_terms WHERE form_ja='お前'").fetchone()
     assert row is not None and row["form_zh"] is None  # 你/妳/您 is decided by naming, not copied
 
+
+
+def test_decided_rendering_reaches_the_scene_of_first_use(conn, cfg, fixtures):
+    from ncte.memory.address import context_items
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    r = conn.execute("SELECT a.*, u.ordinal, u.scene_id FROM address_terms a JOIN units u ON u.id=a.first_unit_id "
+                     "WHERE form_ja='カイト'").fetchone()
+    start = conn.execute("SELECT start_ordinal FROM scenes WHERE id=?", (r["scene_id"],)).fetchone()[0]
+    names = {r["speaker_id"]: "米娜", r["addressee_id"]: "海斗"}
+    text = "「カイト、遅いですよ」"
+    assert context_items(conn, book.id, start, text, set(), names, upto=r["ordinal"]) == []  # not decided: no
+    conn.execute("UPDATE address_terms SET form_zh='阿海', zh_origin='human' WHERE id=?", (r["id"],))
+    items = context_items(conn, book.id, start, text, set(), names, upto=r["ordinal"])
+    assert [(i["ja"], i["zh"]) for i in items] == [("カイト", "阿海")]
+    assert context_items(conn, book.id, start, text, set(), names, upto=r["ordinal"] - 1) == []  # not before it

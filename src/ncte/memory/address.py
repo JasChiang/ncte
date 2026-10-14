@@ -170,16 +170,25 @@ def harvest_book(conn: sqlite3.Connection, book_id: str) -> int:
                for r in conn.execute("SELECT id FROM scenes WHERE book_id=? ORDER BY start_ordinal", (book_id,)).fetchall())
 
 
+DECIDED = ("human", "naming")
+
+
 def visible_terms(conn: sqlite3.Connection, book_id: str, horizon: int, text: str | None = None,
-                  speakers: set[str] | None = None, present: set[str] | None = None) -> list[sqlite3.Row]:
+                  speakers: set[str] | None = None, present: set[str] | None = None,
+                  upto: int | None = None) -> list[sqlite3.Row]:
     """Address terms first used before story position (book, ``horizon``); optionally only forms in ``text``
-    or used by ``speakers`` for someone ``present``. Sorted by first use (a change of form shows as a later row)."""
+    or used by ``speakers`` for someone ``present``. Sorted by first use (a change of form shows as a later row).
+
+    A form whose rendering was *decided* (by a human or by naming) and that occurs in ``text`` is also given when it
+    is first used here, between ``horizon`` and ``upto`` — otherwise the decision would miss its first scene."""
     hz = pos(conn, book_id, horizon)
+    end = pos(conn, book_id, upto) if upto is not None else hz
     vols = volumes(conn)
     t = match_text(text) if text is not None else None
     out = []
     for r in conn.execute(f"SELECT * FROM address_terms WHERE {SERIES_SCOPE}", (book_id,)):
-        if (vols.get(r["book_id"], 1.0), r["first_ordinal"]) >= hz:
+        first = (vols.get(r["book_id"], 1.0), r["first_ordinal"])
+        if first >= hz and not (first <= end and t is not None and r["form_ja"] in t and r["zh_origin"] in DECIDED):
             continue
         if t is not None and r["form_ja"] not in t and not (
                 speakers and r["speaker_id"] in speakers and present is not None and r["addressee_id"] in present):
@@ -189,12 +198,13 @@ def visible_terms(conn: sqlite3.Connection, book_id: str, horizon: int, text: st
 
 
 def context_items(conn: sqlite3.Connection, book_id: str, horizon: int, text: str, speakers: set[str],
-                  names: dict[str, str], present: set[str] | None = None, limit: int = 12) -> list[dict[str, Any]]:
+                  names: dict[str, str], present: set[str] | None = None, limit: int = 12,
+                  upto: int | None = None) -> list[dict[str, Any]]:
     """Translation payload: forms occurring in the batch, plus how this batch's speakers usually call the
     characters present in the scene (the form they would use if they named them)."""
     vols = volumes(conn)
     out = []
-    for r in visible_terms(conn, book_id, horizon, text, speakers, present or set()):
+    for r in visible_terms(conn, book_id, horizon, text, speakers, present or set(), upto=upto):
         if r["speaker_id"] not in names or r["addressee_id"] not in names:
             continue
         item: dict[str, Any] = {"speaker": names[r["speaker_id"]],
