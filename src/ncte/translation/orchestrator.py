@@ -272,6 +272,11 @@ class Orchestrator:
         pin, pout = self.pricing.per_million()
         self.log(f"model {self.model}: ${pin:.4f}/M input, ${pout:.4f}/M output ({src})")
         check_reasoning_effort(self.cfg, self.pricing)
+        params = self.pricing.supported_parameters
+        if self.cfg.openrouter.temperature is not None and params and "temperature" not in params:
+            # e.g. Claude Sonnet 5.5 on OpenRouter: with require_parameters a temperature finds no endpoint at all
+            self._note(f"{self.model} does not accept temperature; sending none (model default)")
+            self.cfg.openrouter.temperature = None
         mode: StructuredMode = self.pricing.structured_mode  # type: ignore[assignment]
         if mode != "json_schema":
             self._note(f"{self.model} does not advertise structured_outputs; using {mode} + strict local "

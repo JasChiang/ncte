@@ -87,7 +87,8 @@ class FakeLLM:
 
     def __init__(self, *, models: list[str] | None = None, responders: dict[str, Responder] | None = None,
                  faults: dict[str, list[str]] | None = None, structured: bool = True,
-                 blocked_terms: list[str] | None = None):
+                 blocked_terms: list[str] | None = None, temperature: bool = True):
+        self.temperature = temperature
         self.models = models or ["google/gemini-3.8-flash", "fake/model"]
         self.responders = {**DEFAULTS, **(responders or {})}
         self.faults = {k: list(v) for k, v in (faults or {}).items()}
@@ -99,7 +100,7 @@ class FakeLLM:
         self._n = 0
 
     def list_models(self) -> list[dict[str, Any]]:
-        params = ["max_tokens", "temperature", "response_format", "reasoning"]
+        params = ["max_tokens", "response_format", "reasoning"] + (["temperature"] if self.temperature else [])
         if self.structured:
             params.append("structured_outputs")
         return [{"id": m, "name": f"Fake {m}", "context_length": 1_000_000, "supported_parameters": params,
