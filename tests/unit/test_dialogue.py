@@ -55,13 +55,13 @@ def test_name_spoken_to_is_not_the_speaker():
     assert ("u0", 0) not in ev
 
 
-def test_neighbouring_tag_yields_to_the_model_but_same_paragraph_tag_does_not():
+def test_disputed_tag_yields_to_the_model_as_an_inference():
     _, _, ev = ev_for(["「な、なに？」", "　ミナはすぐに答えない。"])
     llm = LlmClaim("c_kaito", "inferred", [Candidate("c_kaito", {"action", "continuity"}, ["u0"], "llm")])
     r = res(ev[("u0", 0)], llm)
     assert (r.speaker_id, r.status) == ("c_kaito", "inferred")
     _, _, ev = ev_for(["「な、なに？」とミナは答えた。"])
-    assert res(ev[("u0", 0)], llm).speaker_id == "c_mina"
+    assert (res(ev[("u0", 0)], llm).speaker_id, res(ev[("u0", 0)], llm).status) == ("c_kaito", "inferred")
 
 
 def test_action_is_not_explicit():
@@ -86,9 +86,12 @@ def res(program=(), llm=None, head=None):
 
 def test_resolution_known_speaker():
     _, _, ev = ev_for(["「行こう」とカイトは言った。"])
+    assert (res(ev[("u0", 0)], None).speaker_id, res(ev[("u0", 0)], None).status) == ("c_kaito", "explicit")
+    agree = LlmClaim("c_kaito", "inferred", [Candidate("c_kaito", {"dialogue_tag"}, ["u0"], "llm")])
+    assert res(ev[("u0", 0)], agree).status == "explicit"
+    # disputed: the model's reading is kept, but only as an inference
     r = res(ev[("u0", 0)], LlmClaim("c_mina", "explicit", [Candidate("c_mina", {"first_person"}, ["u0"], "llm")]))
-    assert (r.speaker_id, r.status) == ("c_kaito", "explicit")
-    assert any("contradicted by explicit dialogue tag" in n for n in r.notes)
+    assert (r.speaker_id, r.status) == ("c_mina", "inferred")
 
 
 def test_resolution_llm_explicit_downgraded():

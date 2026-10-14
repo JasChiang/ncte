@@ -1,8 +1,9 @@
 """Sequence-level speaker attribution: reconcile program evidence with the LLM's hypotheses.
 
 Status rules (spec §5.1, §5.3):
-* ``explicit``  – only from a program-detected dialogue tag (speech verb + known name), from a
-  continuation of an explicit quote, or from a human. The LLM alone can never make a speaker explicit.
+* ``explicit``  – only from a program-detected dialogue tag (speech verb + known name) the LLM does not dispute,
+  from a continuation of an explicit quote, or from a human. The LLM alone can never make a speaker explicit;
+  when it disputes a tag, its speaker is kept as ``inferred`` (the tag is a pattern match, not a reading).
 * ``inferred``  – a candidate supported by strong-but-indirect evidence (adjacent action, address,
   knowledge, continuity) or by the LLM with weak (style) evidence only.
 * ``unknown``   – no candidate, or conflicting strong candidates. ``speaker_id`` is then ``None``.
@@ -73,12 +74,12 @@ def resolve(program_ev: list[TagEvidence], llm: LlmClaim | None, head: Resolutio
     if len(tagged) == 1:
         sid = next(iter(tagged))
         if llm and llm.speaker_ref and llm.speaker_ref != sid and llm.status != "unknown":
-            if all(e.adjacent for e in program_ev if e.kind == "dialogue_tag"):
-                # a tag in the neighbouring paragraph often belongs to another line (「安達はすぐに答えない」):
-                # the model, reading the whole exchange, decides — as an inference, not a fact
-                return Resolution(llm.speaker_ref, "inferred", "llm", cands, notes + [
-                    f"LLM proposed {llm.speaker_ref} against a tag for {sid} in the neighbouring paragraph (LLM kept)"])
-            notes.append(f"LLM proposed {llm.speaker_ref}, contradicted by explicit dialogue tag (ignored)")
+            # a pattern match is evidence, not understanding (「…と日野に声をかけた」, a tag that belongs to the
+            # previous line): the model, reading the whole exchange, decides — as an inference, not a fact
+            where = "the neighbouring paragraph" if all(e.adjacent for e in program_ev if e.kind == "dialogue_tag") \
+                else "the same paragraph"
+            return Resolution(llm.speaker_ref, "inferred", "llm", cands, notes + [
+                f"LLM proposed {llm.speaker_ref} against a tag for {sid} in {where} (LLM kept)"])
         return Resolution(sid, "explicit", "program", cands, notes)
     if len(tagged) > 1:
         return Resolution(None, "unknown", "program", cands, notes + [f"conflicting dialogue tags: {sorted(tagged)}"])
