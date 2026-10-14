@@ -94,10 +94,12 @@ def test_volume_two_sees_volume_one_memory(conn, cfg, fixtures, tmp_path):
     run(conn, cfg, b1, FakeLLM(responders=RESPONDERS))
     fake = FakeLLM(responders=RESPONDERS)
     run(conn, cfg, b2, fake)
-    p = next(p for p, c in zip(fake.payloads, fake.calls, strict=True) if c.stage == "translate")
-    blob = json.dumps(p["memory"], ensure_ascii=False)
-    assert "把銀之鑰交給" in blob and "真實身分是" in blob  # facts from volume 1 (incl. the chapter-3 reveal)
-    assert any(c["name_ja"] == "ミナ" for c in p["characters"])
+    ps = [p for p, c in zip(fake.payloads, fake.calls, strict=True) if c.stage == "translate" and "memory" in p]
+    # a volume-1 fact (the chapter-3 reveal) reaches the volume-2 batch it relates to; facts unrelated to the
+    # batch's text (the key handed over in chapter 1) are not sent just because a character is present
+    blob = json.dumps([p["memory"] for p in ps], ensure_ascii=False)
+    assert "真實身分是" in blob and "把銀之鑰交給" not in blob
+    assert any(c["name_ja"] == "ミナ" for c in ps[0]["characters"])
 
 
 def test_cli_series_folders_and_legacy_migration(tmp_path, fixtures):

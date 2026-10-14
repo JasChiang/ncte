@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from typing import Any
 
@@ -94,13 +95,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
     same_ch = [s["summary"] for s in summaries if (s["book_id"], s["chapter_ref"]) == here]
     prev_ch = [s["summary"] for s in summaries if (s["book_id"], s["chapter_ref"]) != here]
     present_ids = {p["character_id"] for p in present}
-    facts = []
-    for f in vis.visible_facts(conn, book_id, horizon):
-        if f["subject"] in present_ids or any(p["name_ja"] in (f["subject"] + f["object"]) for p in present) \
-                or f["subject"] in scene_text:
-            facts.append({"subject": names.get(f["subject"], f["subject"]), "predicate": f["predicate"],
-                          "object": f["object"], "type": f["fact_type"], "certainty": f["certainty"],
-                          "viewpoint": f["source_viewpoint"]})
+    batch_plain = match_text(" ".join(r["plain_text"] for r in batch_rows))
+    facts = select_facts(vis.visible_facts(conn, book_id, horizon), batch_plain, present, names, limit=max_evidence)
     props = [{"item": p["name_ja"], "holder": names.get(p["holder_character_id"]) if p["holder_character_id"] else None}
              for p in vis.visible_props(conn, book_id, horizon) if p["name_ja"] in scene_text]
     mem: dict[str, Any] = {
@@ -135,6 +131,46 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
     if address:
         out["address_terms"] = address
     return out
+
+
+_KEY = re.compile(r"[\u3400-\u9fff\u30a0-\u30ff々ー]")
+_IDS = re.compile(r"(?<![0-9A-Za-z_])c_[0-9a-f]{12}(?![0-9a-f])")
+
+
+def _grams(text: str) -> set[str]:
+    """Character bigrams that carry meaning (at least one kanji or katakana): particles and endings left out."""
+    t = re.sub(r"\s", "", text)
+    return {t[i:i + 2] for i in range(len(t) - 1) if _KEY.search(t[i:i + 2])}
+
+
+def select_facts(rows: list[Any], batch_text: str, present: list[dict[str, Any]], names: dict[str, str], *,
+                 limit: int = 8, min_score: float = 1.0) -> list[dict[str, Any]]:
+    """The facts most related to *this batch* (not every fact about whoever is present): overlap between the
+    batch's words and each fact's original evidence sentence, plus a bonus when the batch names the fact's
+    subject. Each fact carries its Japanese evidence so the model reads the source, not only our paraphrase."""
+    bg = _grams(batch_text)
+    named = {p["character_id"] for p in present if any(n and n in batch_text for n in [p["name_ja"], *p["aliases_ja"]])}
+    present_ids = {p["character_id"] for p in present}
+    scored = []
+    for i, f in enumerate(rows):
+        if not (f["subject"] in present_ids or f["subject"] in batch_text
+                or any(p["name_ja"] in (f["subject"] + f["object"]) for p in present)):
+            continue
+        quote = match_text(f["evidence_quote"] or "")
+        qg = _grams(quote)
+        overlap = len(bg & qg) / (len(qg) ** .5) if qg else 0.0
+        score = overlap + (1.5 if f["subject"] in named else 0) + i / max(1, len(rows)) * .3  # later facts: closer
+        if score >= min_score:
+            scored.append((score, i, f))
+    keep = sorted(sorted(scored, key=lambda x: -x[0])[:limit], key=lambda x: x[1])  # most relevant, story order
+
+    def nm(text: str | None) -> str:
+        return _IDS.sub(lambda m: names.get(m.group(0), m.group(0)), text or "")
+
+    return [{"subject": names.get(f["subject"], f["subject"]), "predicate": nm(f["predicate"]), "object": nm(f["object"]),
+             "type": f["fact_type"], "certainty": f["certainty"],
+             **({"viewpoint": nm(f["source_viewpoint"])} if f["source_viewpoint"] else {}),
+             "source": match_text(f["evidence_quote"] or "")[:90]} for _, _, f in keep]
 
 
 def scene_chapter(conn: sqlite3.Connection, scene: sqlite3.Row) -> str:

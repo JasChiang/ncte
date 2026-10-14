@@ -145,3 +145,16 @@ def test_rerunning_memory_update_does_not_duplicate(conn, cfg, fixtures):
     run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context", force=True)
     assert conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == n_facts
     assert conn.execute("SELECT COUNT(*) FROM memory_fts WHERE kind IN ('fact','summary')").fetchone()[0] == n_fts
+
+
+def test_facts_are_chosen_by_relevance_and_carry_their_source():
+    from ncte.memory.retrieval import select_facts
+
+    rows = [{"subject": "c_000000000001", "predicate": "把銀之鑰交給", "object": "ミナ", "fact_type": "objective",
+             "certainty": "explicit", "source_viewpoint": None, "evidence_quote": "カイトは銀の鍵をミナに手渡した"},
+            {"subject": "c_000000000001", "predicate": "喜歡", "object": "釣魚", "fact_type": "objective",
+             "certainty": "explicit", "source_viewpoint": None, "evidence_quote": "カイトは釣りが趣味だ"}]
+    present = [{"character_id": "c_000000000001", "name_ja": "カイト", "aliases_ja": []}]
+    got = select_facts(rows, "ミナは銀の鍵を握りしめた", present, {"c_000000000001": "海斗"})
+    assert [f["predicate"] for f in got] == ["把銀之鑰交給"]  # the fishing fact has nothing to do with this batch
+    assert got[0]["source"] == "カイトは銀の鍵をミナに手渡した" and got[0]["subject"] == "海斗"
