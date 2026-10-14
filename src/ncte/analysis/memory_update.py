@@ -176,12 +176,13 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
                 or _norm(at.term) not in quote or not acceptable_glossary_term(at.term):
             rej(at.model_dump(), "address term: term/evidence_quote not found verbatim")
             continue
-        if clean(at.term).strip() in PRONOUNS | ADDRESS_PRONOUNS:  # 「あなた」 is not a form of address to keep
-            rej(at.model_dump(), "address term: pronoun")
-            continue
+        # a pronoun (「あなた」「お前」) is kept per speaker → addressee, but its rendering (妳／你／您／老公 …)
+        # depends on who is addressed: naming decides it, the memory model's guess is not kept
+        pronoun = clean(at.term).strip() in PRONOUNS | ADDRESS_PRONOUNS
         first = min(ev, key=lambda u: ordinal[u])
         upsert_address(conn, book_id, at.speaker_ref, at.addressee_ref, clean(at.term).strip(), ordinal=ordinal[first],
-                       unit_id=first, origin="llm", certainty="inferred", form_zh=at.term_zh.strip()[:24] or None,
+                       unit_id=first, origin="llm", certainty="inferred",
+                       form_zh=None if pronoun else (at.term_zh.strip()[:24] or None),
                        quote=at.evidence_quote, note=at.note[:200] or None)
         stats["address_terms"] += 1
 

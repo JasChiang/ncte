@@ -231,3 +231,23 @@ def test_proposals_keep_examples_out_of_the_request(conn, cfg, fixtures, low_thr
     assert "_context" not in json.dumps(sent, ensure_ascii=False)
     p = naming.pending(conn, book.id)[0]
     assert p["context"] and all("カイト" in c["text"] and c["at"] for c in p["context"])
+
+
+def test_pronoun_address_always_reviewed_when_frequent(conn, cfg, fixtures, low_thresholds):
+    from ncte.llm.schemas import NamingOutput
+    from ncte.memory.address import upsert
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    us = _units(conn, book.id)
+    a, _ = upsert_character(conn, book.id, "ミナ", name_zh="米娜", aliases=[], unit_id=us[0]["id"],
+                            ordinal=us[0]["ordinal"], origin="t")
+    b, _ = upsert_character(conn, book.id, "カイト", name_zh="海斗", aliases=[], unit_id=us[0]["id"],
+                            ordinal=us[0]["ordinal"], origin="t")
+    upsert(conn, book.id, a, b, "あなた", ordinal=us[1]["ordinal"], unit_id=us[1]["id"], origin="llm",
+           certainty="inferred")
+    payload = naming.build_naming_payload(conn, book.id)
+    item = next(x for x in payload["address"] if x["ja"] == "あなた")
+    assert item["pronoun"] is True
+    out = NamingOutput.model_validate({"address": [{"ref": item["ref"], "zh": "你", "reason": "", "alternatives": []}]})
+    naming.apply_naming(conn, book.id, payload, out)
+    assert [p["label"] for p in naming.pending(conn, book.id)] == ["米娜 → 海斗：あなた"]

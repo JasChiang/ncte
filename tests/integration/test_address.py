@@ -112,7 +112,7 @@ def test_cli_address_list_and_set(tmp_path, fixtures):
     assert bad.exit_code != 0 and "unknown character" in str(bad.exception)
 
 
-def test_pronouns_are_not_address_terms(conn, cfg, fixtures):
+def test_pronoun_address_kept_without_the_models_rendering(conn, cfg, fixtures):
     def mem(payload, req):
         out = memory_update(payload, req)
         mina, kaito, u = known(payload, "ミナ"), known(payload, "カイト"), uid(payload, "誰だ、お前")
@@ -122,5 +122,6 @@ def test_pronouns_are_not_address_terms(conn, cfg, fixtures):
         return out
 
     run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "memory_update": mem}), mode="context")
-    assert conn.execute("SELECT count(*) FROM address_terms WHERE form_ja='お前'").fetchone()[0] == 0
-    assert conn.execute("SELECT count(*) FROM memory_rejections WHERE reason='address term: pronoun'").fetchone()[0] == 1
+    row = conn.execute("SELECT form_zh, origin FROM address_terms WHERE form_ja='お前'").fetchone()
+    assert row is not None and row["form_zh"] is None  # 你/妳/您 is decided by naming, not copied
+

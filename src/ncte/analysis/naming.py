@@ -106,11 +106,14 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
     done_a = _proposed(conn, "address")
     where, ids = scope_clause(conn, book_id)
     address = []
+    from ..memory.address import _PRONOUNS
+
     for a in conn.execute(f"SELECT * FROM address_terms WHERE {where} AND (zh_origin IS NULL OR zh_origin!='human') "
                           "AND uses>0 AND (book_id=? OR last_book_id=?) ORDER BY uses DESC", (*ids, book_id, book_id)):
         if str(a["id"]) in done_a:
             continue
         address.append({"ref": str(a["id"]), "speaker": who.get(a["speaker_id"], a["speaker_id"]),
+                        **({"pronoun": True} if a["form_ja"] in _PRONOUNS else {}),
                         "to": "（自稱）" if a["speaker_id"] == a["addressee_id"] else who.get(a["addressee_id"], a["addressee_id"]),
                         "ja": a["form_ja"], "zh": a["form_zh"], "uses": a["uses"],
                         **({"note": a["note"]} if a["note"] else {}),
@@ -166,7 +169,8 @@ def apply_naming(conn: sqlite3.Connection, book_id: str, payload: dict[str, Any]
                 _set_name(conn, book_id, src["ja"], zh)
             else:
                 importance = int(src["uses"])
-                needs = importance >= REVIEW_ADDRESS_USES and len(options) > 1
+                # a pronoun's rendering is a choice about the addressee (妳／你／您): always worth a look when used often
+                needs = importance >= REVIEW_ADDRESS_USES and (len(options) > 1 or bool(src.get("pronoun")))
                 label = f"{src['speaker']} → {src['to']}：{src['ja']}"
                 conn.execute("UPDATE address_terms SET form_zh=?, zh_origin='naming', updated_at=? WHERE id=? AND "
                              "(zh_origin IS NULL OR zh_origin!='human')", (zh, utcnow(), int(it.ref)))
