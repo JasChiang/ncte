@@ -144,10 +144,24 @@ def test_context_mode_review_per_scene(conn, cfg, fixtures, seeded):
     fake = FakeLLM(responders={"translate": defective, "review": review_responder})
     book, rid, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
     assert s.status == "completed"
-    stages = [c.stage for c in fake.calls]
-    # review happens right after the first scene's memory update, before the next scene's analysis
+    stages = [c.stage.split(":")[0] for c in fake.calls]
+    # read first (ADR-023): every scene is analysed and remembered before the first translation …
+    first_tr = stages.index("translate")
+    assert {"scene_analyze", "memory_update"}.isdisjoint(stages[first_tr:])
+    # … and review still runs per scene, between the translations of consecutive scenes
     first_review = stages.index("review")
-    assert stages[first_review - 1] == "memory_update" or stages[first_review - 1] == "translate"
+    assert "translate" in stages[first_review:]
+
+
+def test_context_mode_interleaved_when_read_first_off(conn, cfg, fixtures, seeded):
+    cfg.review.automatic_review = "flagged_only"
+    cfg.context.read_first = False
+    fake = FakeLLM(responders={"translate": defective, "review": review_responder})
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    assert s.status == "completed"
+    stages = [c.stage for c in fake.calls]
+    first_review = stages.index("review")
+    assert stages[first_review - 1] in ("memory_update", "translate")
     assert "scene_analyze" in stages[first_review:]
 
 

@@ -8,6 +8,9 @@ volume 1 (even when translated later) never sees what volumes 2+ revealed.
   (``horizon`` = first unit of the scene being processed)
 * characters: visible once their first mention is ≤ the given position (current scene may be analysed)
 * a retraction is honoured only if the retracting fact itself was revealed before the horizon
+* a character's names (canonical name, aliases): the form that appeared first, plus every other form once it has
+  appeared and its link to the character (an identity reveal) was revealed — matters most when the whole volume
+  was read before translating (ADR-023): 「謎の少女」 must not be shown as 「かぐや」 before the reveal
 """
 
 from __future__ import annotations
@@ -83,3 +86,52 @@ def visible_examples(conn: sqlite3.Connection, character_id: str, horizon: int, 
     rows.sort(key=lambda r: (r["verification_status"] != "human_verified", tuple(-x for x in _p(r, vols, "book_id",
                                                                                                  "ordinal"))))
     return rows[:limit]
+
+
+FormPositions = tuple[dict[str, Pos], dict[str, Pos]]
+
+
+def form_positions(conn: sqlite3.Connection, book_id: str) -> FormPositions:
+    """(first appearance of each name form, reveal of the earliest accepted link touching the form)."""
+    where, ids = scope_clause(conn, book_id, "g.book_id")
+    first: dict[str, Pos] = {}
+    for r in conn.execute("SELECT g.source_term, b.volume_index, u.ordinal FROM glossary g JOIN units u ON "
+                          f"u.id=g.first_unit_id JOIN books b ON b.id=u.book_id WHERE {where}", ids):
+        first[r[0]] = (float(r[1]), int(r[2]))
+    vols = volumes(conn)
+    where, ids = scope_clause(conn, book_id)
+    linked: dict[str, Pos] = {}
+    for r in conn.execute(f"SELECT term, target_term, book_id, revealed_ordinal FROM entity_links WHERE {where} "
+                          "AND status='accepted' AND revealed_ordinal IS NOT NULL", ids):
+        p = (vols.get(r[2], 1.0), int(r[3]))
+        for t in (r[0], r[1]):
+            if t not in linked or p < linked[t]:
+                linked[t] = p
+    return first, linked
+
+
+def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
+                   forms_at: FormPositions | None = None) -> dict[str, Any] | None:
+    """The names of character row ``c`` as known at ``upto``: ``name_ja``/``name_zh``/``aliases_ja``.
+
+    The form that appeared first is the anchor; any other form is shown once it has appeared *and* its link to
+    the character was revealed (forms without a recorded link count as known with the character). If the
+    canonical name is not shown yet, the anchor stands in for it. None before any form has appeared."""
+    import json
+
+    hz = pos(conn, book_id, upto)
+    first, linked = form_positions(conn, book_id) if forms_at is None else forms_at
+    known_from = pos(conn, c["book_id"], c["known_from_ordinal"])
+    names = list(dict.fromkeys([c["canonical_name"], *json.loads(c["aliases_json"] or "[]")]))
+    at = {n: first.get(n, known_from) for n in names}
+    anchor = min(names, key=lambda n: at[n])
+    shown = [n for n in names if at[n] <= hz and (n == anchor or linked.get(n, (0.0, 0)) <= hz)]
+    if not shown:
+        return None
+    head = c["canonical_name"] if c["canonical_name"] in shown else anchor
+    if head == c["canonical_name"]:
+        zh = c["display_name_zh"]
+    else:
+        g = conn.execute("SELECT target_term FROM glossary WHERE source_term=? LIMIT 1", (head,)).fetchone()
+        zh = g[0] if g else None
+    return {"name_ja": head, "name_zh": zh, "aliases_ja": [n for n in shown if n != head]}

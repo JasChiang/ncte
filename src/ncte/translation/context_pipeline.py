@@ -1,6 +1,9 @@
 """Context-aware translation mode (spec §2.3, §5): understand → remember → translate → verify.
 
-Per scene, strictly in reading order:
+Read first (ADR-023, default): pass 1 runs steps 1 and 3 for every scene in reading order (no translation yet,
+so memory comes from the source only), pass 2 proposes renderings for names and address terms (``naming``) and
+may pause for the user's choices, pass 3 runs steps 2 and 4 scene by scene. With ``context.read_first`` off the
+steps interleave per scene:
   1. ``scene_analyze`` job  – LLM proposes characters / speakers / omitted arguments; the program
      validates everything against the source and reconciles speakers (explicit only via dialogue
      tags). If the LLM step fails, a program-only analysis is stored instead.
@@ -73,13 +76,28 @@ class ContextOrchestrator(Orchestrator):
             scenes = [r["target_id"] for r in self.conn.execute(
                 "SELECT target_id FROM jobs WHERE run_id=? AND stage IN ('scene_analyze','memory_update') "
                 "GROUP BY target_id ORDER BY MIN(seq)", (self.run_id,))]
+        if self.cfg.context.read_first:
+            self.read_pass(scenes)
+            if self._stop_reason or not self.naming_pass():
+                return
+            self.translate_pass(scenes)
+        else:
+            self.interleaved(scenes)
+        if not self._stop_reason:
+            self.run_meta()
+
+    def _scene_pending(self, sid: str) -> tuple[list[sqlite3.Row], bool]:
+        pending = [r for r in self.pending_rows(meta=False) if r["scene_id"] == sid]
+        jobs = (self._job("scene_analyze", sid), self._job("memory_update", sid))
+        return pending, any(j is not None and j["status"] in ("pending", "running") for j in jobs)
+
+    def interleaved(self, scenes: list[str]) -> None:
         positions = self.body_positions()
         for i, sid in enumerate(scenes):
             if self._stop_reason:
                 break
-            pending = [r for r in self.pending_rows(meta=False) if r["scene_id"] == sid]
-            job_a, job_m = self._job("scene_analyze", sid), self._job("memory_update", sid)
-            if not pending and all(j is None or j["status"] not in ("pending", "running") for j in (job_a, job_m)):
+            pending, analysis_due = self._scene_pending(sid)
+            if not pending and not analysis_due:
                 continue
             self.log(f"scene {sid} ({i + 1}/{len(scenes)})")
             self.stage_scene_analyze(sid)
@@ -87,7 +105,33 @@ class ContextOrchestrator(Orchestrator):
                                           position=positions), concurrency=1)
             self.stage_memory_update(sid)
             self.after_scene(sid)
-        self.run_meta()
+
+    def read_pass(self, scenes: list[str]) -> None:
+        """Pass 1: understand and remember every scene before anything is translated."""
+        due = [sid for sid in scenes if self._scene_pending(sid)[1]]
+        for i, sid in enumerate(due):
+            if self._stop_reason:
+                break
+            self.log(f"read {sid} ({i + 1}/{len(due)})")
+            self.stage_scene_analyze(sid)
+            self.stage_memory_update(sid)
+
+    def naming_pass(self) -> bool:
+        """Pass 2: propose renderings. False when the run stops here for the user's choices."""
+        return True
+
+    def translate_pass(self, scenes: list[str]) -> None:
+        positions = self.body_positions()
+        for i, sid in enumerate(scenes):
+            if self._stop_reason:
+                break
+            pending, _ = self._scene_pending(sid)
+            if not pending:
+                continue
+            self.log(f"translate {sid} ({i + 1}/{len(scenes)})")
+            self.run_batches(make_batches(pending, self.cfg.translation.unit_target_japanese_chars, by_scene=True,
+                                          position=positions), concurrency=1)
+            self.after_scene(sid)
 
     def after_scene(self, sid: str) -> None:
         self.review(self.translated_unit_ids(sid))

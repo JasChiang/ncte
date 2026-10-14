@@ -79,6 +79,8 @@ class ContextConfig(_Strict):
     scene_analysis: bool = True  # LLM scene / speaker analysis (program-only quote analysis always runs)
     memory_update: bool = True  # LLM memory extraction after each scene
     include_memory: bool = True  # inject characters / summaries / facts into translation requests
+    read_first: bool = True  # ADR-023: analyse + remember every scene first, then name, then translate
+    naming: Literal["review", "auto", "off"] = "review"  # ADR-023: propose renderings; review = pause for choices
 
 
 class ExportConfig(_Strict):

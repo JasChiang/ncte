@@ -53,11 +53,15 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
         (book_id, scene["id"], upto)))
     state = json.loads(scene["state_json"] or "{}")
     participants = {p["character_id"] for p in state.get("participants", [])}
-    chars = vis.visible_characters(conn, book_id, upto)
-    names = {c["id"]: (c["display_name_zh"] or c["canonical_name"]) for c in chars}
+    forms_at = vis.form_positions(conn, book_id)
+    views = {c["id"]: v for c in vis.visible_characters(conn, book_id, upto)
+             if (v := vis.character_view(conn, book_id, c, upto, forms_at)) is not None}
+    chars = [c for c in vis.visible_characters(conn, book_id, upto) if c["id"] in views]
+    names = {cid: (v["name_zh"] or v["name_ja"]) for cid, v in views.items()}
     present = []
     for c in chars:
-        aliases = [c["canonical_name"], *json.loads(c["aliases_json"])]
+        v = views[c["id"]]
+        aliases = [v["name_ja"], *v["aliases_ja"]]
         if c["id"] not in participants and not any(a in scene_text for a in aliases):
             continue
         prof = json.loads(c["speech_profile_json"] or "{}")
@@ -69,8 +73,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             if tr is not None:
                 item["unit_translation"] = tr["text"]
             examples.append(item)
-        present.append({"character_id": c["id"], "name_ja": c["canonical_name"], "name_zh": c["display_name_zh"],
-                        "aliases_ja": json.loads(c["aliases_json"]), "speech_profile": prof,
+        present.append({"character_id": c["id"], "name_ja": v["name_ja"], "name_zh": v["name_zh"],
+                        "aliases_ja": v["aliases_ja"], "speech_profile": prof,
                         "verified_examples": examples})
     batch_ids = {r["id"] for r in batch_rows}
     utts = []

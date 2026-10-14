@@ -41,17 +41,17 @@ def build_memory_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         if tr is not None:
             item["translation"] = tr["text"]
         units.append(item)
-    chars = vis.visible_characters(conn, book_id, scene["end_ordinal"])
-    names = {c["id"]: c["display_name_zh"] or c["canonical_name"] for c in chars}
+    forms_at = vis.form_positions(conn, book_id)
+    views = {c["id"]: v for c in vis.visible_characters(conn, book_id, scene["end_ordinal"])
+             if (v := vis.character_view(conn, book_id, c, scene["end_ordinal"], forms_at))}
+    names = {cid: v["name_zh"] or v["name_ja"] for cid, v in views.items()}
     utts = [{"unit_id": u["unit_id"], "quote_index": u["quote_index"],
              "speaker": names.get(u["speaker_id_nullable"]) if u["speaker_id_nullable"] else None,
              "status": u["status"]}
             for u in conn.execute("SELECT * FROM utterances WHERE book_id=? AND scene_id=?", (book_id, scene["id"]))]
     text = " ".join(clean(r["plain_text"]) for r in rows)
     return {"task": "memory_update", "scene_id": scene["id"], "units": units,
-            "known_characters": [{"character_id": c["id"], "name_ja": c["canonical_name"],
-                                  "aliases_ja": json.loads(c["aliases_json"]), "name_zh": c["display_name_zh"]}
-                                 for c in chars],
+            "known_characters": [{"character_id": cid, **v} for cid, v in views.items()],
             "scene": {"utterances": utts, **json.loads(scene["state_json"] or "{}")},
             "glossary": [g for g in glossary if str(g.get("ja", "")) in text]}
 

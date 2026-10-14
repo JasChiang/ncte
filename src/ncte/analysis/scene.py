@@ -134,6 +134,7 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
                            glossary: list[dict[str, Any]]) -> dict[str, Any]:
     rows = scene_rows(conn, book_id, scene["id"])
     known = vis.visible_characters(conn, book_id, scene["start_ordinal"] - 1)
+    forms_at = vis.form_positions(conn, book_id)
     amap = repo.alias_map(known)
     texts = _unit_texts(rows)
     quotes = find_quotes(texts)
@@ -149,9 +150,9 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
         "task": "scene_analyze", "scene_id": scene["id"],
         "units": [{"unit_id": r["id"], "source": r["plain_text"]} for r in rows],
         "quotes": q_payload,
-        "known_characters": [{"character_id": c["id"], "name_ja": c["canonical_name"],
-                              "aliases_ja": json.loads(c["aliases_json"]), "name_zh": c["display_name_zh"],
-                              "speech_profile": json.loads(c["speech_profile_json"] or "{}")} for c in known],
+        "known_characters": [{"character_id": c["id"], **v, "speech_profile": json.loads(c["speech_profile_json"] or "{}")}
+                             for c in known
+                             if (v := vis.character_view(conn, book_id, c, scene["start_ordinal"] - 1, forms_at))],
         "glossary": [g for g in glossary if str(g.get("ja", "")) in scene_text],
     }
 
