@@ -134,7 +134,7 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
                     on_downgrade: Callable[[str], None] | None = None) -> tuple[BaseModel, int, StructuredMode]:
     """One logical LLM call with schema validation. Returns (parsed, request_id, mode_used)."""
     schema_model = SCHEMAS[stage.split(":")[0]]
-    system = prompt.text
+    system = prompt.render(payload)
     if correction:
         system += f"\n\n## 重要更正\n上一次的輸出未通過程式驗證：{correction}\n請嚴格依照規則與輸出格式重新輸出。\n"
     messages = [{"role": "system", "content": system},

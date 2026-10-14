@@ -7,11 +7,13 @@ invalidates cached translations even if the author forgets to bump the version n
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from ..errors import ConfigError
 
@@ -29,6 +31,24 @@ class Prompt:
     def version_id(self) -> str:
         return f"{self.task}/v{self.version}#{self.sha8}"
 
+    def render(self, payload: dict[str, Any] | None = None) -> str:
+        """The prompt for one request: ``<!-- if: a|b|text:⟦ -->…<!-- endif -->`` blocks are kept only when the
+        payload has key ``a`` or ``b`` (anywhere) or its text contains ``⟦`` — rules about data the request does not
+        carry are left out, so the model is not asked to keep them in mind. Without a payload every block is kept."""
+        if payload is None:
+            return _BLOCK.sub(lambda m: m.group(2), self.text)
+        blob = json.dumps(payload, ensure_ascii=False)
+
+        def keep(m: re.Match[str]) -> str:
+            for cond in m.group(1).split("|"):
+                cond = cond.strip()
+                if cond.startswith("text:") and cond[5:] in blob or f'"{cond}"' in blob:
+                    return m.group(2)
+            return ""
+
+        out = _BLOCK.sub(keep, self.text)
+        return re.sub(r"\n{3,}", "\n\n", out)
+
 
 def prompts_dirs() -> list[Path]:
     dirs = []
@@ -42,6 +62,7 @@ def prompts_dirs() -> list[Path]:
 
 
 _FM = re.compile(r"^---\n(.*?)\n---\n", re.S)
+_BLOCK = re.compile(r"<!-- if: *([^>]*?) *-->\n?(.*?)<!-- endif -->\n?", re.S)
 
 
 @lru_cache(maxsize=32)
