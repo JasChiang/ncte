@@ -116,8 +116,12 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
         add("cantonese", "error", f"Cantonese wording {'、'.join(canto)}: use natural Taiwan Mandarin (render dialects "
                                   f"such as Kansai-ben through tone and word choice, not Cantonese)")
     bad = sorted({ch for ch in vis if ch in NON_TW_GLYPHS})
-    if bad:
-        add("non_taiwan_glyph", "medium", f"simplified/Japanese glyphs: {''.join(bad)}")
+    drift = [ch for ch in bad if ch not in vis_src]  # not copied from the source: the output slid into Simplified
+    if drift:
+        add("non_taiwan_glyph", "error", f"simplified/Japanese glyphs {''.join(drift)}: write the whole unit in "
+                                         f"Taiwan Traditional Chinese")
+    elif bad:
+        add("non_taiwan_glyph", "medium", f"simplified/Japanese glyphs copied from the source: {''.join(bad)}")
 
     gl = list(glossary)
     flat = PH_RE.sub("", text)  # 「株式會社⟦2⟧KADOKAWA⟦/2⟧」 still contains 株式會社KADOKAWA
