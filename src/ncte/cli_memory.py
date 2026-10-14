@@ -1006,3 +1006,13 @@ def names_sync(epub: Annotated[str, typer.Argument()]) -> None:
     with Transaction(state.conn):
         n = reconcile_characters(state.conn, book.id)
     typer.echo(f"{n} duplicate characters merged")
+
+
+# --------------------------------------------------------------------------- local web UI
+@app.command()
+def gui(port: Annotated[int, typer.Option("--port")] = 8780,
+        no_open: Annotated[bool, typer.Option("--no-open", help="do not open the browser")] = False) -> None:
+    """Open the local web UI: review and edit translations, choose renderings, read the story (this computer only)."""
+    from .gui.server import serve
+
+    serve(state.ws, port=port, open_browser=not no_open)

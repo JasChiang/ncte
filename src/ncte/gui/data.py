@@ -1,0 +1,229 @@
+"""Read models for the local web UI: plain dicts/lists, JSON-ready. All reads; writes live in ``actions``."""
+
+from __future__ import annotations
+
+import json
+import re
+import sqlite3
+from collections import Counter, defaultdict
+from typing import Any
+
+from ..epub.matter import book_matter, toc_labels
+from ..epub.units import match_text
+from ..library import Book
+from ..memory.address import find_forms, name_forms
+from ..series import SERIES_SCOPE
+from ..translation.cache import latest_texts
+
+PH = re.compile(r"⟦/?\d+/?⟧")
+RUBY = re.compile(r"《[^》]*》")
+EDGE = re.compile(r"^((?:⟦\d+/?⟧)*)(.*?)((?:⟦/\d+⟧)*)$", re.S)
+
+
+def plain(text: str | None) -> str:
+    return PH.sub("", text or "")
+
+
+def split_edges(text: str) -> tuple[str, str, str]:
+    """「⟦1⟧…⟦/1⟧」 → (「⟦1⟧」, 「…」, 「⟦/1⟧」): the wrapper every paragraph carries is not shown for editing."""
+    m = EDGE.match(text or "")
+    return (m.group(1), m.group(2), m.group(3)) if m else ("", text or "", "")
+
+
+# ---------------------------------------------------------------- library / overview
+def library(ws: Any) -> list[dict[str, Any]]:
+    out = []
+    for s in ws.list_series():
+        vols = []
+        for v in s["volumes"]:
+            try:
+                conn, book = ws.open_book(v["book_id"])
+            except Exception:  # a volume whose folder is missing is listed without progress
+                vols.append({**v, "translated": None, "translatable": None})
+                continue
+            total = conn.execute("SELECT COUNT(*) FROM units WHERE book_id=? AND translatable=1", (book.id,)).fetchone()[0]
+            vols.append({**v, "translatable": total, "translated": len(latest_texts(conn, book.id))})
+        out.append({**s, "volumes": vols})
+    return out
+
+
+def overview(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
+    from ..analysis.naming import pending
+    from ..reports.qa_report import book_status
+
+    st = book_status(conn, book.id)
+    best = latest_texts(conn, book.id)
+    flagged = conn.execute("SELECT COUNT(DISTINCT unit_id) FROM qa_findings WHERE book_id=? AND status='open' AND "
+                           "severity!='low' AND unit_id IS NOT NULL", (book.id,)).fetchone()[0]
+    unknown = conn.execute("SELECT COUNT(*) FROM utterances WHERE book_id=? AND status='unknown'", (book.id,)).fetchone()[0]
+    return {"book_id": book.id, "title": book.title, **st, "spent_usd": round(sum(r["cost_usd"] or 0 for r in st["runs"]), 4),
+            "flagged_units": flagged, "unknown_speakers": unknown, "pending_names": len(pending(conn, book.id)),
+            "notes": sum(1 for t in best.values() if t["translator_note"] and t["status"] != "human"),
+            "human_edits": sum(1 for t in best.values() if t["status"] == "human")}
+
+
+# ---------------------------------------------------------------- chapters / units
+def chapters(conn: sqlite3.Connection, book: Book) -> list[dict[str, Any]]:
+    matter = book_matter(conn, book.id)
+    try:
+        labels = toc_labels(book.stored_path)
+    except Exception:
+        labels = {}
+    zh_label = {r[0]: plain(r[1]) for r in conn.execute(
+        "SELECT u.plain_text, (SELECT text FROM translations t WHERE t.unit_id=u.id ORDER BY rowid DESC LIMIT 1) "
+        "FROM units u WHERE u.book_id=? AND u.kind IN ('nav','ncx')", (book.id,)) if r[1]}
+    out = []
+    carry = ""  # a chapter's title page (TOC target, almost no text) names the file that follows it
+    for i, (href, kind) in enumerate(matter.items()):
+        r = conn.execute("SELECT MIN(ordinal), MAX(ordinal), COUNT(*) FROM units WHERE book_id=? AND resource_href=? AND "
+                         "translatable=1 AND kind IN ('text','heading')", (book.id, href)).fetchone()
+        own = next((v for k, v in labels.items() if k.endswith(href)), "")
+        if not r[2] or (own and r[2] <= 3 and kind == "story"):
+            carry = own or carry
+            if not r[2]:
+                continue
+        label, carry = (own or carry), ""
+        first = conn.execute("SELECT plain_text FROM units WHERE book_id=? AND resource_href=? AND kind IN "
+                             "('text','heading') ORDER BY ordinal LIMIT 1", (book.id, href)).fetchone()
+        title = zh_label.get(label) or label or (RUBY.sub("", first[0])[:16] if first else href)
+        out.append({"index": i, "href": href, "kind": kind, "title": title, "start": r[0], "end": r[1], "units": r[2]})
+    return out
+
+
+def units(conn: sqlite3.Connection, book: Book, *, start: int | None = None, end: int | None = None,
+          filt: str = "all", limit: int = 400) -> dict[str, Any]:
+    best = latest_texts(conn, book.id)
+    names = {r["id"]: r["display_name_zh"] or r["canonical_name"]
+             for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book.id,))}
+    q = ("SELECT * FROM units WHERE book_id=? AND translatable=1 AND kind IN ('text','heading') AND spine_index IS NOT NULL")
+    params: list[Any] = [book.id]
+    if start is not None and end is not None:
+        q += " AND ordinal BETWEEN ? AND ?"
+        params += [start, end]
+    rows = conn.execute(q + " ORDER BY ordinal", params).fetchall()
+    findings: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for f in conn.execute("SELECT unit_id, type, severity, evidence FROM qa_findings WHERE book_id=? AND status='open' "
+                          "AND unit_id IS NOT NULL", (book.id,)):
+        findings[f["unit_id"]].append({"type": f["type"], "severity": f["severity"], "evidence": (f["evidence"] or "")[:300]})
+    quotes: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for u in conn.execute("SELECT id, unit_id, quote_text, speaker_id_nullable sp, status FROM utterances WHERE book_id=? "
+                          "ORDER BY unit_id, quote_index", (book.id,)):
+        quotes[u["unit_id"]].append({"id": u["id"], "speaker": names.get(u["sp"]) if u["sp"] else None,
+                                     "status": u["status"], "quote": match_text(u["quote_text"])[:40]})
+    found: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for w in conn.execute("SELECT unit_id, term, explanation, note_zh FROM reader_notes WHERE book_id=? AND "
+                          "status!='dropped'", (book.id,)):
+        found[w["unit_id"]].append({"term": w["term"], "explanation": w["explanation"], "note": w["note_zh"] or ""})
+    out = []
+    for r in rows:
+        tr = best.get(r["id"])
+        f = findings.get(r["id"], [])
+        serious = [x for x in f if x["severity"] != "low"]
+        if filt == "flagged" and not serious:
+            continue
+        if filt == "unknown" and not any(q["status"] == "unknown" for q in quotes.get(r["id"], [])):
+            continue
+        if filt == "notes" and not (tr is not None and tr["translator_note"] or found.get(r["id"])):
+            continue
+        if filt == "human" and not (tr is not None and tr["status"] == "human"):
+            continue
+        pre, inner, post = split_edges(tr["text"] if tr is not None else "")
+        out.append({"id": r["id"], "ordinal": r["ordinal"], "kind": r["kind"], "ja": RUBY.sub("", plain(r["plain_text"])),
+                    "zh": plain(tr["text"]) if tr is not None else None, "edit": inner, "edit_pre": pre, "edit_post": post,
+                    "status": tr["status"] if tr is not None else None,
+                    "note": (tr["translator_note"] or "") if tr is not None else "",
+                    "quotes": quotes.get(r["id"], []), "findings": serious, "minor": len(f) - len(serious),
+                    "wordplay": found.get(r["id"], [])})
+        if len(out) >= limit:
+            break
+    return {"units": out, "truncated": len(out) >= limit}
+
+
+# ---------------------------------------------------------------- reading: scenes, characters, names
+def story(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
+    matter = book_matter(conn, book.id)
+    chs = chapters(conn, book)
+    ch_of = {c["href"]: c["index"] for c in chs}
+    summ = {r[0]: r[1] for r in conn.execute("SELECT scene_id, summary FROM chapter_summaries WHERE book_id=?", (book.id,))}
+    spk: dict[str, set[str]] = defaultdict(set)
+    for u in conn.execute("SELECT scene_id, speaker_id_nullable sp FROM utterances WHERE book_id=? AND sp IS NOT NULL",
+                          (book.id,)):
+        spk[u["scene_id"]].add(u["sp"])
+    by_scene: dict[str, list[sqlite3.Row]] = defaultdict(list)
+    for r in conn.execute("SELECT id, scene_id, plain_text, resource_href, ordinal FROM units WHERE book_id=? AND "
+                          "translatable=1 AND kind IN ('text','heading') ORDER BY ordinal", (book.id,)):
+        by_scene[r["scene_id"]].append(r)
+    scenes = []
+    for s in conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY start_ordinal", (book.id,)):
+        rows = by_scene.get(s["id"], [])
+        if not rows:
+            continue
+        href = rows[0]["resource_href"]
+        forms, _ = name_forms(conn, book.id, s["end_ordinal"])  # only characters known by then (ADR-022 fix)
+        named = {cid for r in rows for _, cid in find_forms(r["plain_text"], forms)}
+        scenes.append({"id": s["id"], "a": s["start_ordinal"], "b": s["end_ordinal"], "ch": ch_of.get(href),
+                       "story": matter.get(href) == "story", "summary": summ.get(s["id"], ""),
+                       "speakers": sorted(spk[s["id"]]), "who": sorted(spk[s["id"]] | named)})
+    return {"chapters": chs, "scenes": scenes}
+
+
+def characters(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
+    st = story(conn, book)
+    story_scenes = [s for s in st["scenes"] if s["story"]]
+    scene_count = Counter(c for s in story_scenes for c in s["who"])
+    in_story = {s["id"] for s in story_scenes}
+    lines = Counter(u["sp"] for u in conn.execute(
+        "SELECT speaker_id_nullable sp, scene_id FROM utterances WHERE book_id=? AND sp IS NOT NULL", (book.id,))
+        if u["scene_id"] in in_story)
+    chars = {r["id"]: r for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book.id,))}
+    facts: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for f in conn.execute("SELECT * FROM facts WHERE book_id=? AND retracted_by IS NULL ORDER BY first_revealed_ordinal",
+                          (book.id,)):
+        if f["subject"] in chars:
+            facts[f["subject"]].append({"at": f["first_revealed_ordinal"], "predicate": f["predicate"], "object": f["object"],
+                                        "type": f["fact_type"], "certainty": f["certainty"],
+                                        "viewpoint": f["source_viewpoint"], "quote": RUBY.sub("", f["evidence_quote"] or "")})
+    examples: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for e in conn.execute("SELECT e.character_id, e.raw_text, u.ordinal FROM speech_examples e JOIN units u ON "
+                          "u.id=e.unit_id WHERE u.book_id=? ORDER BY u.ordinal", (book.id,)):
+        examples[e["character_id"]].append({"at": e["ordinal"], "text": RUBY.sub("", e["raw_text"])})
+    matter_first = {c["start"]: c["kind"] for c in st["chapters"]}
+    from ..series import volume_of, volumes
+
+    vols, here = volumes(conn), volume_of(conn, book.id)
+
+    def info(ordinal: int) -> bool:
+        kinds = [k for s, k in sorted(matter_first.items()) if s <= ordinal]
+        return bool(kinds) and kinds[-1] != "story"
+
+    out = {}
+    for cid, c in chars.items():
+        cv = vols.get(c["book_id"], 1.0)
+        if cv > here or (c["book_id"] != book.id and not scene_count.get(cid)):
+            continue
+        out[cid] = {"ja": c["canonical_name"], "zh": c["display_name_zh"] or c["canonical_name"],
+                    "aka": json.loads(c["aliases_json"] or "[]"), "from": c["known_from_ordinal"] if cv == here else -1,
+                    "scenes": scene_count.get(cid, 0), "lines": lines.get(cid, 0), "facts": facts.get(cid, []),
+                    "examples": examples.get(cid, [])[:6], "info": info(c["known_from_ordinal"])}
+    address = []
+    for a in conn.execute(f"SELECT * FROM address_terms WHERE {SERIES_SCOPE} ORDER BY uses DESC", (book.id,)):
+        v = vols.get(a["book_id"], 1.0)
+        if v > here:  # first used in a later volume: not known while reading this one
+            continue
+        address.append({"speaker": a["speaker_id"], "to": a["addressee_id"], "ja": a["form_ja"], "zh": a["form_zh"],
+                        "uses": a["uses"], "at": a["first_ordinal"] if v == here else -1,
+                        "certainty": a["certainty"], "origin": a["zh_origin"]})
+    return {"characters": out, "address": address, "scenes": st["scenes"], "chapters": st["chapters"]}
+
+
+def glossary(conn: sqlite3.Connection, book: Book) -> list[dict[str, Any]]:
+    return [{"ja": g["source_term"], "zh": g["target_term"], "category": g["category"], "verified": bool(g["verified"]),
+             "origin": g["origin"], "entity": g["entity_id"], "form": g["form_type"]}
+            for g in conn.execute(f"SELECT * FROM glossary WHERE {SERIES_SCOPE} ORDER BY category, source_term", (book.id,))]
+
+
+def proposals(conn: sqlite3.Connection, book: Book, *, include_done: bool = False) -> list[dict[str, Any]]:
+    from ..analysis.naming import pending
+
+    return [{k: v for k, v in r.items() if k not in ("options_json", "context_json")}
+            for r in pending(conn, book.id, include_done=include_done)]

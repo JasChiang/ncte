@@ -129,6 +129,12 @@ ncte names proposals 書.epub --all --context   # 所有提案（含已套用的
 ```
 不想暫停可在設定檔設 `context.naming = "auto"`（直接採用建議）或 `"off"`；`context.read_first = false` 恢復逐場景交錯的舊流程。你決定的譯法在同系列之後的集數會沿用，不會再問。待確認的項目會附上幾句原文例句方便判斷。封面、目次、注意事項、後記、版權頁照常翻譯，但不做角色與劇情分析（`context.skip_book_matter`）。翻譯時仍只附上該場景之前已揭露的資訊（例如身分揭露前，角色只以當時的稱呼出現）。
 
+### 本機網頁介面
+```bash
+ncte gui            # 開啟 http://127.0.0.1:8780/ （只有這台電腦能開；Ctrl+C 結束）
+```
+對照審稿（點譯文直接修改、刪除譯註）、定名（看例句選譯法）、故事進度、角色檔案、人物關係圖（拖動「讀到」滑桿防劇透）、名詞與稱呼。翻譯與匯出目前仍用指令。
+
 ### 品質控制與人工校正
 ```bash
 ncte glossary set    ./samples/book.epub ミナ 米娜 --category character   # 列出受影響單元；只有這些會重翻
