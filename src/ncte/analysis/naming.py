@@ -111,7 +111,7 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
     done_a = _proposed(conn, "address")
     where, ids = scope_clause(conn, book_id)
     address = []
-    from ..memory.address import _PRONOUNS
+    from ..memory.address import _PRONOUNS, decided_variants
 
     for a in conn.execute(f"SELECT * FROM address_terms WHERE {where} AND (zh_origin IS NULL OR zh_origin!='human') "
                           "AND uses>0 AND (book_id=? OR last_book_id=?) ORDER BY uses DESC", (*ids, book_id, book_id)):
@@ -121,6 +121,8 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
                         **({"pronoun": True} if a["form_ja"] in _PRONOUNS else {}),
                         "to": "（自稱）" if a["speaker_id"] == a["addressee_id"] else who.get(a["addressee_id"], a["addressee_id"]),
                         "ja": a["form_ja"], "zh": a["form_zh"], "uses": a["uses"],
+                        **({"same_nickname_decided": rel} if (rel := decided_variants(
+                            conn, a["speaker_id"], a["addressee_id"], a["form_ja"])) else {}),
                         **({"note": a["note"]} if a["note"] else {}),
                         **({"sample": a["evidence_quote"][:80]} if a["evidence_quote"] else {}),
                         "_context": _quotes(conn, a["id"]) or ([{"at": a["first_ordinal"], "text": a["evidence_quote"][:90]}]
@@ -271,9 +273,9 @@ def _fix_character(conn: sqlite3.Connection, book_id: str, cid: str, option: dic
 
 def _variant_key(form: str) -> str:
     """「あだっち」「あだっちー」 are one nickname; 「安達ちゃん」 and 「あだっちー」 are not."""
-    from ..memory.address import _HONORIFIC_END
+    from ..memory.address import variant_key
 
-    return _HONORIFIC_END.sub("", form).replace("ー", "").replace("～", "")
+    return variant_key(form)
 
 
 def flag_collisions(conn: sqlite3.Connection, book_id: str) -> int:

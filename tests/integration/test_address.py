@@ -168,3 +168,20 @@ def test_memory_model_reassigns_the_name_owner_guess(conn, cfg, fixtures):
     to = conn.execute("SELECT a.addressee_id FROM address_observations o JOIN address_terms a ON a.id=o.address_id "
                       "WHERE o.utterance_id=?", (line,)).fetchall()
     assert [r[0] for r in to] == [mom]
+
+
+def test_nickname_with_honorific_builds_on_the_decided_spelling(conn, cfg, fixtures):
+    from ncte.library import import_book
+    from ncte.memory.address import decided_variants, upsert, variant_key
+    from ncte.memory.repository import upsert_character
+
+    assert variant_key("あだっつぃーくん") == variant_key("あだっついー") == variant_key("あだっつぃー")
+    assert variant_key("安達ちゃん") != variant_key("あだっちー")
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
+    hino, adachi = (upsert_character(conn, book.id, n, name_zh=n, aliases=[], unit_id=u[0], ordinal=u[1], origin="t")[0]
+                    for n in ("日野", "安達"))
+    upsert(conn, book.id, hino, adachi, "あだっつぃー", ordinal=u[1], unit_id=u[0], origin="human", certainty="human",
+           form_zh="安達仔～～")
+    upsert(conn, book.id, hino, adachi, "あだっつぃーくん", ordinal=u[1], unit_id=u[0], origin="llm", certainty="inferred")
+    assert decided_variants(conn, hino, adachi, "あだっつぃーくん") == [{"ja": "あだっつぃー", "zh": "安達仔～～"}]

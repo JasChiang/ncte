@@ -194,6 +194,25 @@ def reassign_scene(conn: sqlite3.Connection, book_id: str, scene_id: str, speake
     return n
 
 
+_SMALL = str.maketrans("ぁぃぅぇぉゃゅょっゎァィゥェォャュョッヮ", "あいうえおやゆよつわアイウエオヤユヨツワ")
+
+
+def variant_key(form: str) -> str:
+    """One key for spellings of one nickname and the nickname with an honorific: 「あだっつぃー」「あだっついー」
+    「あだっつぃーくん」 → same; 「安達ちゃん」 and 「あだっちー」 differ."""
+    return _HONORIFIC_END.sub("", form).replace("ー", "").replace("～", "").replace("〜", "").translate(_SMALL)
+
+
+def decided_variants(conn: sqlite3.Connection, speaker: str, addressee: str, form: str) -> list[dict[str, str]]:
+    """Renderings already decided (human / naming) for other spellings of the same form by the same speaker for the
+    same person — a new 「あだっつぃーくん」 should build on the chosen 「あだっつぃー」."""
+    key = variant_key(form)
+    return [{"ja": r["form_ja"], "zh": r["form_zh"]} for r in conn.execute(
+        "SELECT form_ja, form_zh FROM address_terms WHERE speaker_id=? AND addressee_id=? AND form_ja!=? AND "
+        f"form_zh IS NOT NULL AND zh_origin IN ({','.join('?' * len(DECIDED))}) ORDER BY zh_origin='human' DESC, uses DESC",
+        (speaker, addressee, form, *DECIDED)) if variant_key(r["form_ja"]) == key][:3]
+
+
 def harvest_book(conn: sqlite3.Connection, book_id: str) -> int:
     return sum(harvest_scene(conn, book_id, r[0])
                for r in conn.execute("SELECT id FROM scenes WHERE book_id=? ORDER BY start_ordinal", (book_id,)).fetchall())
@@ -242,6 +261,9 @@ def context_items(conn: sqlite3.Connection, book_id: str, horizon: int, text: st
                                 "since": f"第{vols.get(r['book_id'], 1.0):g}集"}
         if r["form_zh"]:
             item["zh"] = r["form_zh"]
+        if r["zh_origin"] not in DECIDED and (rel := decided_variants(conn, r["speaker_id"], r["addressee_id"],
+                                                                         r["form_ja"])):
+            item["same_nickname_decided"] = rel
         if r["certainty"] == "inferred":
             item["certainty"] = "inferred"
         if r["note"]:
