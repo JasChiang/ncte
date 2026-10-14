@@ -16,6 +16,7 @@ openrouter:
   per_book_budget_usd: 5.0  # default --budget-usd for a run
   require_schema: true
   temperature: 0.3
+  reasoning_effort: null    # low | medium | high (model-dependent); null = model default; --reasoning-effort overrides
 translation:
   style: "natural_traditional_taiwan"
   unit_target_japanese_chars: 1400

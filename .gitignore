@@ -20,3 +20,6 @@ logs/
 
 # private design notes (not published)
 EPUB_翻譯引擎_開發規格.md
+
+# local configuration (copy of config.example.yaml)
+ncte.yaml
