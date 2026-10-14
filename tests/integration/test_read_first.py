@@ -366,3 +366,16 @@ def test_rename_reaches_existing_translations(conn, cfg, fixtures):
     assert replace_rendering(conn, units, "海斗", "凱特") >= 1
     t = conn.execute("SELECT text FROM translations WHERE unit_id=? ORDER BY id DESC LIMIT 1", (u,)).fetchone()[0]
     assert t == "凱特來了"
+
+
+def test_address_decision_updates_an_unconfirmed_glossary_entry(conn, cfg, fixtures, low_thresholds):
+    def addr(payload, req):
+        return {"names": [], "address": [{"ref": a["ref"], "zh": "阿海", "reason": "", "alternatives": [{"zh": "海斗", "reason": ""}]}
+                                          for a in payload["address"] if a["ja"] == "カイト"]}
+
+    fake = FakeLLM(responders={**RESPONDERS, "naming": addr})
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    conn.execute("UPDATE glossary SET verified=0, origin='memory_update' WHERE source_term='カイト'")
+    p = next(x for x in naming.pending(conn, book.id) if x["kind"] == "address")
+    naming.decide(conn, book.id, p["id"], "阿海")
+    assert conn.execute("SELECT target_term FROM glossary WHERE source_term='カイト'").fetchone()[0] == "阿海"

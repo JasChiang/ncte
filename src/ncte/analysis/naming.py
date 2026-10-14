@@ -365,6 +365,15 @@ def decide(conn: sqlite3.Connection, book_id: str, pid: int, zh: str) -> dict[st
     else:
         conn.execute("UPDATE address_terms SET form_zh=?, zh_origin='human', updated_at=? WHERE id=?",
                      (zh, utcnow(), int(row["ref"])))
+        # an unconfirmed glossary rendering of the same form would contradict the decision in translation requests:
+        # when only this pair uses the form, the glossary follows (a form several people use keeps its own entry)
+        a = conn.execute("SELECT form_ja FROM address_terms WHERE id=?", (int(row["ref"]),)).fetchone()
+        if a is not None:
+            where, ids = scope_clause(conn, book_id)
+            users = conn.execute(f"SELECT COUNT(*) FROM address_terms WHERE {where} AND form_ja=?", (*ids, a[0])).fetchone()[0]
+            if users == 1:
+                conn.execute(f"UPDATE glossary SET target_term=?, origin='naming', updated_at=? WHERE {SERIES_SCOPE} AND "
+                             "source_term=? AND verified=0 AND origin!='user'", (zh, utcnow(), book_id, a[0]))
     conn.execute("UPDATE naming_proposals SET status='decided', decided_zh=?, decided_at=? WHERE id=?",
                  (zh, utcnow(), pid))
     out: dict[str, Any] = {"id": pid, "label": row["label"], "zh": zh, "old": old, "affected": 0}
