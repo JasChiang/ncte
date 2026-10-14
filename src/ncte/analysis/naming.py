@@ -185,7 +185,40 @@ def apply_naming(conn: sqlite3.Connection, book_id: str, payload: dict[str, Any]
                  json.dumps(src.get("_context", []), ensure_ascii=False)))
             stats["names" if kind == "name" else "address"] += 1
             stats["pending"] += int(needs)
+    stats["pending"] += flag_collisions(conn, book_id)
     return stats
+
+
+def _variant_key(form: str) -> str:
+    """「あだっち」「あだっちー」 are one nickname; 「安達ちゃん」 and 「あだっちー」 are not."""
+    from ..memory.address import _HONORIFIC_END
+
+    return _HONORIFIC_END.sub("", form).replace("ー", "").replace("～", "")
+
+
+def flag_collisions(conn: sqlite3.Connection, book_id: str) -> int:
+    """Different forms of address for the same person rendered alike (島村媽媽's 「安達ちゃん」 and 日野's 「あだっちー」
+    both → 「小安達」) lose a distinction the original makes: such proposals become pending, with a note naming the
+    other form. Plain names (「安達」 for 安達) and spelling variants of one nickname are not collisions."""
+    who = char_names(conn, book_id)
+    where, ids = scope_clause(conn, book_id)
+    rows = conn.execute(f"SELECT * FROM address_terms WHERE {where} AND form_zh IS NOT NULL", ids).fetchall()
+    groups: dict[tuple[str, str], list[sqlite3.Row]] = {}
+    for r in rows:
+        if r["speaker_id"] == r["addressee_id"] or r["form_zh"] == who.get(r["addressee_id"]):
+            continue
+        groups.setdefault((r["addressee_id"], r["form_zh"]), []).append(r)
+    n = 0
+    for (_, zh), rs in groups.items():
+        if len({_variant_key(r["form_ja"]) for r in rs}) < 2:
+            continue
+        for r in rs:
+            others = sorted({f"{who.get(o['speaker_id'], '?')}的「{o['form_ja']}」" for o in rs
+                             if _variant_key(o["form_ja"]) != _variant_key(r["form_ja"])})
+            note = f"與{'、'.join(others)}同譯為「{zh}」，原文的區別會消失"
+            n += conn.execute("UPDATE naming_proposals SET needs_review=1, status='pending', reason=? WHERE kind='address' "
+                              "AND ref=? AND status='applied'", (note, str(r["id"]))).rowcount
+    return n
 
 
 def _set_name(conn: sqlite3.Connection, book_id: str, term: str, zh: str, *, human: bool = False) -> None:
@@ -220,6 +253,15 @@ def decide(conn: sqlite3.Connection, book_id: str, pid: int, zh: str) -> dict[st
         raise ValueError("empty rendering")
     if row["kind"] == "name":
         _set_name(conn, book_id, row["ref"], zh, human=True)
+        # the same form in the address table follows (unless a person decided that pair differently)
+        where, ids = scope_clause(conn, book_id)
+        same = [r[0] for r in conn.execute(f"SELECT id FROM address_terms WHERE {where} AND form_ja=? AND "
+                                           "(zh_origin IS NULL OR zh_origin!='human')", (*ids, row["ref"]))]
+        for aid in same:
+            conn.execute("UPDATE address_terms SET form_zh=?, zh_origin='human', updated_at=? WHERE id=?",
+                         (zh, utcnow(), aid))
+            conn.execute("UPDATE naming_proposals SET status='decided', decided_zh=?, decided_at=? WHERE kind='address' "
+                         "AND ref=? AND status!='decided'", (zh, utcnow(), str(aid)))
     else:
         conn.execute("UPDATE address_terms SET form_zh=?, zh_origin='human', updated_at=? WHERE id=?",
                      (zh, utcnow(), int(row["ref"])))

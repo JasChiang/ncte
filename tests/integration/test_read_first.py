@@ -251,3 +251,33 @@ def test_pronoun_address_always_reviewed_when_frequent(conn, cfg, fixtures, low_
     out = NamingOutput.model_validate({"address": [{"ref": item["ref"], "zh": "你", "reason": "", "alternatives": []}]})
     naming.apply_naming(conn, book.id, payload, out)
     assert [p["label"] for p in naming.pending(conn, book.id)] == ["米娜 → 海斗：あなた"]
+
+
+def test_forms_rendered_alike_are_flagged_and_names_sync_address(conn, cfg, fixtures, low_thresholds):
+    from ncte.llm.schemas import NamingOutput
+    from ncte.memory.address import upsert
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    us = _units(conn, book.id)
+    mk = lambda n, zh: upsert_character(conn, book.id, n, name_zh=zh, aliases=[], unit_id=us[0]["id"],  # noqa: E731
+                                        ordinal=us[0]["ordinal"], origin="t")[0]
+    mom, friend, a = mk("ママ", "媽媽"), mk("ヒノ", "日野"), mk("アダチ", "安達")
+    for sp, form in ((mom, "アダチちゃん"), (friend, "あだっちー"), (friend, "あだっち")):
+        upsert(conn, book.id, sp, a, form, ordinal=us[1]["ordinal"], unit_id=us[1]["id"], origin="llm",
+               certainty="inferred")
+    ensure_glossary(conn, book.id, "あだっちー", "安達親", category="character", origin="t", first_unit_id=us[1]["id"])
+    payload = naming.build_naming_payload(conn, book.id)
+    payload["names"] = [{"ref": "あだっちー", "ja": "あだっちー", "zh": "安達親", "category": "character", "count": 1}]
+    out = NamingOutput.model_validate({
+        "names": [{"ref": "あだっちー", "zh": "小安達", "reason": "", "alternatives": []}],
+        "address": [{"ref": x["ref"], "zh": "小安達", "reason": "", "alternatives": []} for x in payload["address"]]})
+    naming.apply_naming(conn, book.id, payload, out)
+    pend = {p["label"]: p["reason"] for p in naming.pending(conn, book.id) if p["kind"] == "address"}
+    assert set(pend) == {"媽媽 → 安達：アダチちゃん", "日野 → 安達：あだっちー", "日野 → 安達：あだっち"}
+    assert "同譯為「小安達」" in pend["媽媽 → 安達：アダチちゃん"]
+    # deciding the nickname as a name also settles the same form in the address table
+    pid = next(p["id"] for p in naming.pending(conn, book.id, include_done=True) if p["ref"] == "あだっちー")
+    naming.decide(conn, book.id, pid, "安達兒")
+    row = conn.execute("SELECT form_zh, zh_origin FROM address_terms WHERE form_ja='あだっちー'").fetchone()
+    assert tuple(row) == ("安達兒", "human")
+    assert "日野 → 安達：あだっちー" not in {p["label"] for p in naming.pending(conn, book.id)}
