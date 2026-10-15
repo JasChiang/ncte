@@ -7,24 +7,30 @@ EPUB ──► epub/security (Zip Slip/Bomb, XXE, DRM, fixed-layout)
      ──► library.import_book → SQLite: books, resources, units, memory_fts
      ──► analysis/scene.segment_book (deterministic scenes)
 
-translate (baseline)                          translate (context, read first — default)
-  orchestrator: jobs → batches                  1. read: every scene in order (scene_analyze → memory_update)
-  (per chapter, ~1400 JA chars, parallel)       2. verify: disputed speakers / inferred genders / reveal merges
-                                                   asked again with the surrounding text (ADR-033)
-                                                3. naming: renderings for names and address terms (may pause
-                                                   for the person's choice)
-                                                4. translate, per scene in reading order:
-                                                  scene_analyze  → analysis/scene.apply_scene_analysis
-  context_builder: neighbours (same scene)                          (dialogue.find_quotes, detect_tags,
-  + relevant glossary                                                speaker.resolve, reference_resolution)
-                                                  translate batches (sequential) with memory/retrieval
-                                                     (visibility-filtered characters, examples, speaker
-                                                      status, summaries, facts, props)
-                                                  memory_update → analysis/memory_update (verbatim evidence)
-  translator: strict JSON → Pydantic → ID alignment → qa/rules → retry → split → fail(keep JA)
-  review (flagged only, ≤1 pass) → retranslate with feedback → QA
-  DbRecorder: every request (hash, model, prompt version, usage, cost, generation id, status)
-  budget pre-check before each request; Ctrl+C → checkpoint; resume re-queues jobs
+translate (baseline)
+  orchestrator: jobs → batches (per chapter, ~1400 JA chars, parallel)
+  context_builder: neighbours (same scene) + relevant glossary
+
+translate (context, read first — default)
+  0. scene breaks: long stretches without a break marker → the model picks cuts, the program checks (ADR-036)
+  1. read, every scene in order:
+       scene_analyze  → analysis/scene.apply_scene_analysis (quotes, tags, speakers, new characters, genders,
+                        narration: first/third, narrator or focal character, narrator's self forms — ADR-040)
+       memory_update  → analysis/memory_update (facts with verbatim evidence, summaries, address terms, wordplay)
+       a request the content filter refuses is read in halves and merged (analysis/split_read)
+  2. verify: disputed speakers, inferred genders, reveal merges, address usage, narration conflicts — asked again
+     with the surrounding text (ADR-033, ADR-037)
+  3. relations: summarized from evidence-backed facts (ADR-039)
+  4. naming: renderings for names and address terms; the model's choice is kept, the program checks (ADR-035)
+  5. translate, per scene in reading order, with memory/retrieval (visibility-filtered characters, relations,
+     examples, speaker status, summaries, facts, props, the scene's narration)
+     → program checks (second person 你／妳, narration 我, narrator's self form…) → review of flagged units
+  6. reader pass: Chinese only, what a reader cannot follow goes back to the translator (ADR-038)
+
+translator: strict JSON → Pydantic → ID alignment → qa/rules → retry → split → fail(keep JA)
+review (flagged only, ≤1 pass) → retranslate with feedback → QA
+DbRecorder: every request (hash, model, prompt version, usage, cost, generation id, status)
+budget pre-check before each request; Ctrl+C → checkpoint; resume re-queues jobs
 
 export ──► epub/reassemble (rebuild only validated text nodes; other files byte-for-byte; mimetype first)
        ──► epub/validate (internal + EPUBCheck) ──► reports (cost / QA / HTML)
