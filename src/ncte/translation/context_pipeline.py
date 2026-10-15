@@ -45,16 +45,19 @@ class ContextOrchestrator(Orchestrator):
 
     def process_batch(self, batch: Batch) -> dict[str, int]:
         counts = super().process_batch(batch)
-        from ..analysis.narration import first_person_slip
+        from ..analysis.narration import first_person_slip, self_form_slip
         from ..qa import second_person
 
         third = False
+        self_forms: dict[str, str] = {}
         if not batch.meta and batch.scene_id:
             from ..analysis.narration import for_scene
 
             with self.lock:
                 who = for_scene(self.conn, self.book.id, get_scene(self.conn, self.book.id, batch.scene_id))
             third = who is not None and who["person"] == "third"
+            if who is not None and who["person"] == "first":
+                self_forms = {f["ja"]: f["zh"] for f in who.get("self_forms") or []}
 
         with self.lock, Transaction(self.conn):
             for r in batch.rows:
@@ -68,6 +71,8 @@ class ContextOrchestrator(Orchestrator):
                 if third and first_person_slip(r["plain_text"], t["text"]):
                     found.append(("narration_first_person", "the narration is third person, but this paragraph says 我 "
                                   "outside quotes: use the focal character's name, 他／她, or leave the subject out"))
+                if self_forms and (ev := self_form_slip(r["plain_text"], t["text"], self_forms)):
+                    found.append(("narrator_self_form", ev))
                 for typ, ev in found:  # the scene's review looks at it with the context and fixes it
                     self._finding(r["id"], typ, "high", ev)
                 if found:

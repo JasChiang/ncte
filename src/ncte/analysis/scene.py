@@ -184,6 +184,10 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
     if prev_narr and prev_narr.get("person"):
         extra["previous_narration"] = {"person": prev_narr["person"], **{
             f"{k}_ref": prev_narr[k] for k in ("narrator", "focal") if prev_narr.get(k)}}
+    from .narration import established_self_forms
+
+    if forms := established_self_forms(conn, book_id, scene["seq"]):
+        extra["established_self_forms"] = forms
     return {
         **extra,
         "task": "scene_analyze", "scene_id": scene["id"],
@@ -409,15 +413,19 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         if res.status == "explicit" and res.speaker_id:
             repo.add_speech_example(conn, res.speaker_id, q.unit_id, utt_id, q.text, "explicit")
             stats["examples"] += 1
-    narration = None
+    narration: dict[str, Any] | None = None
     if parsed is not None and parsed.narration is not None and parsed.narration.person in ("first", "third"):
-        from .narration import judged
+        from .narration import established_self_forms, judged, settle_self_forms
 
         n = parsed.narration
         narration = {"person": n.person, "source": "llm",
                      **{k: ref_map[r] for k, r in (("narrator", n.narrator_ref), ("focal", n.focal_ref))
                         if r and ref_map.get(r) in set(ref_map.values())},
                      **({"check": chk} if (chk := judged(n.person, rows)) else {})}
+        if n.person == "first" and (forms := settle_self_forms(
+                [f.model_dump() for f in n.self_forms], narration.get("narrator"),
+                established_self_forms(conn, book_id, scene["seq"]), rows)):
+            narration["self_forms"] = forms
     state = {"narration": narration, "pov": parsed.pov if parsed else None, "location": parsed.location if parsed else None,
              "time": parsed.time if parsed else None, "participants": participants, "actions": actions,
              "props": props, "uncertainties": uncertainties, "analysis": "llm" if parsed else "program_only",

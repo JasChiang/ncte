@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from typing import Any
 
 FIRST_PERSON = re.compile(r"(私|俺|僕|わたし|あたし|ぼく|ボク|オレ|わたくし|あたい)(?!達|たち)")
 _QUOTED = re.compile(r"「[^」]*」|『[^』]*』|（[^）]*）|\([^)]*\)")
@@ -81,20 +82,70 @@ def judged(person_: str, rows: list[sqlite3.Row]) -> str | None:
 
 
 def for_scene(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row,
-              names: dict[str, str] | None = None) -> dict[str, str] | None:
+              names: dict[str, str] | None = None) -> dict[str, Any] | None:
     """What the translator is told for this scene: the read pass's judgement, else the whole book's."""
     import json
 
     st = json.loads(scene["state_json"] or "{}").get("narration") or {}
-    out: dict[str, str] = {}
+    out: dict[str, Any] = {}
     if st.get("person") in ("first", "third") and st.get("check") != "conflict":
         out["person"] = st["person"]
         for key in ("narrator", "focal"):
             if st.get(key):
                 out[key] = (names or {}).get(st[key], st[key])
+        if st["person"] == "first" and st.get("self_forms"):
+            out["self_forms"] = st["self_forms"]
     else:
         whole = person(conn, book_id)
         if whole is None:
             return None
         out["person"] = whole
     return out
+
+
+# ---------------------------------------------------------------- the narrator's word for themself (吾輩, 俺, 私)
+def established_self_forms(conn: sqlite3.Connection, book_id: str, seq: int) -> list[dict[str, str | None]]:
+    """What earlier scenes decided: the first decision for each (narrator, word) stands for the whole book."""
+    import json
+
+    seen: dict[tuple[str | None, str], dict[str, str | None]] = {}
+    for (state,) in conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND seq<? AND version>0 ORDER BY seq",
+                                 (book_id, seq)):
+        n = json.loads(state or "{}").get("narration") or {}
+        for f in n.get("self_forms") or []:
+            seen.setdefault((n.get("narrator"), f["ja"]), {"narrator_ref": n.get("narrator"), "ja": f["ja"], "zh": f["zh"]})
+    return list(seen.values())
+
+
+def settle_self_forms(forms: list[dict[str, str]], narrator: str | None, earlier: list[dict[str, str | None]],
+                      rows: list[sqlite3.Row]) -> list[dict[str, str]]:
+    """Keep the words the scene's narration really has; an earlier decision for the same narrator and word wins."""
+    text = "\n".join(narration_only(r["plain_text"]) for r in rows if r["kind"] == "text" and is_narration(r["plain_text"]))
+    before = {e["ja"]: e["zh"] for e in earlier if e["narrator_ref"] == narrator}
+    out: dict[str, str] = {}
+    for f in forms:
+        ja, zh = f["ja"].strip(), f["zh"].strip()
+        if zh in ("自己", "自身"):  # a reflexive (自分 → 自己), not the narrator's voice
+            continue
+        if ja and zh and ja in text and ja not in out:
+            out[ja] = before.get(ja) or zh
+    return [{"ja": ja, "zh": zh} for ja, zh in out.items()]
+
+
+def self_form_slip(plain: str, text: str, forms: dict[str, str]) -> str | None:
+    """A first-person narration paragraph whose narrator calls themself ``ja`` but the translation does not say the
+    book's ``zh`` (or copies a ``ja`` that was to become 我)."""
+    if not is_narration(plain):
+        return None
+    from ..epub.units import PH_RE
+
+    src = narration_only(plain)
+    zh_text = _QUOTED.sub("", PH_RE.sub("", text))
+    for ja, zh in forms.items():
+        if ja not in src:
+            continue
+        if zh != "我" and zh not in zh_text:
+            return f"the narrator calls themself 「{ja}」 here; this book renders it 「{zh}」 in the narration"
+        if zh == "我" and ja != "我" and ja in zh_text:
+            return f"the narrator's 「{ja}」 is rendered 「我」 in this book, not 「{ja}」"
+    return None

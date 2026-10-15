@@ -51,3 +51,17 @@ def test_narration_person_slip():
     assert not first_person_slip("　けれども涙がいっぱいになりました。そうだ僕は知っていたのだ。", "他眼眶蓄滿淚水。沒錯，我明明是知道的。")
     assert not first_person_slip("「俺がレイドだ」", "「我就是雷德」")
     assert not first_person_slip("　彼は言った。", "他說：「我會去的。」")
+
+
+def test_narrator_self_form_kept_and_checked():
+    from ncte.analysis.narration import self_form_slip, settle_self_forms
+
+    rows = [{"kind": "text", "plain_text": "　吾輩は猫である。"}, {"kind": "text", "plain_text": "「俺は車屋の黒だ」"}]
+    # only words the narration really has; an earlier decision for the same narrator wins
+    got = settle_self_forms([{"ja": "吾輩", "zh": "我"}, {"ja": "俺", "zh": "老子"}, {"ja": "猫", "zh": "自己"}], None,
+                            [{"narrator_ref": None, "ja": "吾輩", "zh": "吾輩"}], rows)
+    assert got == [{"ja": "吾輩", "zh": "吾輩"}]
+    assert self_form_slip("　吾輩は池の前に坐った。", "我坐在池塘前。", {"吾輩": "吾輩"})
+    assert not self_form_slip("　吾輩は池の前に坐った。", "吾輩坐在池塘前。", {"吾輩": "吾輩"})
+    assert self_form_slip("　吾輩は池の前に坐った。", "吾輩坐在池塘前。", {"吾輩": "我"})
+    assert not self_form_slip("「吾輩は猫だ」", "「我是貓」", {"吾輩": "吾輩"})  # a quote is not the narration

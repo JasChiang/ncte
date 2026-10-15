@@ -91,6 +91,11 @@ class Uncertainty(_M):
     question: str
 
 
+class SelfForm(_M):
+    ja: str  # what the narrator calls themself in the narration (私, 俺, 吾輩)
+    zh: str  # its Chinese, kept for the whole book
+
+
 class NarrationOut(_M):
     """Whose voice tells this scene (ADR-040): first person (``narrator_ref`` is the 「私」) or third person following
     ``focal_ref``."""
@@ -98,6 +103,7 @@ class NarrationOut(_M):
     narrator_ref: str | None = None
     focal_ref: str | None = None
     evidence_unit_ids: list[str] = Field(default_factory=list)
+    self_forms: list[SelfForm] = Field(default_factory=list)
 
 
 class SceneAnalysisOutput(_M):
