@@ -58,6 +58,7 @@ class RunOptions:
     address_only: bool = False  # `ncte names address-check` (ADR-037, read pass already done)
     reader_only: bool = False  # `ncte reader-check` (ADR-038, a book already translated)
     relations_only: bool = False  # `ncte names relations` (ADR-039, a book already read)
+    impressions_only: bool = False  # `ncte names impressions` (ADR-045, a book already read)
     rebreak_only: bool = False  # `ncte scenes --rebreak`: choose the scene breaks again (ADR-036; books cut before it)
 
 
@@ -551,6 +552,9 @@ class Orchestrator:
     def rebreak(self) -> None:
         raise NCTEError("choosing scene breaks again needs --mode context")
 
+    def impressions_pass(self, *, record_job: bool = True) -> int:
+        raise NCTEError("character impressions need context mode")
+
     def run(self) -> RunSummary:
         from .run_lock import SeriesLock
 
@@ -584,6 +588,8 @@ class Orchestrator:
                 self.relations_pass(record_job=False)
             elif self.opts.rebreak_only:
                 self.rebreak()
+            elif self.opts.impressions_only:
+                self.impressions_pass(record_job=False)
             else:
                 self.ensure_jobs()
                 self.execute()

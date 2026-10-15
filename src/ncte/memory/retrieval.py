@@ -84,6 +84,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             card["gender"] = v["gender"]
         if v.get("narrator"):
             card["narrator"] = True
+        if imp := conn.execute("SELECT voice FROM character_impressions WHERE character_id=?", (c["id"],)).fetchone():
+            card["voice"] = imp[0]  # how this character talks (ADR-045); never the place in the story (no reveals)
         present.append(card)
     # relations among the people of this scene, as the story has shown them so far (ADR-039): how they talk to each other
     ids = {c["character_id"] for c in present}

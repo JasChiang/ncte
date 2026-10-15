@@ -709,6 +709,21 @@ def names_relations(epub: Annotated[str, typer.Argument()],
     _run(book, opts, fake=fake, cfg=cfg)
 
 
+@names_app.command("impressions")
+def names_impressions(epub: Annotated[str, typer.Argument()],
+                      budget_usd: Annotated[float, typer.Option("--budget-usd")] = 0.3,
+                      fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
+    """Personality, way of speaking and place in the story of the main characters (ADR-045), for a book already read."""
+    from .cli import _run
+    from .translation.orchestrator import RunOptions
+
+    cfg = state.cfg
+    book = _book(epub)
+    opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
+                      client="fake" if fake else cfg.openrouter.provider, impressions_only=True)
+    _run(book, opts, fake=fake, cfg=cfg)
+
+
 @names_app.command("address-check")
 def names_address_check(epub: Annotated[str, typer.Argument()],
                         budget_usd: Annotated[float, typer.Option("--budget-usd")] = 0.5,

@@ -189,6 +189,9 @@ class ContextOrchestrator(Orchestrator):
             self.conn.execute(
                 "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
                 (self.book.id, self.run_id, "relations", self.book.id, len(scene_ids), "pending", utcnow()))
+            self.conn.execute(
+                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (self.book.id, self.run_id, "impressions", self.book.id, len(scene_ids), "pending", utcnow()))
         if self.cfg.context.reader_pass and not self.opts.unit_ids:
             self.conn.execute(
                 "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
@@ -224,6 +227,8 @@ class ContextOrchestrator(Orchestrator):
                 self.verify_pass()
             if not self._stop_reason:
                 self.relations_pass()
+            if not self._stop_reason:
+                self.impressions_pass()
             if self._stop_reason or not self.naming_pass():
                 return
             self.translate_pass(scenes)
@@ -327,6 +332,36 @@ class ContextOrchestrator(Orchestrator):
         if record_job:
             self._set_job("relations", self.book.id, "succeeded", None, {"relations": n, "pairs": len(pairs)})
         self.log(f"relations: {n} ({len(pairs)} pairs asked, {len(again)} asked again)")
+        return n
+
+    def impressions_pass(self, *, record_job: bool = True) -> int:
+        """After relations (ADR-045): personality, way of speaking and place in the story of the main characters."""
+        from ..analysis import impressions
+        from ..llm.schemas import ImpressionsOutput
+
+        job = self._job("impressions", self.book.id)
+        if record_job and (job is None or job["status"] not in ("pending", "running")):
+            return 0
+        with self.lock:
+            groups = impressions.requests(self.conn, self.book.id)
+        prompt, results = load_prompt("impressions"), []
+        for req, lookup in groups:
+            try:
+                parsed = self._llm("impressions", prompt, req, [])
+            except FatalAPIError:
+                raise
+            except LLMError as exc:
+                self._finding(None, "impressions_failed", "low", str(exc)[:300])
+                continue
+            assert isinstance(parsed, ImpressionsOutput)
+            results.append((parsed, lookup))
+        n = 0
+        if results:
+            with self.lock:
+                n = impressions.apply(self.conn, self.book.id, results, self.run_id)
+        if record_job:
+            self._set_job("impressions", self.book.id, "succeeded", None, {"impressions": n})
+        self.log(f"impressions: {n}")
         return n
 
     def reader_pass(self, *, record_job: bool = True) -> dict[str, int]:

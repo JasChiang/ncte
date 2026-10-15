@@ -94,6 +94,12 @@ def default_relations(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     return {"relations": []}
 
 
+def default_impressions(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+    return {"impressions": [{"ref": c["ref"], "personality": "fake", "voice": "fake voice", "role": "fake",
+                             "evidence": [x["ref"] for x in (c["lines"] + c["facts"])[:1]]}
+                            for c in payload.get("characters", []) if c["lines"] or c["facts"]]}
+
+
 def default_confirm(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     """Agrees with every rule (the flags go on to review, as they did before this check)."""
     return {"checks": [{"unit_id": i["unit_id"], "rule": i["rule"], "real": True, "reason": "fake"}
@@ -111,6 +117,7 @@ DEFAULTS: dict[str, Responder] = {
     "reader": default_reader,
     "relations": default_relations,
     "confirm": default_confirm,
+    "impressions": default_impressions,
 }
 
 

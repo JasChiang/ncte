@@ -61,3 +61,20 @@ def test_narrator_card_matched_to_a_named_character(conn, cfg, fixtures):
     assert not conn.execute("SELECT 1 FROM characters WHERE book_id=? AND canonical_name='（敘述者）'", (book.id,)).fetchone()
     merged = conn.execute("SELECT * FROM characters WHERE book_id=? AND is_narrator=1", (book.id,)).fetchone()
     assert merged is not None and merged["canonical_name"] != "（敘述者）"  # the named character carries the lines now
+
+
+def test_impressions_of_main_characters_reach_the_translator(conn, cfg, fixtures):
+    cards = []
+
+    def translate(payload, req):
+        cards.extend(c for c in payload.get("characters", []) if c.get("voice"))
+        from ncte.llm.fake import DEFAULTS
+
+        return (RESPONDERS.get("translate") or DEFAULTS["translate"])(payload, req)
+
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "translate": translate}),
+                            mode="context")
+    assert s.status == "completed"
+    rows = conn.execute("SELECT * FROM character_impressions WHERE book_id=?", (book.id,)).fetchall()
+    assert rows and all(r["voice"] == "fake voice" for r in rows)
+    assert cards and all("role" not in c for c in cards)  # the way of speaking, never the place in the story
