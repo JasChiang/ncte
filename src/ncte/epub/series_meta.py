@@ -50,13 +50,17 @@ def _num(s: str) -> float | None:
 
 _LABEL = re.compile(r"[\s　]*[（(\[【][^()（）\[\]【】]*(?:文庫|ノベル|ブックス|books|novels|新書|レーベル|コミックス|"
                     r"版|特典|edition)[^()（）\[\]【】]*[)）\]】][\s　]*$", re.IGNORECASE)
+# the same labels in front: 「【電子版限定特典付き】英雄と賢者の転生婚 1」 (store editions; volume 2 may lack it)
+_LEAD = re.compile(r"^[\s　]*[（(\[【][^()（）\[\]【】]*(?:版|特典|限定|edition)[^()（）\[\]【】]*[)）\]】][\s　]*",
+                   re.IGNORECASE)
 
 
 def clean_title(title: str) -> str:
-    """Remove trailing imprint / edition labels: 「安達としまむら2 (電撃文庫)」 → 「安達としまむら2」."""
+    """Remove imprint / edition labels: 「安達としまむら2 (電撃文庫)」 → 「安達としまむら2」,
+    「【電子版限定特典付き】英雄と賢者の転生婚 1」 → 「英雄と賢者の転生婚 1」."""
     t = title.strip()
     while True:
-        new = _LABEL.sub("", t)
+        new = _LEAD.sub("", _LABEL.sub("", t))
         if new == t or not new:
             return t
         t = new
