@@ -78,3 +78,31 @@ def test_impressions_of_main_characters_reach_the_translator(conn, cfg, fixtures
     rows = conn.execute("SELECT * FROM character_impressions WHERE book_id=?", (book.id,)).fetchall()
     assert rows and all(r["voice"] == "fake voice" for r in rows)
     assert cards and all("role" not in c for c in cards)  # the way of speaking, never the place in the story
+
+
+def test_empty_card_from_before_the_name_is_matched_to_the_later_narrator(conn, cfg, fixtures):
+    """坊っちゃん: the first scene made a card, later scenes named the narrator; the empty card is still matched."""
+    asked = []
+
+    def scene(payload, req):
+        out = RESPONDERS["scene_analyze"](payload, req)
+        known = [k for k in payload.get("known_characters", []) if not k.get("narrator")]
+        ref = known[0]["character_id"] if known else "new_narrator"
+        out["narration"] = {"person": "first", "narrator_ref": ref, "focal_ref": None, "evidence_unit_ids": []}
+        return out
+
+    def verify(payload, req):
+        items = []
+        for i in payload["items"]:
+            ans = "keep"
+            if i["kind"] == "narrator":
+                asked.append(i)
+                names = i["narrators_of_other_first_person_scenes"]
+                ans = next((k for k, v in i["candidates"].items() if v in names), "unknown")
+            items.append({"ref": i["ref"], "answer": ans, "reason": "t"})
+        return {"items": items}
+
+    book, rid, s = run_book(conn, cfg, fixtures["basic"],
+                            FakeLLM(responders={**RESPONDERS, "scene_analyze": scene, "verify": verify}), mode="context")
+    assert s.status == "completed" and asked and asked[0]["narrators_of_other_first_person_scenes"]
+    assert not conn.execute("SELECT 1 FROM characters WHERE canonical_name LIKE '（敘述者%'").fetchone()  # merged, none left

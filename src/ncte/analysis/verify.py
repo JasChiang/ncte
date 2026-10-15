@@ -113,10 +113,18 @@ def narrator_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
             "ORDER BY uses DESC LIMIT 8", (book_id, c["id"], c["id"]))]
         lines = [match_text(u["quote_text"])[:100] for u in conn.execute(
             "SELECT quote_text FROM utterances WHERE book_id=? AND speaker_id_nullable=? LIMIT 6", (book_id, c["id"]))]
-        if not (facts or called or lines):
-            continue
+        # who the reading judged to narrate the other first-person scenes (a name learned later: 「坊っちゃん」)
+        others: dict[str, int] = {}
+        for (state,) in conn.execute("SELECT state_json FROM scenes WHERE book_id=?", (book_id,)):
+            narr = json.loads(state or "{}").get("narration") or {}
+            if narr.get("person") == "first" and narr.get("narrator") not in (None, c["id"]) and narr["narrator"] in names:
+                others[narr["narrator"]] = others.get(narr["narrator"], 0) + 1
+        cands = {r["id"]: names[r["id"]] for r in named if r["id"] in names}
+        cands.update({x: names[x] for x in others})
         out.append({"ref": f"r:{c['id']}", "kind": "narrator", "facts": facts, "called": called, "lines": lines,
-                    "candidates": {r["id"]: names[r["id"]] for r in named if r["id"] in names}})
+                    "first_scene": _window(conn, book_id, c["known_from_ordinal"])[:6],
+                    "narrators_of_other_first_person_scenes": {names[x]: n for x, n in others.items()},
+                    "candidates": cands})
     return out
 
 
