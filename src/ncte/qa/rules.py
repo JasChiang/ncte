@@ -20,6 +20,8 @@ from ..lexicon import GENERIC_REFERENTS
 # Hiragana + katakana letters only. Excludes ゠ (U+30A0), ・ (U+30FB), ー (U+30FC) and halfwidth ｰ (U+FF70):
 # they are punctuation that is also normal in Chinese text (間隔號、長音).
 KANA_RE = re.compile("[\u3041-\u309f\u30a1-\u30fa\u30fd-\u30ff\uff66-\uff6f\uff71-\uff9f]")
+KANA_RUN_RE = re.compile("[\u3041-\u309f\u30a1-\u30fa\u30fd-\u30ff\uff66-\uff6f\uff71-\uff9f]+")
+SMALL_KANA_RE = re.compile("[ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮ]")
 RUBY_LEAK_RE = re.compile(r"《[぀-ヿ]+》")
 NUM_RE = re.compile(r"\d+")
 # Glyphs that should not appear in Taiwanese Traditional Chinese output: Simplified-only forms
@@ -83,11 +85,19 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
         for w in allowed_kana:
             residue = residue.replace(w, "")
         kana = KANA_RE.findall(residue)
-        if kana and len(kana) / max(len(vis), 1) > 0.3:
+        runs = KANA_RUN_RE.findall(residue)
+        # a word copied whole from the source may be a name kept on purpose (藤木わしろ); a stray sound mark
+        # (「…王命了ッ!!」) or a word the source does not have is a leftover: retried with this correction
+        kept = [r for r in runs if 2 <= len(r) <= 8 and r in vis_src and not SMALL_KANA_RE.search(r)]
+        stray = [r for r in runs if r not in kept]
+        if kana and len(kana) / max(len(vis), 1) > 0.3 and (stray or len(kana) > 8):
             add("japanese_residue", "error", f"{len(kana)} kana in output (mostly untranslated)")
-        elif kana:  # even one left behind (「…王命了ッ!!」) is visible to the reader: retried with this correction
-            add("japanese_residue", "error", f"kana left in output: {''.join(kana)[:20]} — write it in Chinese "
-                                             f"(a small ッ/っ before !! is just dropped)")
+        elif kana:
+            if stray:
+                add("japanese_residue", "error", f"kana left in output: {''.join(stray)[:20]} — write it in Chinese "
+                                                 f"(a small ッ/っ before !! is just dropped)")
+            else:
+                add("japanese_residue", "medium", f"kana kept from the source (a name?): {'、'.join(kept)[:30]}")
 
     if ruby_count and RUBY_LEAK_RE.search(text):
         add("ruby_notation_leak", "medium", RUBY_LEAK_RE.search(text).group(0))  # type: ignore[union-attr]
@@ -139,12 +149,17 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
         terms = [g.get("source_term") or g.get("ja"), *(g.get("aliases") or [])]
         return any(t and t in src_match for t in terms)
 
-    def rendered(ja: str, zh: str) -> bool:
+    def rendered(g: dict[str, Any], ja: str, zh: str) -> bool:
         if zh in flat:
             return True
         if ja in src_match:
             return False
-        # only a shorter form is in the source (「レイド」 for レイド・フリーデン): a part of the full rendering will do
+        # only another form is in the source. A title or description (「英雄」「学院長」) is rendered as itself, not as
+        # the name: nothing to require. A part of the name (「レイド」, 「フリーデン閣下」): that part of the rendering.
+        parts = [p for p in re.split(r"[・･·]", ja) if len(p) >= 2]
+        named = [a for a in g.get("aliases") or [] if a in src_match and (a in ja or any(p in a for p in parts))]
+        if not named:
+            return True
         return any(len(p) >= 2 and p in flat for p in re.split(r"[・･·]", zh))
 
     for g in gl:
@@ -152,7 +167,7 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
         if not ja or not zh:
             continue
         in_src = in_source(g)
-        if in_src and not rendered(ja, zh):
+        if in_src and not rendered(g, ja, zh):
             sev = "high" if g.get("verified") else "low"
             add("glossary_mismatch", sev, f"{ja} → expected 「{zh}」")
             # another name form of the same entity used instead (the official name rendered with the nickname's rendering)

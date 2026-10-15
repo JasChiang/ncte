@@ -36,8 +36,8 @@ def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
             f = [x for x in f if (x.type, x.evidence) not in settled]
             conn.execute(f"UPDATE qa_findings SET status='superseded' WHERE unit_id=? AND status='open' AND type IN ({ph})",
                          (uid, *QA_TYPES))
-            for x in f:
-                if x.severity not in ("info", "error"):
+            for x in f:  # an "error" here is a translation already stored (rules got stricter): keep it visible
+                if x.severity != "info":
                     conn.execute("INSERT INTO qa_findings(run_id, book_id, unit_id, type, severity, evidence, created_at) "
                                  "VALUES (?,?,?,?,?,?,?)", (t["run_id"], book_id, uid, x.type, x.severity, x.evidence,
                                                             utcnow()))
