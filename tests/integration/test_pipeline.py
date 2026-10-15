@@ -237,3 +237,18 @@ def test_each_step_can_reason_differently(conn, cfg, fixtures):
     recorded = dict(conn.execute("SELECT stage, reasoning_effort FROM llm_requests WHERE run_id=? GROUP BY stage", (rid,)))
     assert recorded["translate"] == "max:3000" and recorded["memory_update"] == "low"
     assert reasoning_label({"effort": "low"}) == "low"
+
+
+def test_context_mode_translates_a_scene_per_request(conn, cfg, fixtures):
+    """ADR-044 (read-first, the default path): a whole scene per request, not slices of unit_target_japanese_chars."""
+    cfg.translation.unit_target_japanese_chars = 40  # would slice every scene if it were still used
+    fake = FakeLLM()
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    assert s.status == "completed"
+    per_scene = {}
+    for c, p in zip(fake.calls, fake.payloads, strict=True):
+        if c.stage == "translate" and p.get("units"):
+            sids = {conn.execute("SELECT scene_id FROM units WHERE id=?", (u["unit_id"],)).fetchone()[0] for u in p["units"]}
+            assert len(sids) == 1
+            per_scene[next(iter(sids))] = per_scene.get(next(iter(sids)), 0) + 1
+    assert per_scene and all(n == 1 for n in per_scene.values()), per_scene
