@@ -190,11 +190,15 @@ async function runCard(id, o) {
     } catch (err) { $("#est").textContent = "無法估價：" + err.message; }
   }
   const here = location.hash.startsWith(`#/b/${id}/overview`) || location.hash === `#/b/${id}`;
-  if (p.busy && here) poll = setTimeout(async () => {
+  // while running: every 3 s; otherwise every 15 s, so a run started, paused or continued elsewhere still shows up
+  const watch = () => { poll = setTimeout(async () => {
+    if (!location.hash.startsWith(`#/b/${id}/overview`)) return;
     const q = await api(`book/${id}/run`);
-    if (!q.busy) { invalidate(id); return overviewView(id); }
-    runCard(id, o);
-  }, 3000);
+    const changed = q.busy !== p.busy || (q.run || {}).status !== (r || {}).status;
+    if (changed) { invalidate(id); return overviewView(id); }
+    if (p.busy) runCard(id, o); else watch();  // idle: only watch for a change, no re-estimate
+  }, p.busy ? 3000 : 15000); };
+  if (here) watch();
 }
 async function download(id, name) {
   const r = await fetch(`/api/book/${id}/download`, {headers: {"X-NCTE-Token": TOKEN}});
