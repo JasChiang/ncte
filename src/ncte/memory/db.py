@@ -515,6 +515,18 @@ CREATE TABLE relations (
     PRIMARY KEY (book_id, a_id, b_id, relation_zh)
 );
 """),
+    (17, "who started or continued a run and who changed its budget (fal real run: a budget changed with no record)", """
+CREATE TABLE run_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    at TEXT NOT NULL,
+    event TEXT NOT NULL,
+    source TEXT,
+    pid INTEGER,
+    detail_json TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX idx_run_events_run ON run_events(run_id);
+"""),
 ]
 
 

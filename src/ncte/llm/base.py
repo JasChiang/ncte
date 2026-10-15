@@ -45,6 +45,7 @@ class LLMResponse:
     finish_reason: str | None = None
     attempts: int = 1
     structured_mode: StructuredMode = "json_schema"
+    maybe_billed_attempts: int = 0  # earlier attempts (timeouts…) that may have been billed too
 
 
 class LLMClient(Protocol):

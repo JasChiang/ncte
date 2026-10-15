@@ -93,6 +93,9 @@ class Runner:
             _not_elsewhere(conn)
             row = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
             if budget is not None:
+                from ..translation.orchestrator import record_event
+
+                record_event(conn, run_id, "budget", "gui", old=row["budget_usd"], new=budget)
                 data = json.loads(row["config_json"])
                 data["_run_options"]["budget_usd"] = budget
                 with Transaction(conn):

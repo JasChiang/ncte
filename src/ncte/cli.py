@@ -344,6 +344,9 @@ def resume(run_id: Annotated[str, typer.Option("--run-id")],
     row, cfg, opts = load_run(state.conn, run_id)
     cfg.app.workspace = str(state.cfg.workspace)
     if budget_usd is not None:
+        from .translation.orchestrator import record_event
+
+        record_event(state.conn, run_id, "budget", "cli", old=row["budget_usd"], new=budget_usd)
         opts.budget_usd = budget_usd
         data = json.loads(row["config_json"])
         data["_run_options"]["budget_usd"] = budget_usd

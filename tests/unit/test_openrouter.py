@@ -218,3 +218,86 @@ def test_shared_rules_cached_and_the_batch_rules_after():
     parts = OpenRouterClient("k").build_payload(req)["messages"][0]["content"]
     assert parts[0] == {"type": "text", "text": a_shared, "cache_control": {"type": "ephemeral"}}
     assert parts[1]["text"].strip() == a_own.strip() and "cache_control" not in parts[1]
+
+
+def _client(responses):
+    seen = []
+
+    def handle(r):
+        seen.append(r)
+        status, body, headers = responses[min(len(seen) - 1, len(responses) - 1)]
+        if isinstance(body, str):
+            return httpx.Response(status, text=body, headers=headers)
+        return httpx.Response(status, json=body, headers=headers)
+
+    return OpenRouterClient(KEY, transport=httpx.MockTransport(handle), sleep=lambda _: None), seen
+
+
+def _req():
+    return LLMRequest(stage="scene_analyze", model="m", messages=[{"role": "user", "content": "{}"}], schema_name="t")
+
+
+OK = (200, {"id": "g", "model": "m", "choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
+            "usage": {"cost": 0.001, "prompt_tokens": 1, "completion_tokens": 1}}, {})
+
+
+def test_error_forms_from_fal_and_others():
+    from ncte.errors import ContentBlockedError
+
+    # fal: {"detail": "...PROHIBITED_CONTENT"} on HTTP 400 → content filter (so the reading is split and retried)
+    c, _ = _client([(400, {"detail": "Gemini blocked the request: PROHIBITED_CONTENT"}, {})])
+    with pytest.raises(ContentBlockedError):
+        c.complete(_req())
+    # 403 + detail content filter: a passage, not the account
+    c, _ = _client([(403, {"detail": "PROHIBITED_CONTENT"}, {})])
+    with pytest.raises(ContentBlockedError):
+        c.complete(_req())
+    # an account problem is never taken for a passage to split
+    c, _ = _client([(403, {"error": {"message": "Account blocked"}}, {})])
+    with pytest.raises(FatalAPIError):
+        c.complete(_req())
+    # 400 + detail overloaded: transient, retried
+    c, seen = _client([(400, {"detail": "The model is overloaded"}, {}), OK])
+    assert c.complete(_req()).cost_usd == 0.001 and len(seen) == 2
+    # 200 + error string with PROHIBITED_CONTENT: content filter, not resent
+    c, seen = _client([(200, {"error": "PROHIBITED_CONTENT"}, {})])
+    with pytest.raises(ContentBlockedError):
+        c.complete(_req())
+    assert len(seen) == 1
+    # 200 + finish_reason content_filter with no content: content filter, not a JSON problem
+    c, _ = _client([(200, {"choices": [{"message": {"content": ""}, "finish_reason": "content_filter"}]}, {})])
+    with pytest.raises(ContentBlockedError):
+        c.complete(_req())
+    # 200 + a JSON list: retried like any malformed answer
+    c, seen = _client([(200, [1, 2], {}), OK])
+    resp = c.complete(_req())
+    assert len(seen) == 2 and resp.maybe_billed_attempts == 1
+
+
+def test_in_flight_credit_waits_instead_of_stopping():
+    body = {"error": {"message": "This request would exceed your available credits given your current in-flight requests",
+                      "code": 402, "metadata": {"reason": "in_flight_budget_exhausted"}}}
+    c, seen = _client([(402, body, {"retry-after": "1"}), OK])
+    assert c.complete(_req()).cost_usd == 0.001 and len(seen) == 2
+    c, _ = _client([(402, {"error": {"message": "Insufficient credits", "code": 402}}, {})])
+    with pytest.raises(FatalAPIError):
+        c.complete(_req())
+
+
+def test_a_timed_out_attempt_is_kept_as_possibly_billed(conn, cfg, fixtures):
+    from ncte.llm.fake import FakeLLM
+
+    from ..helpers import run_book
+
+    class Flaky(FakeLLM):
+        def complete(self, req):
+            r = super().complete(req)
+            if req.stage == "translate" and not getattr(self, "_once", False):
+                self._once = True
+                r.maybe_billed_attempts = 1
+            return r
+
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], Flaky())
+    extra = conn.execute("SELECT COUNT(*) FROM llm_requests WHERE run_id=? AND cost_status='unknown' AND "
+                         "error LIKE 'earlier attempt timed out%'", (rid,)).fetchone()[0]
+    assert extra == 1 and s.unknown_cost_requests >= 1

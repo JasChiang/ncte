@@ -25,7 +25,8 @@ def cost_report(conn: sqlite3.Connection, *, run_id: str | None = None, book_id:
     tot: dict[str, Any] = {"requests": len(rows), "cost_reported_usd": 0.0, "cost_estimated_usd": 0.0,
                            "cost_unknown_estimate_usd": 0.0, "prompt_tokens": 0, "completion_tokens": 0,
                            "reasoning_tokens": 0, "cached_tokens": 0, "failed_requests": 0,
-                           "requests_with_retries": 0, "latency_ms_total": 0}
+                           "requests_with_retries": 0, "latency_ms_total": 0,
+                           "requests_without_reasoning_detail": 0}  # fal: reasoning is billed but not itemized
     by_stage: dict[str, dict[str, Any]] = {}
     by_model: dict[str, dict[str, Any]] = {}
     by_cost_status: dict[str, int] = {}
@@ -34,6 +35,8 @@ def cost_report(conn: sqlite3.Connection, *, run_id: str | None = None, book_id:
         u = json.loads(r["usage_json"] or "{}")
         pt, ct = int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
         rt = int((u.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
+        if ct and "completion_tokens_details" not in u:
+            tot["requests_without_reasoning_detail"] += 1
         cached = int((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
         tot["prompt_tokens"] += pt
         tot["completion_tokens"] += ct

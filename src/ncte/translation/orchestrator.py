@@ -150,6 +150,15 @@ def load_run(conn: sqlite3.Connection, run_id: str) -> tuple[sqlite3.Row, Config
     return row, Config.model_validate(data), opts
 
 
+def record_event(conn: sqlite3.Connection, run_id: str, event: str, source: str, **detail: Any) -> None:
+    """A line in the run's history: who started or continued it, who changed its budget (``run_events``)."""
+    import os
+
+    with Transaction(conn):
+        conn.execute("INSERT INTO run_events(run_id, at, event, source, pid, detail_json) VALUES (?,?,?,?,?,?)",
+                     (run_id, utcnow(), event, source, os.getpid(), json.dumps(detail, ensure_ascii=False)))
+
+
 def run_spent(conn: sqlite3.Connection, run_id: str) -> tuple[float, int]:
     row = conn.execute(
         "SELECT COALESCE(SUM(CASE WHEN cost_usd IS NOT NULL THEN cost_usd "
@@ -194,6 +203,15 @@ class DbRecorder:
                 "status=?, attempts=?, latency_ms=?, response_text=?, structured_mode=?, finished_at=? WHERE id=?",
                 (resp.provider, json.dumps(resp.usage), resp.generation_id, cost, status, req_status,
                  resp.attempts, resp.latency_ms, resp.content, resp.structured_mode, utcnow(), rid))
+            for _ in range(resp.maybe_billed_attempts):
+                # an earlier attempt of this request timed out and may have been billed: its own row, cost unknown
+                # (counted at the estimate, like any request whose bill is unknown)
+                self.conn.execute(
+                    "INSERT INTO llm_requests(run_id, book_id, stage, request_hash, model, prompt_version, structured_mode, "
+                    "unit_ids_json, est_cost_usd, status, cost_status, error, created_at, finished_at, reasoning_effort) "
+                    "SELECT run_id, book_id, stage, request_hash, model, prompt_version, structured_mode, '[]', "
+                    "est_cost_usd, 'failed', 'unknown', 'earlier attempt timed out; may have been billed', created_at, ?, "
+                    "reasoning_effort FROM llm_requests WHERE id=?", (utcnow(), rid))
 
     def failure(self, rid: int, exc: Exception) -> None:
         billed = bool(getattr(exc, "possibly_billed", False))
@@ -539,6 +557,10 @@ class Orchestrator:
         # before anything changes: another program working on this series keeps its run, its jobs and its money
         series_lock = SeriesLock(self.conn)
         series_lock.acquire(self.run_id, self.lock_source)
+        with self.lock:
+            resumed = self.conn.execute("SELECT 1 FROM jobs WHERE run_id=? LIMIT 1", (self.run_id,)).fetchone() is not None
+        record_event(self.conn, self.run_id, "resume" if resumed else "start", self.lock_source,
+                     budget_usd=self.opts.budget_usd)
         try:
             return self._run_locked()
         finally:

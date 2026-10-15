@@ -70,3 +70,22 @@ def test_in_memory_database_needs_no_lock():
     lock.acquire("r", "cli")
     assert holder(mem) is None
     lock.release()
+
+
+def test_run_history_records_who_started_and_changed_the_budget(tmp_path, fixtures, monkeypatch):
+    from typer.testing import CliRunner
+
+    from ncte.cli import app
+
+    monkeypatch.chdir(tmp_path)
+    r = CliRunner()
+    ws = ["-w", str(tmp_path / "ws")]
+    out = r.invoke(app, [*ws, "translate", str(fixtures["basic"]), "--fake", "--budget-usd", "0.0001"])
+    rid = next(w for w in out.output.split() if w.startswith("r_"))
+    r.invoke(app, [*ws, "resume", "--run-id", rid, "--budget-usd", "5"])
+    import sqlite3
+    from pathlib import Path
+
+    db = next(Path(tmp_path / "ws").rglob("ncte.db"))
+    ev = [tuple(x) for x in sqlite3.connect(db).execute("SELECT event, source FROM run_events WHERE run_id=? ORDER BY id", (rid,))]
+    assert ev[0] == ("start", "cli") and ("budget", "cli") in ev and ev[-1] == ("resume", "cli")

@@ -26,12 +26,31 @@ from .base import LLMRequest, LLMResponse
 RETRYABLE = {408, 409, 425, 429, 500, 502, 503, 504, 520, 522, 524, 529}
 FATAL = {401, 402, 403, 404}
 REJECTED = {400, 413, 422}
-_BLOCK_MARKERS = ("content_policy", "prohibited_content", "safety", "blocked", "moderation", "blocklist", "recitation")
+# what a content filter says (Gemini PROHIBITED_CONTENT / SAFETY, OpenAI content_policy, OpenRouter moderation);
+# a bare "blocked" is not enough: "Account blocked" is an account problem, not a passage to split and resend
+_BLOCK_MARKERS = ("content_policy", "prohibited_content", "content_filter", "safety", "moderation", "flagged",
+                  "blocklist", "recitation", "blocked the request")
+_NOT_CONTENT = ("account", "api key", "credits", "billing", "unauthorized")
+_REFUSALS = {"content_filter", "refusal", "safety", "prohibited_content", "recitation", "blocklist"}
 
 
 def _error_obj(body: object) -> dict[str, object]:
-    if isinstance(body, dict) and isinstance(body.get("error"), dict):
-        return body["error"]  # type: ignore[return-value]
+    """One shape for the error forms seen: {"error": {...}} (OpenRouter), {"error": "..."}, {"detail": "..."} and
+    {"detail": [{"msg": ...}]} (fal)."""
+    if not isinstance(body, dict):
+        return {}
+    err = body.get("error")
+    if isinstance(err, dict):
+        return err
+    if isinstance(err, str) and err:
+        return {"message": err}
+    detail = body.get("detail")
+    if isinstance(detail, str) and detail:
+        return {"message": detail}
+    if isinstance(detail, list) and detail:
+        return {"message": "; ".join(str(d.get("msg", d)) if isinstance(d, dict) else str(d) for d in detail)}
+    if isinstance(detail, dict):
+        return {"message": str(detail.get("message") or detail)}
     return {}
 
 
@@ -50,8 +69,19 @@ def is_transient_rejection(err: dict[str, object]) -> bool:
 def is_content_block(err: dict[str, object]) -> bool:
     meta = err.get("metadata")
     values = list(meta.values()) if isinstance(meta, dict) else []
-    blob = " ".join(str(x) for x in (err.get("message"), *values)).lower()
+    blob = " ".join(str(x) for x in (err.get("message"), err.get("code"), *values)).lower()
+    if "prohibited_content" in blob:  # an explicit code wins
+        return True
+    if any(m in blob for m in _NOT_CONTENT):
+        return False
     return any(m in blob for m in _BLOCK_MARKERS)
+
+
+def is_in_flight_wait(err: dict[str, object]) -> bool:
+    """HTTP 402 because requests still running may use the remaining credit: wait and send again, not out of money."""
+    meta = err.get("metadata")
+    values = list(meta.values()) if isinstance(meta, dict) else []
+    return "in_flight" in " ".join(str(x) for x in (err.get("message"), *values)).lower()
 
 
 class OpenRouterClient:
@@ -183,12 +213,14 @@ class OpenRouterClient:
         headers = self._auth()
         last_exc: Exception | None = None
         possibly_billed = False
+        maybe_billed_attempts = 0  # attempts that may have been billed before the one that answered
         for attempt in range(1, self.max_attempts + 1):
             t0 = time.monotonic()
             try:
                 resp = self._http.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
             except httpx.TimeoutException as exc:
                 possibly_billed = True  # the provider may have completed (and billed) the request
+                maybe_billed_attempts += 1
                 last_exc = exc
                 if attempt < self.max_attempts:
                     self.sleep(self._backoff(attempt, None))
@@ -204,27 +236,38 @@ class OpenRouterClient:
                 try:
                     body = resp.json()
                 except (ValueError, json.JSONDecodeError):
-                    last_exc = RetryableAPIError("HTTP 200 with non-JSON body")
+                    body = None
+                if not isinstance(body, dict):  # not JSON, or JSON of another shape (a list…)
+                    last_exc = RetryableAPIError("HTTP 200 with a body that is not a JSON object")
                     possibly_billed = True
+                    maybe_billed_attempts += 1
                     if attempt < self.max_attempts:
                         self.sleep(self._backoff(attempt, None))
                     continue
-                if isinstance(body, dict) and body.get("error"):
-                    err = body["error"]
-                    code = err.get("code") if isinstance(err, dict) else None
+                if body.get("error") or (body.get("detail") and not body.get("choices")):
+                    err = _error_obj(body)
+                    code = err.get("code")
                     msg = redact(str(err)[:500], self.api_key)
-                    if isinstance(err, dict) and is_content_block(err):
+                    if is_content_block(err):
                         raise ContentBlockedError(f"content filter: {msg}")
-                    if isinstance(code, int) and code in FATAL:
+                    if isinstance(code, int) and code in FATAL and not (code == 402 and is_in_flight_wait(err)):
                         raise FatalAPIError(f"OpenRouter error {code}: {msg}")
                     last_exc = RetryableAPIError(f"OpenRouter error in body: {msg}")
                     if attempt < self.max_attempts:
                         self.sleep(self._backoff(attempt, None))
                     continue
-                return self._parse(body, req, latency, attempt)
+                resp_ok = self._parse(body, req, latency, attempt)
+                resp_ok.maybe_billed_attempts = maybe_billed_attempts
+                return resp_ok
             text = self._err_text(resp)
             if status in (400, 403, 422) and is_content_block(self._err_obj(resp)):
                 raise ContentBlockedError(f"HTTP {status} content filter: {text}")
+            if status == 402 and is_in_flight_wait(self._err_obj(resp)):
+                # the credit is held by requests still running: wait as told, then send again
+                last_exc = RetryableAPIError(f"HTTP 402 (waiting for running requests to settle): {text}")
+                if attempt < self.max_attempts:
+                    self.sleep(self._backoff(attempt, resp.headers.get("retry-after")))
+                continue
             if status in FATAL:
                 hint = {401: "invalid API key", 402: "insufficient credits", 403: "forbidden / moderation",
                         404: "model or endpoint not found"}[status]
@@ -242,10 +285,10 @@ class OpenRouterClient:
                     self.sleep(self._backoff(attempt, resp.headers.get("retry-after")))
                 continue
             raise LLMError(f"Unexpected HTTP {status}: {text}")
-        err = RetryableAPIError(f"giving up after {self.max_attempts} attempts: "
-                                f"{redact(str(last_exc), self.api_key)}")
-        err.possibly_billed = possibly_billed  # type: ignore[attr-defined]
-        raise err
+        gave_up = RetryableAPIError(f"giving up after {self.max_attempts} attempts: "
+                                    f"{redact(str(last_exc), self.api_key)}")
+        gave_up.possibly_billed = possibly_billed  # type: ignore[attr-defined]
+        raise gave_up
 
     def _parse(self, body: dict[str, Any], req: LLMRequest, latency: int, attempt: int) -> LLMResponse:
         choices = body.get("choices") or []
@@ -255,6 +298,11 @@ class OpenRouterClient:
         content = msg.get("content")
         if isinstance(content, list):  # content parts
             content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
+        finish = str(choices[0].get("finish_reason") or choices[0].get("native_finish_reason") or "").lower()
+        if (finish in _REFUSALS or msg.get("refusal")) and not (content or "").strip():
+            # answered with a refusal instead of an error: the content filter, not a malformed answer
+            raise ContentBlockedError(f"content filter (finish_reason={finish or 'refusal'}): "
+                                      f"{redact(str(msg.get('refusal') or '')[:300], self.api_key)}")
         usage = body.get("usage") or {}
         cost = usage.get("cost")
         return LLMResponse(
