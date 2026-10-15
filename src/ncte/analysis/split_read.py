@@ -8,9 +8,12 @@ up on; the parts' answers are merged into one answer for the scene, and the unit
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel
+
+from ..errors import ContentBlockedError
 
 MIN_PART = 4  # units: a refused part this small is not split further
 
@@ -80,3 +83,21 @@ def merge_outputs[M: BaseModel](parts: list[M]) -> M:
         else:
             out[key] = next((v for v in values if v is not None), None)
     return cls.model_validate(out)
+
+
+def call_in_parts(call: Callable[[dict[str, Any]], Any], payload: dict[str, Any], key: str, blocked: list[str],
+                  *, min_part: int = MIN_PART) -> Any:
+    """``call(payload)``; when the content filter refuses it, the list under ``key`` (items carrying ``unit_id``) is
+    halved until each part goes through or is small enough to give up on (its unit ids go to ``blocked``). The parts'
+    answers are merged. None when nothing went through. Used by the reader's look, review and the rule-flag check."""
+    items = payload[key]
+    try:
+        return call(payload)
+    except ContentBlockedError:
+        if len(items) <= min_part:
+            blocked.extend(str(i.get("unit_id")) for i in items if isinstance(i, dict))
+            return None
+    half = len(items) // 2
+    parts = [p for chunk in (items[:half], items[half:])
+             if (p := call_in_parts(call, {**payload, key: chunk}, key, blocked, min_part=min_part)) is not None]
+    return merge_outputs(parts) if parts else None

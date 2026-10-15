@@ -23,7 +23,7 @@ from typing import Any
 from ..analysis.memory_update import apply_memory_update, build_memory_payload
 from ..analysis.naming import apply_naming, auto_settle, build_naming_payload, model_view, pending
 from ..analysis.scene import apply_scene_analysis, build_analysis_payload, get_scene
-from ..analysis.split_read import MIN_PART, merge_outputs, subset_payload
+from ..analysis.split_read import MIN_PART, call_in_parts, merge_outputs, subset_payload
 from ..errors import ContentBlockedError, FatalAPIError, LLMError, ModelOutputError
 from ..llm.prompt_loader import load_prompt
 from ..llm.schemas import MemoryUpdateOutput, NamingOutput, SceneAnalysisOutput, VerifyOutput
@@ -331,13 +331,18 @@ class ContextOrchestrator(Orchestrator):
         prompt = load_prompt("reader")
         stats = {"read": 0, "issues": 0, "retranslated": 0, "fixed": 0, "still_flagged": 0}
         for part in parts:
-            try:
-                parsed = self._llm("reader", prompt, {"task": "reader", "paragraphs": part, "characters": cast},
-                                   [p["unit_id"] for p in part])
+            blocked: list[str] = []
+            try:  # 120 paragraphs at a time: the content filter may refuse a part; it is then read in halves
+                parsed = call_in_parts(lambda pl: self._llm("reader", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
+                                       {"task": "reader", "paragraphs": part, "characters": cast}, "paragraphs", blocked)
             except FatalAPIError:
                 raise
             except LLMError as exc:
                 self._finding(None, "reader_failed", "low", str(exc)[:300])
+                continue
+            for uid in blocked:
+                self._finding(uid, "reader_blocked", "low", "the content filter refused this passage in the reader's look")
+            if parsed is None:
                 continue
             assert isinstance(parsed, ReaderOutput)
             stats["read"] += len(part)
@@ -526,13 +531,17 @@ class ContextOrchestrator(Orchestrator):
                               "around": _surroundings(self.conn, self.book.id, [row])})
             cast = reader.characters(self.conn, self.book.id)
         stats = {"checked": len(items), "dismissed": 0}
+        blocked: list[str] = []
         try:
-            parsed = self._llm("confirm", load_prompt("confirm"), {"task": "confirm", "items": items, "characters": cast},
-                               sorted({i["unit_id"] for i in items}))
+            parsed = call_in_parts(lambda pl: self._llm("confirm", load_prompt("confirm"), pl,
+                                                        sorted({i["unit_id"] for i in pl["items"]})),
+                                   {"task": "confirm", "items": items, "characters": cast}, "items", blocked, min_part=1)
         except FatalAPIError:
             raise
         except LLMError as exc:  # the flags stay and go to review as before
             self._finding(None, "confirm_failed", "low", str(exc)[:300])
+            return stats
+        if parsed is None:
             return stats
         assert isinstance(parsed, ConfirmOutput)
         flagged = {(f["unit_id"], f["type"]) for f in found}

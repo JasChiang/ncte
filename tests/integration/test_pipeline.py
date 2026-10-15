@@ -284,3 +284,29 @@ def test_rule_flags_are_checked_with_context_before_review(conn, cfg, fixtures, 
     assert st and all(r["status"] == "dismissed_by_check" and "人名音譯" in r["evidence"] for r in st)
     assert not any(p for p in reviewed if any(u.get("unit_id") in {x["unit_id"] for x in seen[0]["items"]}
                                               for u in p.get("units", [])))
+
+
+def test_reader_look_and_review_are_split_when_the_filter_refuses(conn, cfg, fixtures):
+    from ncte.errors import ContentBlockedError
+
+    cfg.review.automatic_review = "all"
+
+    import json
+
+    class Filter(FakeLLM):  # refuses any reader's look or review over 10 paragraphs / 2 items
+        def complete(self, req):
+            p = json.loads(req.messages[-1]["content"])
+            if (req.stage == "reader" and len(p["paragraphs"]) > 10) or (req.stage == "review" and len(p["items"]) > 2):
+                raise ContentBlockedError("HTTP 403 content filter: fake PROHIBITED_CONTENT")
+            return super().complete(req)
+
+    fake = Filter()
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    assert s.status == "completed"
+    calls = list(zip(fake.calls, fake.payloads, strict=True))
+    reader_ok = [len(p["paragraphs"]) for c, p in calls if c.stage == "reader" and len(p["paragraphs"]) <= 10]
+    assert len(reader_ok) > 1  # read in parts after the refusal
+    review_ok = [len(p["items"]) for c, p in calls if c.stage == "review" and len(p["items"]) <= 2]
+    assert review_ok  # reviewed in parts
+    assert not conn.execute("SELECT 1 FROM qa_findings WHERE run_id=? AND type IN ('reader_blocked','review_blocked')",
+                            (rid,)).fetchone()  # every part went through

@@ -12,6 +12,7 @@ import json
 import sqlite3
 from typing import Any
 
+from ..analysis.split_read import call_in_parts
 from ..errors import FatalAPIError, LLMError, ModelOutputError
 from ..llm.prompt_loader import load_prompt
 from ..llm.schemas import ReviewOutput
@@ -104,15 +105,23 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
                 payload[key] = ctx[key]
         est = orch._estimate(payload, sum(len(x["source"]) for x in items) // 2)
         orch.check_budget(est)
-        try:
-            parsed, _rid, _mode = call_structured(orch.client, orch.recorder, stage="review", model=model, prompt=prompt,
-                                                  payload=payload, mode=orch.translator.mode, cfg=cfg,
-                                                  unit_ids=[x["unit_id"] for x in items], est_cost=est,
-                                                  on_downgrade=orch._note)
+        def ask(pl: dict[str, Any], est: float = est) -> Any:
+            return call_structured(orch.client, orch.recorder, stage="review", model=model, prompt=prompt, payload=pl,
+                                   mode=orch.translator.mode, cfg=cfg, unit_ids=[x["unit_id"] for x in pl["items"]],
+                                   est_cost=est, on_downgrade=orch._note)[0]
+
+        blocked: list[str] = []
+        try:  # a content filter refusing the batch: reviewed in halves (split_read.call_in_parts)
+            parsed = call_in_parts(ask, payload, "items", blocked, min_part=1)
         except FatalAPIError:
             raise
         except (LLMError, ModelOutputError) as exc:
             orch._finding(None, "review_failed", "medium", f"{len(items)} units: {exc}"[:400])
+            _close_jobs(orch, [x["unit_id"] for x in items], "failed")
+            continue
+        for uid in blocked:
+            orch._finding(uid, "review_blocked", "medium", "the content filter refused this passage in review")
+        if parsed is None:
             _close_jobs(orch, [x["unit_id"] for x in items], "failed")
             continue
         assert isinstance(parsed, ReviewOutput)
