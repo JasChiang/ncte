@@ -452,21 +452,47 @@ function genderLine(p, upto) {
 }
 const G = {mode: "rel", mentions: false, n: 12, hideMinor: true, series: false, focus: null, pair: null};
 const GROUPISH = /(たち|みんな|観客|生徒たち|周り|の声|チーム|們|觀眾|路人|大家)$/;
-function layout(nodes, edges, W, H) {
-  // small deterministic force layout: nodes that share many scenes end up close together
-  const P = {}; nodes.forEach((c, i) => { const t = -Math.PI / 2 + i * 2 * Math.PI / nodes.length; P[c] = {x: W / 2 + 180 * Math.cos(t), y: H / 2 + 180 * Math.sin(t)}; });
-  const k = Math.sqrt(W * H / Math.max(1, nodes.length)) * .55, mx = Math.max(1, ...edges.map(e => e.w));
-  for (let it = 0; it < 300; it++) {
+// Each group of linked people is laid out on its own (repel, attract along links, keep circles and labels apart),
+// then the groups are placed side by side, biggest first. The SVG view box is fitted around the result, so circles,
+// lines and labels scale together and the spacing is never squeezed.
+function layoutGroup(nodes, edges, R) {
+  const P = {}, n = Math.max(1, nodes.length), ideal = 150;
+  nodes.forEach((c, i) => { const t = -Math.PI / 2 + i * 2 * Math.PI / n; P[c] = {x: Math.cos(t) * 40 * Math.sqrt(n), y: Math.sin(t) * 40 * Math.sqrt(n)}; });
+  for (let it = 0; it < 400; it++) {
     const F = {}; nodes.forEach(c => F[c] = {x: 0, y: 0});
-    nodes.forEach((a, i) => nodes.slice(i + 1).forEach(b => { const dx = P[a].x - P[b].x, dy = P[a].y - P[b].y, d = Math.max(1, Math.hypot(dx, dy)), f = k * k / d;
-      F[a].x += dx / d * f; F[a].y += dy / d * f; F[b].x -= dx / d * f; F[b].y -= dy / d * f; }));
-    edges.forEach(e => { const dx = P[e.a].x - P[e.b].x, dy = P[e.a].y - P[e.b].y, d = Math.max(1, Math.hypot(dx, dy)), f = d * d / k * (.3 + e.w / mx);
-      F[e.a].x -= dx / d * f; F[e.a].y -= dy / d * f; F[e.b].x += dx / d * f; F[e.b].y += dy / d * f; });
-    const temp = 30 * (1 - it / 300) + 1;
-    nodes.forEach(c => { F[c].x += (W / 2 - P[c].x) * .04; F[c].y += (H / 2 - P[c].y) * .04;
-      const d = Math.max(1, Math.hypot(F[c].x, F[c].y)); P[c].x += F[c].x / d * Math.min(d, temp); P[c].y += F[c].y / d * Math.min(d, temp);
-      P[c].x = Math.min(W - 50, Math.max(50, P[c].x)); P[c].y = Math.min(H - 40, Math.max(40, P[c].y)); });
+    nodes.forEach((a, i) => nodes.slice(i + 1).forEach(b => {
+      let dx = P[a].x - P[b].x, dy = P[a].y - P[b].y; const d = Math.max(1, Math.hypot(dx, dy)), f = ideal * ideal / d;
+      dx /= d; dy /= d; F[a].x += dx * f; F[a].y += dy * f; F[b].x -= dx * f; F[b].y -= dy * f; }));
+    edges.forEach(e => { let dx = P[e.a].x - P[e.b].x, dy = P[e.a].y - P[e.b].y; const d = Math.max(1, Math.hypot(dx, dy)), f = d * d / ideal * 0.7;
+      dx /= d; dy /= d; F[e.a].x -= dx * f; F[e.a].y -= dy * f; F[e.b].x += dx * f; F[e.b].y += dy * f; });
+    const temp = 30 * (1 - it / 400) + 0.5;
+    nodes.forEach(c => { F[c].x -= P[c].x * 0.05; F[c].y -= P[c].y * 0.05;
+      const d = Math.max(1, Math.hypot(F[c].x, F[c].y)); P[c].x += F[c].x / d * Math.min(d, temp); P[c].y += F[c].y / d * Math.min(d, temp); });
+    nodes.forEach((a, i) => nodes.slice(i + 1).forEach(b => {
+      const dx = P[a].x - P[b].x, dy = P[a].y - P[b].y, d = Math.max(0.1, Math.hypot(dx, dy)), min = R(a) + R(b) + 55;
+      if (d < min) { const push = (min - d) / 2; P[a].x += dx / d * push; P[a].y += dy / d * push; P[b].x -= dx / d * push; P[b].y -= dy / d * push; } }));
   }
+  return P;
+}
+function layout(nodes, edges, W, H, R) {
+  const adj = {}; nodes.forEach(c => adj[c] = []);
+  edges.forEach(e => { if (adj[e.a] && adj[e.b]) { adj[e.a].push(e.b); adj[e.b].push(e.a); } });
+  const seen = new Set(), groups = [];
+  nodes.forEach(c => { if (seen.has(c)) return; const g = [], st = [c]; seen.add(c);
+    while (st.length) { const x = st.pop(); g.push(x); adj[x].forEach(y => { if (!seen.has(y)) { seen.add(y); st.push(y); } }); }
+    groups.push(g); });
+  groups.sort((a, b) => b.length - a.length);
+  const P = {}, gap = 90;
+  let x0 = 0, top = Infinity, bottom = -Infinity;
+  groups.forEach(g => {
+    const Q = layoutGroup(g, edges.filter(e => g.includes(e.a) && g.includes(e.b)), R);
+    const xs = g.map(c => Q[c].x - R(c)), xe = g.map(c => Q[c].x + R(c));
+    const minX = Math.min(...xs), maxX = Math.max(...xe);
+    g.forEach(c => { P[c] = {x: Q[c].x - minX + x0, y: Q[c].y}; top = Math.min(top, Q[c].y - R(c)); bottom = Math.max(bottom, Q[c].y + R(c)); });
+    x0 += maxX - minX + gap;
+  });
+  const m = 50, w = Math.max(400, x0 - gap + 2 * m), h = Math.max(300, bottom - top + 2 * m);
+  P._box = nodes.length ? {x: -m, y: top - m, w, h} : {x: 0, y: 0, w: W, h: H};
   return P;
 }
 async function graphView(id) {
@@ -482,7 +508,12 @@ async function graphView(id) {
   if (G.n) nodes = nodes.slice(0, G.n);
   // relations known by this point (ADR-039): from the facts, shown from where the story reveals them
   const rels = (d.relations || []).filter(r => r.at <= upto && ok(r.a) && ok(r.b));
-  if (G.mode === "rel") rels.forEach(r => [r.a, r.b].forEach(c => { if (!nodes.includes(c)) { nodes.push(c); cnt[c] = cnt[c] || 1; } }));
+  if (G.mode === "rel") {  // the people the relations are about (most present first), nobody without one
+    const inRel = new Set(rels.flatMap(r => [r.a, r.b]));
+    inRel.forEach(c => { cnt[c] = cnt[c] || 1; });
+    nodes = [...inRel].sort((a, b) => cnt[b] - cnt[a]);
+    if (G.n) { const keep = new Set(nodes.slice(0, G.n)); nodes = nodes.filter(c => keep.has(c)); }
+  }
   const inSet = new Set(nodes);
   const pairScenes = {};
   scenes.forEach(s => { const m = members(s).filter(c => inSet.has(c)); m.forEach((a, i) => m.slice(i + 1).forEach(b => {
@@ -491,11 +522,13 @@ async function graphView(id) {
   const edges = G.mode === "addr"
     ? Object.values(addr.reduce((m, a) => { const k = [a.speaker, a.to].sort().join("|"); (m[k] = m[k] || {a: a.speaker, b: a.to, w: 0}).w += a.uses; return m; }, {}))
     : G.mode === "rel"
-    ? Object.values(rels.reduce((m, r) => { const k = [r.a, r.b].sort().join("|");
+    ? Object.values(rels.filter(r => inSet.has(r.a) && inSet.has(r.b)).reduce((m, r) => { const k = [r.a, r.b].sort().join("|");
         (m[k] = m[k] || {a: r.a, b: r.b, w: 1 + (pairScenes[k] || []).length, labels: []}).labels.push(r.rel); return m; }, {}))
     : Object.entries(pairScenes).map(([k, ss]) => { const [a, b] = k.split("|"); return {a, b, w: ss.length}; });
-  const W = 820, H = 560, P = layout(nodes, edges, W, H), mx = Math.max(1, ...edges.map(e => e.w));
   const maxN = Math.max(1, ...nodes.map(c => cnt[c]));
+  const rad = c => 20 + 16 * Math.sqrt((cnt[c] || 1) / maxN);
+  const W = 900, H = 620, P = layout(nodes, edges.filter(e => nodes.includes(e.a) && nodes.includes(e.b)), W, H, rad),
+    mx = Math.max(1, ...edges.map(e => e.w));
   const near = new Set(G.focus ? [G.focus, ...edges.filter(e => e.a === G.focus || e.b === G.focus).flatMap(e => [e.a, e.b])] : nodes);
   const dim = c => near.has(c) ? 1 : .15;
   let svg = `<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="var(--accent)"/></marker></defs>`;
@@ -512,7 +545,7 @@ async function graphView(id) {
         <line x1="${P[e.a].x}" y1="${P[e.a].y}" x2="${P[e.b].x}" y2="${P[e.b].y}" stroke="${G.pair === pk ? "var(--accent)" : "var(--muted)"}" stroke-opacity="${.25 + .6 * e.w / mx}" stroke-width="${1 + 7 * e.w / mx}"><title>${esc(nm(e.a))}・${esc(nm(e.b))}：${e.labels ? esc(e.labels.join("、")) : e.w + " 個場景"}</title></line>
         ${e.labels ? `<text x="${(P[e.a].x + P[e.b].x) / 2}" y="${(P[e.a].y + P[e.b].y) / 2 - 4}" font-size="11.5" text-anchor="middle" class="rel-label">${esc(e.labels.join("・"))}</text>` : ""}</g>`; });
   }
-  nodes.forEach(c => { const r = 20 + 16 * Math.sqrt(cnt[c] / maxN);
+  nodes.forEach(c => { const r = rad(c);
     svg += `<g data-k="${esc(c)}" style="cursor:pointer;opacity:${dim(c)}"><circle cx="${P[c].x}" cy="${P[c].y}" r="${r}" fill="${G.focus === c ? "var(--accent-soft)" : "var(--panel)"}" stroke="var(--accent)" stroke-width="${G.focus === c ? 3 : 1.6}"/>
       <text x="${P[c].x}" y="${P[c].y + 5}" text-anchor="middle" font-size="13" font-weight="600">${esc(nm(c))}</text><title>${esc(nm(c))}：${cnt[c]} 個場景</title></g>`; });
   const sel = (name, opts, cur) => `<select data-ctl="${name}">${opts.map(([v, l]) => `<option value="${v}" ${String(v) === String(cur) ? "selected" : ""}>${l}</option>`).join("")}</select>`;
@@ -523,7 +556,7 @@ async function graphView(id) {
       <label class="small"><input type="checkbox" data-ctl="hideMinor" ${G.hideMinor ? "checked" : ""}> 隱藏路人、群體</label>
       <div class="seg"><button data-s="0" class="${G.series ? "" : "on"}">本集</button><button data-s="1" class="${G.series ? "on" : ""}">系列累計</button></div>
       ${G.focus ? `<button class="btn" data-clear>取消聚焦</button>` : ""}</div>
-    <div class="row" style="align-items:flex-start"><div class="card scroll" style="flex:1 1 560px;padding:6px"><svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:540px">${svg}</svg></div>
+    <div class="row" style="align-items:flex-start"><div class="card scroll" style="flex:1 1 560px;padding:6px"><svg viewBox="${P._box.x} ${P._box.y} ${P._box.w} ${P._box.h}" width="100%" style="min-width:540px;max-height:72vh">${svg}</svg></div>
     <div class="card" style="flex:0 1 340px;min-width:280px" id="gside">${graphSide(d, nm, upto, pairScenes, addr, cnt)}</div></div>
     <p class="muted small">${G.mode === "rel" ? `線＝故事中的關係（依讀到的事實整理，讀到揭露處才出現）${rels.length ? "" : "；這本書還沒有整理關係（ncte names relations）"}` : G.mode === "talk" ? (G.mentions ? "線＝同一場景出現（含只被提到）" : "線＝兩人在同一場景都有台詞") : "箭頭＝誰用什麼稱呼叫誰"}；圓圈大小＝出場場景數。點人物聚焦，點線看兩人的互動。${ov.title}</p>`;
   view.querySelectorAll("[data-m]").forEach(b => b.onclick = () => { G.mode = b.dataset.m; G.pair = null; graphView(id); });
