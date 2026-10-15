@@ -551,18 +551,33 @@ async function graphView(id) {
       svg += `<g data-pair="${esc(pk)}" style="cursor:pointer;opacity:${op}"><line x1="${p.x + ux * 30 + nx}" y1="${p.y + uy * 30 + ny}" x2="${q.x - ux * 34 + nx}" y2="${q.y - uy * 34 + ny}" stroke="var(--accent)" stroke-width="1.4" marker-end="url(#ah)"/>
         <text x="${(p.x + q.x) / 2 + nx * 2.2}" y="${(p.y + q.y) / 2 + ny * 2.2}" font-size="11" text-anchor="middle">${esc(a.ja)}</text></g>`; });
   } else {
+    // a line that would pass through another person bends around them: the smallest bend (either side) that clears
+    // every other circle, as a quadratic curve; labels sit on the curve
+    const bend = e => {
+      const p = P[e.a], q = P[e.b], dx = q.x - p.x, dy = q.y - p.y, L = Math.max(1, Math.hypot(dx, dy)), nx = -dy / L, ny = dx / L;
+      const others = nodes.filter(c => c !== e.a && c !== e.b);
+      const clear = h => { const cx = (p.x + q.x) / 2 + nx * h, cy = (p.y + q.y) / 2 + ny * h;
+        for (let i = 1; i < 24; i++) { const t = i / 24, u = 1 - t, x = u * u * p.x + 2 * t * u * cx + t * t * q.x, y = u * u * p.y + 2 * t * u * cy + t * t * q.y;
+          if (others.some(c => Math.hypot(P[c].x - x, P[c].y - y) < rad(c) + 20)) return false; }
+        return true; };
+      for (let h = 0; h <= 360; h += 15) { if (clear(h)) return h; if (h && clear(-h)) return -h; }
+      return 0;
+    };
+    const at = (e, h, t) => { const p = P[e.a], q = P[e.b], L = Math.max(1, Math.hypot(q.x - p.x, q.y - p.y)),
+      cx = (p.x + q.x) / 2 - (q.y - p.y) / L * h, cy = (p.y + q.y) / 2 + (q.x - p.x) / L * h, u = 1 - t;
+      return {x: u * u * p.x + 2 * t * u * cx + t * t * q.x, y: u * u * p.y + 2 * t * u * cy + t * t * q.y, cx, cy}; };
     // a relation with two different roles (父親／女兒, 老師／學生): one line, each role written next to its person
-    const near = (p, q, t) => ({x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t});
-    const roleLabels = e => (e.roles || []).map(r => [[r.a, r.b, r.a_is], [r.b, r.a, r.b_is]].map(([who, other, role]) => {
-      const pt = near(P[who], P[other], 0.3);
+    const roleLabels = (e, h) => (e.roles || []).map(r => [[r.a, r.b, r.a_is], [r.b, r.a, r.b_is]].map(([who, other, role]) => {
+      const pt = at(e, h, who === e.a ? 0.3 : 0.7);
       return `<text x="${pt.x}" y="${pt.y - 5}" font-size="14" text-anchor="middle" class="rel-label">${esc(role)}<title>${esc(nm(who))} 是 ${esc(nm(other))} 的${esc(role)}</title></text>`;
     }).join("")).join("");
     edges.forEach(e => {
-      const op = Math.min(dim(e.a), dim(e.b)), pk = [e.a, e.b].sort().join("|");
-      svg += `<g data-pair="${esc(pk)}" style="cursor:pointer;opacity:${op}"><line x1="${P[e.a].x}" y1="${P[e.a].y}" x2="${P[e.b].x}" y2="${P[e.b].y}" stroke="transparent" stroke-width="12"/>
-        <line x1="${P[e.a].x}" y1="${P[e.a].y}" x2="${P[e.b].x}" y2="${P[e.b].y}" stroke="${G.pair === pk ? "var(--accent)" : "var(--muted)"}" stroke-opacity="${.25 + .6 * e.w / mx}" stroke-width="${1 + 7 * e.w / mx}"><title>${esc(nm(e.a))}・${esc(nm(e.b))}：${e.labels ? esc(e.labels.join("、")) : e.w + " 個場景"}</title></line>
-        ${e.labels ? `<text x="${(P[e.a].x + P[e.b].x) / 2}" y="${(P[e.a].y + P[e.b].y) / 2 - 4}" font-size="14" text-anchor="middle" class="rel-label">${esc(e.labels.filter(l => !(e.roles || []).some(r => r.rel === l)).join("・"))}</text>` : ""}
-        ${G.mode === "rel" ? roleLabels(e) : ""}</g>`; });
+      const op = Math.min(dim(e.a), dim(e.b)), pk = [e.a, e.b].sort().join("|"), h = bend(e), mid = at(e, h, 0.5);
+      const d = `M${P[e.a].x},${P[e.a].y} Q${mid.cx},${mid.cy} ${P[e.b].x},${P[e.b].y}`;
+      svg += `<g data-pair="${esc(pk)}" style="cursor:pointer;opacity:${op}"><path d="${d}" fill="none" stroke="transparent" stroke-width="12"/>
+        <path d="${d}" fill="none" stroke="${G.pair === pk ? "var(--accent)" : "var(--muted)"}" stroke-opacity="${.25 + .6 * e.w / mx}" stroke-width="${1 + 7 * e.w / mx}"><title>${esc(nm(e.a))}・${esc(nm(e.b))}：${e.labels ? esc(e.labels.join("、")) : e.w + " 個場景"}</title></path>
+        ${e.labels ? `<text x="${mid.x}" y="${mid.y - 4}" font-size="14" text-anchor="middle" class="rel-label">${esc(e.labels.filter(l => !(e.roles || []).some(r => r.rel === l)).join("・"))}</text>` : ""}
+        ${G.mode === "rel" ? roleLabels(e, h) : ""}</g>`; });
   }
   nodes.forEach(c => { const r = rad(c);
     svg += `<g data-k="${esc(c)}" style="cursor:pointer;opacity:${dim(c)}"><circle cx="${P[c].x}" cy="${P[c].y}" r="${r}" fill="${G.focus === c ? "var(--accent-soft)" : "var(--panel)"}" stroke="var(--accent)" stroke-width="${G.focus === c ? 3 : 1.6}"/>
