@@ -52,3 +52,45 @@ def first_person_slip(plain: str, text: str) -> bool:
     from ..epub.units import PH_RE
 
     return bool(_ZH_I.search(_QUOTED.sub("", PH_RE.sub("", text))))
+
+
+# ---------------------------------------------------------------- per scene (the read pass judges, like a translator)
+def scene_counts(rows: list[sqlite3.Row]) -> tuple[int, int]:
+    """(narration paragraphs, those with a first-person pronoun) in a scene's units."""
+    narr = [narration_only(r["plain_text"]) for r in rows if r["kind"] == "text" and is_narration(r["plain_text"])]
+    return len(narr), sum(1 for t in narr if FIRST_PERSON.search(t))
+
+
+def hint(rows: list[sqlite3.Row]) -> dict[str, int]:
+    n, k = scene_counts(rows)
+    return {"narration_paragraphs": n, "with_first_person": k}
+
+
+def judged(person_: str, rows: list[sqlite3.Row]) -> str | None:
+    """The program's check of the model's answer: 'conflict' when the text plainly says otherwise."""
+    n, k = scene_counts(rows)
+    if person_ == "third" and n >= 8 and k / n > 0.15:
+        return "conflict"
+    if person_ == "first" and n >= 15 and k / n < 0.02:
+        return "conflict"
+    return None
+
+
+def for_scene(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row,
+              names: dict[str, str] | None = None) -> dict[str, str] | None:
+    """What the translator is told for this scene: the read pass's judgement, else the whole book's."""
+    import json
+
+    st = json.loads(scene["state_json"] or "{}").get("narration") or {}
+    out: dict[str, str] = {}
+    if st.get("person") in ("first", "third") and st.get("check") != "conflict":
+        out["person"] = st["person"]
+        for key in ("narrator", "focal"):
+            if st.get(key):
+                out[key] = (names or {}).get(st[key], st[key])
+    else:
+        whole = person(conn, book_id)
+        if whole is None:
+            return None
+        out["person"] = whole
+    return out

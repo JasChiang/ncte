@@ -81,6 +81,15 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
         items.append({"ref": f"m:{c['id']}", "kind": "merge", "name": c["canonical_name"], "merged_forms": others,
                       "context": _window(conn, book_id, link["revealed_ordinal"] or c["known_from_ordinal"]),
                       "_ordinal": link["revealed_ordinal"]})
+    for sc in conn.execute("SELECT * FROM scenes WHERE book_id=? AND state_json LIKE '%\"check\": \"conflict\"%' "
+                           "ORDER BY seq", (book_id,)):
+        narr = json.loads(sc["state_json"]).get("narration") or {}
+        if narr.get("check") != "conflict":
+            continue
+        paras = [match_text(r["plain_text"])[:140] for r in conn.execute(
+            "SELECT plain_text FROM units WHERE book_id=? AND scene_id=? AND kind='text' ORDER BY ordinal LIMIT 40",
+            (book_id, sc["id"])) if not r[0].lstrip(" 　").startswith(("「", "『"))][:12]
+        items.append({"ref": f"n:{sc['id']}", "kind": "narration", "first_answer": narr["person"], "paragraphs": paras})
     items = items[:MAX_ITEMS]
     items += address_items(conn, book_id, names)[:MAX_ADDRESS_ITEMS]
     return items
@@ -158,6 +167,18 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
                 conn.execute("DELETE FROM character_gender WHERE character_id=? AND origin='llm' AND certainty='inferred'",
                              (key,))
                 stats["genders_dropped"] += 1
+        elif kind == "n":
+            sc = conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND id=?", (book_id, key)).fetchone()
+            if sc is None or answer not in ("first", "third", "unclear"):
+                stats["ignored"] += 1
+                continue
+            state = json.loads(sc[0] or "{}")
+            narr = state.get("narration") or {}
+            narr.update({"check": "verified", "person": answer} if answer != "unclear" else {"check": "conflict"})
+            state["narration"] = narr
+            conn.execute("UPDATE scenes SET state_json=? WHERE book_id=? AND id=?",
+                         (json.dumps(state, ensure_ascii=False), book_id, key))
+            stats["narration_checked"] = stats.get("narration_checked", 0) + 1
         elif kind == "a":
             row = conn.execute("SELECT * FROM address_terms WHERE id=?", (int(key),)).fetchone()
             if row is None or answer not in USAGES:

@@ -175,7 +175,17 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
                           "program_speaker": next(iter(tags)) if len(tags) == 1 else None,
                           "continues_previous_quote": q.continuation_of is not None})
     scene_text = " ".join(t.text for t in texts)
+    from .narration import hint as narration_hint
+
+    prev = conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND seq<? AND version>0 ORDER BY seq DESC LIMIT 1",
+                        (book_id, scene["seq"])).fetchone()
+    prev_narr = json.loads(prev[0] or "{}").get("narration") if prev else None
+    extra: dict[str, Any] = {"narration_hint": narration_hint(rows)}
+    if prev_narr and prev_narr.get("person"):
+        extra["previous_narration"] = {"person": prev_narr["person"], **{
+            f"{k}_ref": prev_narr[k] for k in ("narrator", "focal") if prev_narr.get(k)}}
     return {
+        **extra,
         "task": "scene_analyze", "scene_id": scene["id"],
         "units": [{"unit_id": r["id"], "source": r["plain_text"]} for r in rows],
         "quotes": q_payload,
@@ -399,7 +409,16 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         if res.status == "explicit" and res.speaker_id:
             repo.add_speech_example(conn, res.speaker_id, q.unit_id, utt_id, q.text, "explicit")
             stats["examples"] += 1
-    state = {"pov": parsed.pov if parsed else None, "location": parsed.location if parsed else None,
+    narration = None
+    if parsed is not None and parsed.narration is not None and parsed.narration.person in ("first", "third"):
+        from .narration import judged
+
+        n = parsed.narration
+        narration = {"person": n.person, "source": "llm",
+                     **{k: ref_map[r] for k, r in (("narrator", n.narrator_ref), ("focal", n.focal_ref))
+                        if r and ref_map.get(r) in set(ref_map.values())},
+                     **({"check": chk} if (chk := judged(n.person, rows)) else {})}
+    state = {"narration": narration, "pov": parsed.pov if parsed else None, "location": parsed.location if parsed else None,
              "time": parsed.time if parsed else None, "participants": participants, "actions": actions,
              "props": props, "uncertainties": uncertainties, "analysis": "llm" if parsed else "program_only",
              "quotes": len(quotes), "run_id": run_id}

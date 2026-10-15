@@ -91,6 +91,15 @@ class Uncertainty(_M):
     question: str
 
 
+class NarrationOut(_M):
+    """Whose voice tells this scene (ADR-040): first person (``narrator_ref`` is the 「私」) or third person following
+    ``focal_ref``."""
+    person: Literal["first", "third", "unclear"]
+    narrator_ref: str | None = None
+    focal_ref: str | None = None
+    evidence_unit_ids: list[str] = Field(default_factory=list)
+
+
 class SceneAnalysisOutput(_M):
     pov: str | None
     location: str | None
@@ -101,6 +110,7 @@ class SceneAnalysisOutput(_M):
     actions: list[ActionAnalysis]
     props: list[PropState]
     uncertainties: list[Uncertainty]
+    narration: NarrationOut | None = None
 
 
 # ------------------------------------------------------------------ memory update

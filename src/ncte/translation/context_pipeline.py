@@ -42,20 +42,18 @@ class ContextOrchestrator(Orchestrator):
         self.memory_prompt = load_prompt("memory_update")
         self.naming_prompt = load_prompt("naming")
 
-    def narration(self) -> str | None:
-        if not hasattr(self, "_narration"):
-            from ..analysis.narration import person
-
-            with self.lock:
-                self._narration = person(self.conn, self.book.id)
-        return self._narration
-
     def process_batch(self, batch: Batch) -> dict[str, int]:
         counts = super().process_batch(batch)
         from ..analysis.narration import first_person_slip
         from ..qa import second_person
 
-        third = self.narration() == "third" and not batch.meta
+        third = False
+        if not batch.meta and batch.scene_id:
+            from ..analysis.narration import for_scene
+
+            with self.lock:
+                who = for_scene(self.conn, self.book.id, get_scene(self.conn, self.book.id, batch.scene_id))
+            third = who is not None and who["person"] == "third"
 
         with self.lock, Transaction(self.conn):
             for r in batch.rows:
@@ -542,7 +540,13 @@ class ContextOrchestrator(Orchestrator):
             mem = memory_context(self.conn, self.book.id, scene=scene, batch_rows=batch.rows,
                                  max_evidence=self.cfg.memory.max_retrieved_evidence)
         ctx.update(mem)
-        if (who := self.narration()) is not None:  # ADR-040: whose voice the narration is
+        from ..analysis.narration import for_scene
+
+        with self.lock:  # ADR-040: whose voice tells this scene (the read pass's judgement, else the whole book's)
+            zh_names = {r["id"]: r["display_name_zh"] or r["canonical_name"] for r in self.conn.execute(
+                "SELECT id, canonical_name, display_name_zh FROM characters WHERE book_id=?", (self.book.id,))}
+            who = for_scene(self.conn, self.book.id, scene, zh_names)
+        if who is not None:
             ctx["narration"] = who
         if ctx.get("address_terms") and ctx.get("glossary"):
             ctx["glossary"] = drop_address_forms(ctx["glossary"], ctx["address_terms"])

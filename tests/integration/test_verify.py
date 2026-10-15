@@ -122,3 +122,31 @@ def test_address_check_command_for_a_book_already_read(tmp_path, fixtures):
     out = r.invoke(app, ["-w", str(ws), "names", "address-check", epub, "--fake"])
     assert out.exit_code == 0, out.output
     assert "address check:" in out.output
+
+
+def test_each_scene_tells_the_translator_whose_voice_it_is(conn, cfg, fixtures):
+    """ADR-040: the read pass judges narration per scene; the translation of that scene is told."""
+
+    def analyze(payload, req):
+        out = scene_analyze(payload, req)
+        assert "narration_hint" in payload
+        kaito = known(payload, "カイト")
+        out["narration"] = {"person": "third", "focal_ref": kaito, "narrator_ref": None, "evidence_unit_ids": []}
+        return out
+
+    fake = FakeLLM(responders={**RESPONDERS, "scene_analyze": analyze})
+    run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    told = [p.get("narration") for p, c in zip(fake.payloads, fake.calls, strict=True) if c.stage == "translate"]
+    assert any(t and t["person"] == "third" for t in told)
+    assert any(t and t.get("focal") for t in told)  # the focal character by name, once known
+    later = [p for p, c in zip(fake.payloads, fake.calls, strict=True) if c.stage == "scene_analyze"][1:]
+    assert any(p.get("previous_narration", {}).get("person") == "third" for p in later)
+
+
+def test_program_checks_the_judged_narration():
+    from ncte.analysis.narration import judged
+
+    third = [{"kind": "text", "plain_text": "　レイドは村長の後を追った。"}] * 20
+    first = [{"kind": "text", "plain_text": "　私はそう思った。"}] * 20
+    assert judged("third", third) is None and judged("first", first) is None
+    assert judged("third", first) == "conflict" and judged("first", third) == "conflict"
