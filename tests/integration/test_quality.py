@@ -288,3 +288,23 @@ def test_reviewer_sees_paragraphs_around_with_speakers(conn, cfg, fixtures, seed
     p = next(p for p, c in zip(fake.payloads, fake.calls, strict=True) if c.stage == "review")
     assert len(p["context"]) >= 6 and all("source" in x for x in p["context"])
     assert any(x.get("speakers") for x in p["context"]) or any(i["speakers"] for i in p["items"])
+
+
+def test_a_woman_called_by_name_with_ni_is_flagged(conn, cfg, fixtures):
+    from ncte.library import import_book
+    from ncte.memory.repository import set_gender, upsert_character
+    from ncte.qa.second_person import check
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    u0 = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
+    cid = upsert_character(conn, book.id, "ミナ", name_zh="米娜", aliases=[], unit_id=u0["id"], ordinal=u0["ordinal"],
+                           origin="t")[0]
+    set_gender(conn, book.id, cid, "female", ordinal=u0["ordinal"], quote="彼女", origin="llm")
+    unit = dict(u0)
+    unit["plain_text"] = "「ミナ、あなたに頼みがある」"
+    assert check(conn, book.id, unit, "「米娜，我有事要拜託你」")
+    assert check(conn, book.id, unit, "「米娜，我有事要拜託妳」") is None
+    unit["plain_text"] = "「ミナ、カイト、あなたたちに頼みがある」"
+    assert check(conn, book.id, unit, "「米娜、海斗，我有事要拜託你們」") is None  # a group
+    unit["plain_text"] = "「あいつはミナ、と呼んでいた」"
+    assert check(conn, book.id, unit, "「那傢伙叫你米娜」") is None  # not opening the line

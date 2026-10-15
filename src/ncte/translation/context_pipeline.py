@@ -42,6 +42,20 @@ class ContextOrchestrator(Orchestrator):
         self.memory_prompt = load_prompt("memory_update")
         self.naming_prompt = load_prompt("naming")
 
+    def process_batch(self, batch: Batch) -> dict[str, int]:
+        counts = super().process_batch(batch)
+        from ..qa import second_person
+
+        with self.lock, Transaction(self.conn):
+            for r in batch.rows:
+                t = self.conn.execute("SELECT id, text FROM translations WHERE unit_id=? AND run_id=? ORDER BY id DESC "
+                                      "LIMIT 1", (r["id"], self.run_id)).fetchone()
+                ev = second_person.check(self.conn, self.book.id, r, t["text"]) if t is not None else None
+                if ev:  # the scene's review looks at it with the context and fixes it
+                    self._finding(r["id"], "second_person_gender", "high", ev)
+                    self.conn.execute("UPDATE translations SET status='needs_review' WHERE id=?", (t["id"],))
+        return counts
+
     # ------------------------------------------------------------ jobs
     def ensure_jobs(self) -> None:
         with self.lock:

@@ -7,11 +7,12 @@ import sqlite3
 from ..memory.db import Transaction, utcnow
 from ..translation.cache import glossary_entries, latest_texts
 from ..translation.translator import UnitInput
-from .rules import check_translation, worst
+from . import second_person
+from .rules import Finding, check_translation, worst
 
 QA_TYPES = ("empty_translation", "placeholder_error", "untranslated", "japanese_residue", "ruby_notation_leak",
             "too_short", "too_long", "quote_mismatch", "number_mismatch", "non_taiwan_glyph", "glossary_mismatch",
-            "possible_added_name", "cantonese", "offensive_term", "name_form_substitution")
+            "possible_added_name", "cantonese", "offensive_term", "name_form_substitution", "second_person_gender")
 
 
 def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
@@ -33,6 +34,8 @@ def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
             settled = {(r[0], r[1]) for r in conn.execute(
                 "SELECT type, evidence FROM qa_findings WHERE unit_id=? AND status IN ('cleared_by_review','accepted')",
                 (uid,))}
+            if (ev := second_person.check(conn, book_id, units[uid], t["text"])):
+                f.append(Finding("second_person_gender", "high", ev, uid))
             f = [x for x in f if (x.type, x.evidence) not in settled]
             conn.execute(f"UPDATE qa_findings SET status='superseded' WHERE unit_id=? AND status='open' AND type IN ({ph})",
                          (uid, *QA_TYPES))
