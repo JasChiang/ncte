@@ -56,20 +56,24 @@ class Participant(_M):
     evidence_unit_ids: list[str]
 
 
+# One of these per line of dialogue, so the model writes them with short keys (``alias``); the program reads the long
+# names. Either spelling is accepted.
 class SpeakerCandidate(_M):
-    character_ref: str
-    evidence_types: list[EvidenceType]
-    evidence_unit_ids: list[str]
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    character_ref: str = Field(alias="ref")
+    evidence_types: list[EvidenceType] = Field(alias="types")
+    evidence_unit_ids: list[str] = Field(alias="evidence")
     note: str
 
 
 class UtteranceAnalysis(_M):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
     unit_id: str
-    quote_index: int
-    speaker_candidates: list[SpeakerCandidate]
-    resolution_status: Resolution
-    speaker_ref: str | None
-    contradictions: list[str]
+    quote_index: int = Field(alias="qi")
+    speaker_candidates: list[SpeakerCandidate] = Field(alias="candidates")
+    resolution_status: Resolution = Field(alias="status")
+    speaker_ref: str | None = Field(alias="speaker")
+    contradictions: list[str] = Field(alias="conflicts")
 
 
 class ActionAnalysis(_M):

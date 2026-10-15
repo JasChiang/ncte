@@ -28,3 +28,14 @@ def test_unknown_codes_and_real_ids_pass_through():
     assert ids.decode({"unit_id": "P9"}) == {"unit_id": "P9"}  # left for the program's checks to reject
     assert ids.decode({"unit_id": U}) == {"unit_id": U}
     assert ShortIds.for_payload({"x": "plain"}).encode({"x": "plain"}) == {"x": "plain"}
+
+
+def test_line_analysis_with_short_keys_and_short_ids():
+    from ncte.llm.schemas import UtteranceAnalysis
+
+    ids = ShortIds.for_payload({"units": [{"unit_id": U}], "known_characters": [{"character_id": C}]})
+    answer = {"unit_id": "P1", "qi": 0, "candidates": [{"ref": "C1", "types": ["action"], "evidence": ["P1"], "note": "動作"}],
+              "status": "inferred", "speaker": "C1", "conflicts": []}
+    u = UtteranceAnalysis.model_validate(ids.decode(answer))
+    assert u.unit_id == U and u.speaker_ref == C and u.speaker_candidates[0].character_ref == C
+    assert u.speaker_candidates[0].evidence_unit_ids == [U] and u.quote_index == 0

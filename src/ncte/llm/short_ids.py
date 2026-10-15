@@ -14,7 +14,7 @@ from typing import Any
 
 _ID = re.compile(r"^(?:[ucf]_[0-9a-f]{12,16}|q_[0-9a-f]{16}_\d+)$")
 _LETTER = {"u": "P", "c": "C", "f": "F", "q": "Q"}
-_REF_KEYS = {"ref", "a", "b", "same_as", "object", "subject"}
+_REF_KEYS = {"ref", "a", "b", "same_as", "object", "subject", "speaker", "evidence"}
 
 
 def _holds_ids(key: str | None) -> bool:
