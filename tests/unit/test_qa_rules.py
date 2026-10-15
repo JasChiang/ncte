@@ -29,6 +29,7 @@ def test_warnings():
     assert ("japanese_residue", "error") in run("「王命が下されていますッ!!」", "「已經下達王命了ッ!!」")  # one is enough
     assert ("japanese_residue", "medium") in run("藤木わしろでございます。", "我是藤木わしろ。")  # a name kept whole
     assert ("quote_mismatch", "medium") in run("「あいうえお、かきくけこ」", "啊咿嗚欸喔，咖嘰咕")
+    assert ("quote_mismatch", "low") in run("アルテインという国", "「阿爾汀」這個國家")  # a pair added for emphasis
     assert ("non_taiwan_glyph", "error") in run("これは国です", "这是国家")  # slid into Simplified: retried
     assert ("number_mismatch", "low") in run("１２歳の春だった", "那是十二歲的春天")
     assert ("ruby_notation_leak", "medium") in run("強敵《とも》だ", "強敵《とも》啊", ruby=1)

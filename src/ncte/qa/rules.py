@@ -113,9 +113,11 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
             add("too_long", "medium", f"length ratio {ratio:.2f} (possible addition)")
 
     for o, c in (("「", "」"), ("『", "』")):
-        if source_text.count(o) != text.count(o) or source_text.count(c) != text.count(c):
-            add("quote_mismatch", "medium", f"{o}{c}: source {source_text.count(o)}/{source_text.count(c)} "
-                                            f"→ {text.count(o)}/{text.count(c)}")
+        so, sc, to, tc = source_text.count(o), source_text.count(c), text.count(o), text.count(c)
+        if (so, sc) != (to, tc):
+            # brackets added in pairs (「阿爾汀」, 「哼哼」) are a style choice; lost or unbalanced ones may drop a quote
+            added = to == tc and so == sc and to > so
+            add("quote_mismatch", "low" if added else "medium", f"{o}{c}: source {so}/{sc} → {to}/{tc}")
             break
 
     nums_src = set(NUM_RE.findall(unicodedata.normalize("NFKC", PH_RE.sub("", plain_text))))
