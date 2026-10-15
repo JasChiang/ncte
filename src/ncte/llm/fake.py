@@ -83,6 +83,11 @@ def default_scenes(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     return {"breaks": []}
 
 
+def default_reader(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+    """A reader who finds nothing amiss."""
+    return {"issues": []}
+
+
 DEFAULTS: dict[str, Responder] = {
     "translate": default_translate,
     "scene_analyze": default_scene_analyze,
@@ -91,6 +96,7 @@ DEFAULTS: dict[str, Responder] = {
     "review": default_review,
     "verify": default_verify,
     "scenes": default_scenes,
+    "reader": default_reader,
 }
 
 

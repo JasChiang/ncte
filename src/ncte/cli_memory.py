@@ -667,6 +667,22 @@ def names_gender_scan(epub: Annotated[str, typer.Argument()],
     typer.echo(f"see: ncte names gender {epub}")
 
 
+@app.command("reader-check")
+def reader_check(epub: Annotated[str, typer.Argument()],
+                 budget_usd: Annotated[float, typer.Option("--budget-usd")] = 1.0,
+                 fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
+    """Read the translation like a reader who knows no Japanese; what a reader would stumble on is retranslated with
+    the source (or given a translator's note) — ADR-038. For a book already translated."""
+    from .cli import _run
+    from .translation.orchestrator import RunOptions
+
+    cfg = state.cfg
+    book = _book(epub)
+    opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
+                      client="fake" if fake else "openrouter", reader_only=True)
+    _run(book, opts, fake=fake, cfg=cfg)
+
+
 @names_app.command("address-check")
 def names_address_check(epub: Annotated[str, typer.Argument()],
                         budget_usd: Annotated[float, typer.Option("--budget-usd")] = 0.5,

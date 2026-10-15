@@ -236,6 +236,18 @@ class SceneBreaksOutput(_M):
     breaks: list[SceneBreak]
 
 
+# ------------------------------------------------------------ reader's look (ADR-038)
+class ReaderIssue(_M):
+    unit_id: str
+    kind: Literal["unclear", "wordplay", "translationese", "voice", "contradiction", "other"]
+    severity: Literal["low", "medium", "high"]
+    problem: str  # what a reader without Japanese would stumble on
+
+
+class ReaderOutput(_M):
+    issues: list[ReaderIssue]
+
+
 SCHEMAS: dict[str, type[BaseModel]] = {
     "translate": TranslationBatchOutput,
     "scene_analyze": SceneAnalysisOutput,
@@ -244,6 +256,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "review": ReviewOutput,
     "verify": VerifyOutput,
     "scenes": SceneBreaksOutput,
+    "reader": ReaderOutput,
 }
 
 

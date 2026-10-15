@@ -84,6 +84,8 @@ class ContextConfig(_Strict):
     include_memory: bool = True  # inject characters / summaries / facts into translation requests
     # ADR-036: inside a long stretch the author did not divide, the model chooses where scenes begin (program: size)
     scene_breaks: Literal["llm", "program"] = "llm"
+    # ADR-038: after translating, read the Chinese like a reader; what a reader cannot follow is fixed with the source
+    reader_pass: bool = True
     read_first: bool = True  # ADR-023: analyse + remember every scene first, then name, then translate
     # ADR-023/035: propose renderings; auto (default) = keep the model's choice after program checks and go on
     # (change them later in the web UI); review = pause for a person's choices

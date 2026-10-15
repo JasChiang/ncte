@@ -56,6 +56,7 @@ class RunOptions:
     naming_only: bool = False  # ADR-023: `ncte names propose` (context mode, read pass already done)
     gender_only: bool = False  # `ncte names gender-scan` (context mode, read pass already done)
     address_only: bool = False  # `ncte names address-check` (ADR-037, read pass already done)
+    reader_only: bool = False  # `ncte reader-check` (ADR-038, a book already translated)
 
 
 @dataclass
@@ -489,6 +490,8 @@ class Orchestrator:
                 self.scan_genders()
             elif self.opts.address_only:
                 self.classify_address()
+            elif self.opts.reader_only:
+                self.reader_pass(record_job=False)
             else:
                 self.ensure_jobs()
                 self.execute()
@@ -551,6 +554,9 @@ class Orchestrator:
 
     def classify_address(self) -> None:
         raise NCTEError("address check needs context mode")
+
+    def reader_pass(self, *, record_job: bool = True) -> dict[str, int]:
+        raise NCTEError("the reader's look needs context mode")
 
     def scan_genders(self) -> None:
         raise NCTEError("gender scan needs context mode")

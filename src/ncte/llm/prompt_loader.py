@@ -17,7 +17,7 @@ from typing import Any
 
 from ..errors import ConfigError
 
-TASKS = ("translate", "scene_analyze", "memory_update", "naming", "review", "verify", "scenes")
+TASKS = ("translate", "scene_analyze", "memory_update", "naming", "review", "verify", "scenes", "reader")
 
 
 @dataclass(frozen=True)

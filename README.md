@@ -158,6 +158,7 @@ ncte glossary impact ./samples/book.epub ミナ
 ncte unit ./samples/book.epub u_xxx                  # 原文、placeholder、所有譯文版本、QA 發現
 ncte edit ./samples/book.epub --unit-id u_xxx --text "還有，明天⟦1⟧一定⟦/1⟧要早點來。」"
 ncte review ./samples/book.epub --scope flagged --budget-usd 0.5
+ncte reader-check ./samples/book.epub                # 以不懂日文的讀者身分讀中文，看不懂的地方對照原文修正或加註（ADR-038）
 ```
 自動複查由設定 `review.automatic_review: off | flagged_only | all` 控制（預設只複查被程式 QA 或說話者衝突標記的單元，最多一輪）。審稿看前後各 5 段與每句說話者；提出具體修正就重翻並再經程式檢查，程式判定為錯誤的（例如殘留假名）一律修正。規則改進後可用 `ncte recheck 書.epub` 重新檢查既有譯文（不呼叫 API），再用 `ncte review 書.epub` 修正被標記的段落。
 
