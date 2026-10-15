@@ -151,9 +151,12 @@ def _clear_confirmed(orch: Any, unit_ids: list[str], stats: dict[str, int]) -> N
         return
     with orch.lock, Transaction(orch.conn):
         for uid in unit_ids:
+            # the program's flag, and an earlier reviewer's issue (another look found nothing: §1024 「レイドは何をした
+            # の？」 asked to his face was called an "added 你" once, fine the second time)
             n = orch.conn.execute("UPDATE qa_findings SET status='cleared_by_review' WHERE book_id=? AND unit_id=? AND "
-                                  "status='open' AND severity='high' AND type NOT LIKE 'review%'",
-                                  (orch.book.id, uid)).rowcount
+                                  "status='open' AND ((severity='high' AND type NOT LIKE 'review%') OR "
+                                  "(type LIKE 'review%' AND run_id IS NOT ?))",
+                                  (orch.book.id, uid, orch.run_id)).rowcount
             t = orch.conn.execute("SELECT id FROM translations WHERE unit_id=? AND status='needs_review' ORDER BY id "
                                   "DESC LIMIT 1", (uid,)).fetchone()
             if t is not None:

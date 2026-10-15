@@ -261,3 +261,21 @@ def test_review_command_keeps_context_mode_and_fixes_program_errors(tmp_path, fi
     db = sqlite3.connect(str(conn.execute("PRAGMA database_list").fetchone()[2]))
     latest = db.execute("SELECT text FROM translations WHERE unit_id=? ORDER BY rowid DESC LIMIT 1", (t["unit_id"],)).fetchone()[0]
     assert "ッ" not in latest
+
+
+def test_an_earlier_reviewer_issue_is_cleared_when_another_look_finds_nothing(tmp_path, fixtures):
+    from typer.testing import CliRunner
+
+    from ncte.cli import app
+    from ncte.config import load_config
+    from ncte.workspace import Workspace
+
+    ws, epub, runner = tmp_path / "ws", str(fixtures["basic"]), CliRunner()
+    assert runner.invoke(app, ["-w", str(ws), "translate", epub, "--fake", "--mode", "context"]).exit_code == 0
+    conn, book = Workspace(load_config(workspace=str(ws))).open_book(epub)
+    uid = conn.execute("SELECT id FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal LIMIT 1 OFFSET 2",
+                       (book.id,)).fetchone()[0]
+    conn.execute("INSERT INTO qa_findings(run_id, book_id, unit_id, type, severity, evidence, created_at) VALUES "
+                 "('r_old', ?, ?, 'review:addition', 'medium', 'added 你', 't')", (book.id, uid))
+    assert runner.invoke(app, ["-w", str(ws), "review", epub, "--fake"]).exit_code == 0  # the fake reviewer finds nothing
+    assert conn.execute("SELECT status FROM qa_findings WHERE run_id='r_old'").fetchone()[0] == "cleared_by_review"

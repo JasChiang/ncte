@@ -231,7 +231,7 @@ async function reviewView(id) {
 }
 function rowHtml(u) {
   const cls = u.status === "human" ? "human" : u.findings.length ? "flag" : "";
-  return `<div class="pair ${cls}" data-id="${esc(u.id)}"><div class="mono small muted">${u.ordinal}</div>
+  return `<div class="pair ${cls}" data-id="${esc(u.id)}"><div class="mono small muted">${u.ordinal}<br><button class="btn small ctxbtn" data-ctx title="前後各 3 段">前後文</button></div>
     <div class="ja">${esc(u.ja)}</div>
     <div><div class="zh">${u.zh == null ? chip("c-bad", "未翻譯") : esc(u.zh)}</div>
       ${u.status === "human" ? chip("c-acc", "人工修改") + ` <button class="btn small" data-act="revert">改回機器譯文</button>` : ""}
@@ -258,6 +258,19 @@ function bindRow(id, el, u) {
         reviewView(id);
       } catch (err) { toast("儲存失敗：" + err.message); }
     };
+  };
+  el.querySelector("[data-ctx]").onclick = async e => {
+    e.stopPropagation();
+    const open = el.nextElementSibling;
+    if (open && open.classList.contains("ctx")) { open.remove(); return; }
+    try {
+      const d = await api(`book/${id}/units?start=${u.ordinal - 3}&end=${u.ordinal + 3}`);
+      const box = document.createElement("div"); box.className = "ctx";
+      box.innerHTML = d.units.map(x => `<div class="ctxrow ${x.id === u.id ? "here" : ""}"><span class="mono muted">${x.ordinal}</span>
+        <span class="ja">${esc(x.ja)}</span><span>${x.zh == null ? "" : esc(x.zh)}</span>
+        <span class="muted small">${x.quotes.map(q => esc(q.speaker || "？")).join("、") || "敘述"}</span></div>`).join("");
+      el.after(box);
+    } catch (err) { toast(err.message); }
   };
   el.querySelectorAll("[data-act]").forEach(b => b.onclick = async e => {
     e.stopPropagation();
