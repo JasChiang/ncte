@@ -9,6 +9,8 @@ async function api(path, body) {
   if (body !== undefined) { opt.method = "POST"; opt.headers["Content-Type"] = "application/json"; opt.body = JSON.stringify(body); }
   const r = await fetch("/api/" + path, opt);
   const j = await r.json();
+  // NCTE was restarted: this page still carries the previous start's token
+  if (r.status === 403 && /token/.test(j.error || "")) { location.reload(); throw new Error("NCTE 已重新啟動，重新載入頁面…"); }
   if (!r.ok) throw new Error(j.error || r.statusText);
   return j;
 }
@@ -71,7 +73,9 @@ async function upload(f) {
   const box = $("#upl"); box.innerHTML = `<p class="muted">上傳並檢查「${esc(f.name)}」…</p>`;
   try {
     const r = await fetch("/api/upload", {method: "POST", body: f, headers: {"X-NCTE-Token": TOKEN, "X-Filename": encodeURIComponent(f.name)}});
-    const u = await r.json(); if (!r.ok) throw new Error(u.error || r.statusText);
+    const u = await r.json();
+    if (r.status === 403 && /token/.test(u.error || "")) { location.reload(); return; }
+    if (!r.ok) throw new Error(u.error || r.statusText);
     if (u.imported_as) { box.innerHTML = `<p>這本書已經在書庫裡了：<a href="#/b/${esc(u.imported_as)}/overview">打開</a></p>`; return; }
     const s = u.suggestion;
     box.innerHTML = `<p><strong>${esc(u.title)}</strong></p>
