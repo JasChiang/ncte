@@ -434,6 +434,11 @@ async function peopleView(id) {
       ${p.aka.length ? `<div class="muted small">其他稱呼：<span class="ja">${p.aka.map(esc).join("・")}</span></div>` : ""}
       ${(p.first_person || []).length ? `<div class="small" style="margin-top:4px">自稱：${p.first_person.map(([w, n]) => `<span class="form-tag"><span class="ja">${esc(w)}</span><span class="n">×${n}</span></span>`).join(" ")}</div>` : ""}
       ${genderLine(p, upto)}
+      ${p.impression ? `<div class="card" style="margin-top:10px;background:var(--accent-soft)"><strong>角色印象</strong> <span class="muted small">讀完全書後整理</span>
+        <div class="small" style="margin-top:4px">個性：${esc(p.impression.personality)}</div>
+        <div class="small">口吻：${esc(p.impression.voice)}</div>
+        <div class="small">定位：${esc(p.impression.role)}</div></div>` : ""}
+      ${relationList(d, pid, upto, nm)}
       <div class="row" style="margin-top:12px;gap:24px">
         <div style="flex:1 1 320px"><div class="addr-h"><strong>別人怎麼叫他</strong><span class="muted small">左邊是說話的人</span></div>${byPerson(called, a => a.speaker, k => esc(nm(k))) || '<div class="muted">—</div>'}</div>
         <div style="flex:1 1 320px"><div class="addr-h"><strong>他怎麼叫別人</strong><span class="muted small">左邊是被叫的人</span></div>${byPerson(calls, a => a.to, k => k === pid ? "（提到自己）" : esc(nm(k))) || '<div class="muted">—</div>'}</div></div>
@@ -451,6 +456,20 @@ async function peopleView(id) {
   const gs = $("#genderSet"); if (gs) gs.onchange = async () => {
     try { await api(`book/${id}/characters/${peopleState.person}/gender`, {gender: gs.value}); invalidate(id); toast("性別已更新（之後的翻譯會用）"); peopleView(id); }
     catch (e) { toast(e.message); } };
+}
+// relations of one person as known at the slider position (begun, not yet replaced), each with its source quote
+function relationList(d, pid, upto, nm) {
+  const rs = (d.relations || []).filter(r => (r.a === pid || r.b === pid) && r.at <= upto && (r.until == null || r.until > upto));
+  if (!rs.length) return "";
+  const rows = rs.sort((x, y) => x.at - y.at).map(r => {
+    const other = r.a === pid ? r.b : r.a, mine = r.a === pid ? r.a_is : r.b_is, theirs = r.a === pid ? r.b_is : r.a_is;
+    const ev = (r.evidence || []).filter(e => e.at <= upto)[0];
+    return `<tr><td><a href="#" data-k="${esc(other)}">${esc(nm(other))}</a></td><td>${esc(theirs || r.rel)}</td>
+      <td>${chip(r.kind === "feeling" ? "c-warn" : "c-acc", r.kind === "feeling" ? "情感" : "身分")}${r.certainty === "inferred" ? chip("c-warn", "推測") : ""}${r.origin !== "llm" ? chip("c-ok", "人工") : ""}</td>
+      <td class="mono small">§${r.at}</td><td class="ja small">${ev ? esc(ev.quote) : ""}</td></tr>`;
+  }).join("");
+  return `<div style="margin-top:12px"><strong>人物關係</strong> <span class="muted small">對方是他的什麼</span>
+    <div class="scroll"><table><tr><th>對方</th><th>關係</th><th>類型</th><th>從</th><th>原文依據</th></tr>${rows}</table></div></div>`;
 }
 // one row per person: who on the left, each form they use as a small tag (most used first)
 function byPerson(list, key, label) {
@@ -471,7 +490,7 @@ function genderLine(p, upto) {
     : '<span class="muted">不明（翻譯時用「你」）</span>'}
     <select id="genderSet" title="改成你確定的性別">${[["unknown", "不明"], ["female", "女"], ["male", "男"]].map(([v, t]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${t}</option>`).join("")}</select></div>`;
 }
-const G = {mode: "rel", mentions: false, n: 12, hideMinor: true, series: false, focus: null, pair: null};
+const G = {mode: "rel", mentions: false, n: 12, hideMinor: true, series: false, focus: null, pair: null, center: null};
 const GROUPISH = /(たち|みんな|観客|生徒たち|周り|の声|チーム|們|觀眾|路人|大家)$/;
 // Each group of linked people is laid out on its own (repel, attract along links, keep circles and labels apart),
 // then the groups are placed side by side, biggest first. The SVG view box is fitted around the result, so circles,
@@ -516,12 +535,45 @@ function layout(nodes, edges, W, H, R) {
   P._box = nodes.length ? {x: -m, y: top - m, w, h} : {x: 0, y: 0, w: W, h: H};
   return P;
 }
-// two roles that differ only by gender (未婚夫／未婚妻, 丈夫／妻子) or a relation between equals is one undirected line
-const EQUAL_REL = /夫妻|友|宿敵|隊友|同學|同班|同伴|兄弟|姊妹|姐妹|戀人|搭檔|夥伴/;
-function directed(r) {
-  if (!r.a_is || !r.b_is || r.a_is === r.b_is || EQUAL_REL.test(r.rel)) return false;
-  const strip = t => t.replace(/[夫妻男女]/g, "");
-  return strip(r.a_is) !== strip(r.b_is);
+// the model says what each side is: the same on both sides (朋友／朋友) is one label in the middle, different roles
+// (父親／女兒, 未婚夫／未婚妻) are written next to each person — no word list decides it
+function directed(r) { return !!(r.a_is && r.b_is && r.a_is !== r.b_is); }
+// relations mode: the person with the most relations in the middle, the others in rings by how many links away;
+// the middle only changes when someone else has clearly more (two), or when you click someone
+function radial(nodes, edges, center, R) {
+  const adj = {}; nodes.forEach(c => adj[c] = []);
+  edges.forEach(e => { if (adj[e.a] && adj[e.b]) { adj[e.a].push(e.b); adj[e.b].push(e.a); } });
+  const ring = {[center]: 0}, order = [center], parent = {};
+  for (let i = 0; i < order.length; i++) adj[order[i]].forEach(y => { if (!(y in ring)) { ring[y] = ring[order[i]] + 1; parent[y] = order[i]; order.push(y); } });
+  const P = {[center]: {x: 0, y: 0}}, angle = {[center]: 0}, maxR = Math.max(...nodes.map(R));
+  const rings = Math.max(0, ...Object.values(ring));
+  for (let k = 1; k <= rings; k++) {
+    const here = order.filter(c => ring[c] === k);
+    const radius = Math.max(k * 230, here.length * (2 * maxR + 60) / (2 * Math.PI));
+    const gapA = (2 * maxR + 50) / radius;  // the angle two circles on this ring need between them
+    if (k === 1) here.forEach((c, i) => { angle[c] = -Math.PI / 2 + (i + 0.5) * 2 * Math.PI / here.length; });
+    else {  // next to the person they are linked to, siblings side by side, then pushed apart where they crowd
+      const kids = {}; here.forEach(c => (kids[parent[c]] = kids[parent[c]] || []).push(c));
+      Object.entries(kids).forEach(([pa, cs]) => cs.forEach((c, j) => { angle[c] = angle[pa] + (j - (cs.length - 1) / 2) * gapA; }));
+      for (let it = 0; it < 60; it++) {
+        here.sort((a, b) => angle[a] - angle[b]);
+        here.forEach((c, i) => { const nx = here[(i + 1) % here.length]; let d = angle[nx] - angle[c];
+          if (i === here.length - 1) d += 2 * Math.PI;
+          if (here.length > 1 && d < gapA) { angle[c] -= (gapA - d) / 2; angle[nx] += (gapA - d) / 2; } });
+      }
+    }
+    here.forEach(c => { P[c] = {x: Math.cos(angle[c]) * radius, y: Math.sin(angle[c]) * radius}; });
+  }
+  const rest = nodes.filter(c => !(c in ring));  // people not linked to the middle: their own groups, to the side
+  if (rest.length) {
+    const Q = layout(rest, edges.filter(e => rest.includes(e.a) && rest.includes(e.b)), 0, 0, R);
+    const right = Math.max(...Object.values(P).map(p => p.x)) + maxR + 120;
+    rest.forEach(c => { P[c] = {x: Q[c].x - Q._box.x + right, y: Q[c].y - (Q._box.y + Q._box.h / 2)}; });
+  }
+  const xs = nodes.map(c => P[c].x), ys = nodes.map(c => P[c].y), m = maxR + 60;
+  P._box = {x: Math.min(...xs) - m, y: Math.min(...ys) - m, w: Math.max(...xs) - Math.min(...xs) + 2 * m,
+            h: Math.max(...ys) - Math.min(...ys) + 2 * m};
+  return P;
 }
 async function graphView(id) {
   view.classList.add("wide");  // the graph uses the whole window width
@@ -536,7 +588,8 @@ async function graphView(id) {
   if (G.hideMinor) nodes = nodes.filter(c => cnt[c] >= 2);
   if (G.n) nodes = nodes.slice(0, G.n);
   // relations known by this point (ADR-039): from the facts, shown from where the story reveals them
-  const rels = (d.relations || []).filter(r => r.at <= upto && ok(r.a) && ok(r.b));
+  // relations known at this point: begun and not yet replaced (宿敵 until they become 未婚夫妻)
+  const rels = (d.relations || []).filter(r => r.at <= upto && (r.until == null || r.until > upto) && ok(r.a) && ok(r.b));
   if (G.mode === "rel") {  // the people the relations are about (most present first), nobody without one
     const inRel = new Set(rels.flatMap(r => [r.a, r.b]));
     inRel.forEach(c => { cnt[c] = cnt[c] || 1; });
@@ -558,7 +611,14 @@ async function graphView(id) {
     : Object.entries(pairScenes).map(([k, ss]) => { const [a, b] = k.split("|"); return {a, b, w: ss.length}; });
   const maxN = Math.max(1, ...nodes.map(c => cnt[c]));
   const rad = c => 26 + 18 * Math.sqrt((cnt[c] || 1) / maxN);
-  const W = 900, H = 620, P = layout(nodes, edges.filter(e => nodes.includes(e.a) && nodes.includes(e.b)), W, H, rad),
+  const linkEdges = edges.filter(e => nodes.includes(e.a) && nodes.includes(e.b));
+  if (G.mode === "rel" && nodes.length) {
+    const deg = {}; linkEdges.forEach(e => { deg[e.a] = (deg[e.a] || 0) + 1; deg[e.b] = (deg[e.b] || 0) + 1; });
+    const best = nodes.slice().sort((a, b) => (deg[b] || 0) - (deg[a] || 0) || cnt[b] - cnt[a])[0];
+    if (!G.center || !nodes.includes(G.center) || (deg[best] || 0) >= (deg[G.center] || 0) + 2) G.center = best;
+  }
+  const middle = G.mode === "rel" && G.focus && nodes.includes(G.focus) ? G.focus : G.center;
+  const W = 900, H = 620, P = G.mode === "rel" && middle ? radial(nodes, linkEdges, middle, rad) : layout(nodes, linkEdges, W, H, rad),
     mx = Math.max(1, ...edges.map(e => e.w));
   const near = new Set(G.focus ? [G.focus, ...edges.filter(e => e.a === G.focus || e.b === G.focus).flatMap(e => [e.a, e.b])] : nodes);
   const dim = c => near.has(c) ? 1 : .15;

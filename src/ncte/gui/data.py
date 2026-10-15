@@ -252,6 +252,11 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
                     "scenes": scene_count.get(cid, 0), "lines": lines.get(cid, 0), "facts": facts.get(cid, []),
                     "examples": examples.get(cid, [])[:6], "first_person": first_person[cid].most_common(4),
                     "info": cv == here and info(c["known_from_ordinal"])}  # earlier volumes: never book matter here
+        if c["is_narrator"]:
+            out[cid]["narrator"] = True
+        imp = conn.execute("SELECT * FROM character_impressions WHERE character_id=?", (cid,)).fetchone()
+        if imp is not None:
+            out[cid]["impression"] = {"personality": imp["personality"], "voice": imp["voice"], "role": imp["role"]}
         g = genders.get(cid)
         if g is not None and vols.get(g["book_id"], 1.0) <= here:
             out[cid]["gender"] = {"g": g["gender"], "sure": "human" if g["origin"] == "human" else g["certainty"],
