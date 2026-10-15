@@ -83,10 +83,15 @@ def make_client(cfg: Config, *, fake: bool = False, need_key: bool = True) -> An
         return FakeLLM(models=models)
     from .llm.openrouter import OpenRouterClient
 
-    key = get_api_key()
+    key = get_api_key(cfg.openrouter.provider)
     if need_key and not key:
-        raise NCTEError("OPENROUTER_API_KEY is not set. Export it (or put it in ./.env), or use --dry-run / --fake.")
+        raise NCTEError(f"{'FAL_KEY' if cfg.openrouter.provider == 'fal' else 'OPENROUTER_API_KEY'} is not set. "
+                        "Export it (or put it in ./.env), or use --fake.")
     o = cfg.openrouter
+    if o.provider == "fal":
+        from .llm.fal_openrouter import FalOpenRouterClient
+
+        return FalOpenRouterClient(key, timeout=o.timeout_seconds, max_attempts=o.max_attempts, app_title=o.app_title)
     return OpenRouterClient(key, base_url=o.base_url, timeout=o.timeout_seconds, max_attempts=o.max_attempts,
                             app_title=o.app_title)
 
@@ -253,7 +258,7 @@ def translate(
     book = _book(epub, auto_import=True)
     opts = RunOptions(mode=mode or cfg.app.mode, model=model or cfg.openrouter.model,
                       budget_usd=cfg.openrouter.per_book_budget_usd if budget_usd is None else budget_usd,
-                      unit_ids=unit_id or None, force=force, limit=limit_units, client="fake" if fake else "openrouter")
+                      unit_ids=unit_id or None, force=force, limit=limit_units, client="fake" if fake else cfg.openrouter.provider)
     if opts.mode not in ("baseline", "context"):
         raise NCTEError("--mode must be baseline or context")
     if dry_run:
@@ -485,7 +490,7 @@ def retranslate(epub: Annotated[str, typer.Argument(help="EPUB path or book id")
         state.cfg.openrouter.reasoning_effort = None if reasoning_effort == "default" else reasoning_effort
     book = _book(epub)
     opts = RunOptions(mode=mode, model=model or state.cfg.openrouter.model, budget_usd=budget_usd,
-                      unit_ids=unit_id, force=True, client="fake" if fake else "openrouter", include_meta=True)
+                      unit_ids=unit_id, force=True, client="fake" if fake else state.cfg.openrouter.provider, include_meta=True)
     _run(book, opts, fake=fake)
 
 

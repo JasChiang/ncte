@@ -405,3 +405,15 @@ open workspace/eval/<timestamp>/report.html
 - 敘述者自稱固定（ADR-040 補充）：讀的階段決定敘述者在敘述中的自稱譯法，全書照用，翻譯時附上、程式檢查。貓敘述者的抽驗：自稱從「我」「吾輩」混用改為 17 段一致，主人的日記仍是「我」。
 - 第三人稱敘述檢查：原文那段本身有「僕」「私」（角色的內心話）時不再標記（童話抽驗誤報一次）。
 - 測試 322 passed。
+
+## OpenRouter 直連與 fal 並存（2026-10-15，ADR-041）
+- 新增 fal OpenAI 相容 adapter、`FAL_KEY` 與 `openrouter.provider`；預設保留直連。GUI 設定頁可選連線方式，兩把金鑰分開保存，執行中不可切換。
+- 任務保存連線方式供續譯；歷史費用校準按連線來源隔離，OpenRouter generation 補查排除 fal。模型與參考價仍動態查 OpenRouter 公開目錄，不轉送 fal 金鑰。
+- 限制：fal 餘額與 generation 補查未提供；OpenRouter 參考估價不保證等於 fal 帳單。尚未設定 FAL_KEY，沒有進行付費線上請求；JSON Schema、reasoning、usage.cost 的真實端點相容性待小量實測。
+- 驗證：328 passed；ruff、mypy、JS 語法與 diff whitespace 檢查通過。隔離工作區的瀏覽器實際切換確認直連／fal 設定頁及金鑰欄位；未改動使用者金鑰、書庫或連線選擇。
+- 重現：`.venv/bin/pytest -q`、`.venv/bin/ruff check src tests`、`.venv/bin/mypy src`；`ncte gui` → 設定 → 透過 fal 連 OpenRouter → 套用 → 儲存 fal 金鑰。CLI 用 `.env` 的 `NCTE_LLM_PROVIDER=fal` 與 `FAL_KEY`，原翻譯指令不變。
+
+## fal 真實執行注意事項紀錄（2026-10-15）
+- 新增 [待修與驗收紀錄](fal-integration-followups.md)：跨程序重複請求、fal 錯誤格式、費用與重試不確定性、本次比較限制、局部補救及匯出收尾。
+- 已區分真實觀察、離線重現與推測原因；記錄原收尾 watcher 已因首次預算停止退出，後續 GUI 續譯完成仍須安排匯出驗證。
+- 本輪只寫文件，未修程式、未操作正在執行的翻譯、未續跑或調整預算；檢查 `git diff --check`，未重跑程式測試。

@@ -133,3 +133,32 @@ def test_api_key_is_stored_locally_and_never_sent_back(site):
     env = (tmp / ".env").read_text()
     assert f"OPENROUTER_API_KEY={key}" in env and env.count("OPENROUTER_API_KEY=") == 1
     assert oct((tmp / ".env").stat().st_mode)[-3:] == "600"
+
+
+def test_fal_settings_preserve_direct_key_and_resume_config(site, fixtures, monkeypatch):
+    from ncte.config import Config
+    from ncte.translation.orchestrator import RunOptions, create_run, load_run
+
+    call, app, _, tmp = site
+    # Ensure environment mutations performed by the local server are restored by pytest.
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "openrouter")
+    monkeypatch.setenv("FAL_KEY", "initial-test-fal-key")
+    direct = "sk-or-v1-" + "c" * 40
+    assert call("/api/settings/key", {"key": direct})[0] == 200
+    assert call("/api/settings/provider", {"provider": "fal"})[1]["provider"] == "fal"
+    key = "test-fal-id:test-fal-secret"
+    assert call("/api/settings/key", {"key": key})[0] == 200
+    settings = call("/api/settings")[1]
+    assert settings["set"] and settings["provider"] == "fal" and key not in json.dumps(settings)
+    assert f"OPENROUTER_API_KEY={direct}" in (tmp / ".env").read_text()
+    assert call("/api/settings/key", {"key": "injected\nOTHER=value"})[0] == 400
+    assert call("/api/settings/provider", {"provider": "invalid"})[0] == 400
+    _, imp = _upload_and_import(call, fixtures["basic"])
+    conn, book = app.ws.open_book(imp["book_id"])
+    cfg = Config()
+    cfg.openrouter.provider = "fal"
+    rid = create_run(conn, cfg, book, RunOptions(model=cfg.openrouter.model))
+    assert call("/api/settings/provider", {"provider": "openrouter"})[0] == 200
+    _, saved, opts = load_run(conn, rid)
+    assert saved.openrouter.provider == opts.client == "fal"
+    assert call("/api/settings")[1]["hint"] == "…cccc"

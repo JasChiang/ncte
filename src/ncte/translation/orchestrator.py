@@ -80,8 +80,8 @@ def resolve_pricing(conn: sqlite3.Connection, client: LLMClient, model: str, *, 
     try:
         models = client.list_models()
         with Transaction(conn):
-            save_snapshot(conn, models, client.name)
-        source = f"{client.name}:/models (live)"
+            save_snapshot(conn, models, getattr(client, "catalog_source", client.name))
+        source = f"{getattr(client, 'catalog_source', client.name)}:/models (live)"
     except LLMError as exc:
         snap = latest_snapshot(conn) if allow_snapshot else None
         if not snap:
@@ -113,6 +113,8 @@ def new_run_id() -> str:
 
 def create_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions) -> str:
     rid = new_run_id()
+    if opts.client != "fake":
+        opts.client = cfg.openrouter.provider
     cfg_json = cfg.model_dump(mode="json")
     cfg_json["_run_options"] = asdict(opts)
     with Transaction(conn):
@@ -706,7 +708,9 @@ def reconcile_costs(conn: sqlite3.Connection, client: LLMClient, *, run_id: str 
     if client.name != "openrouter":
         return 0
     q = ("SELECT id, generation_id FROM llm_requests WHERE generation_id IS NOT NULL AND "
-         "cost_status IN ('estimated_from_tokens','unknown')")
+         "cost_status IN ('estimated_from_tokens','unknown') AND "
+         "run_id IN (SELECT id FROM runs WHERE "
+         "COALESCE(json_extract(config_json, '$.openrouter.provider'), 'openrouter') = 'openrouter')")
     params: list[Any] = []
     if run_id:
         q += " AND run_id=?"

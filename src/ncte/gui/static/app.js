@@ -101,12 +101,22 @@ async function upload(f) {
 // ------------------------------------------------------------ settings
 async function settingsView() {
   const k = await api("settings");
-  view.innerHTML = `<h2>設定</h2><div class="card"><strong>OpenRouter 金鑰</strong>
-    <p class="small">${k.set ? `已設定（結尾 ${esc(k.hint)}）` : "尚未設定。到 openrouter.ai 的 Keys 頁面建立一把金鑰，貼在下面。"}</p>
-    <p><input type="password" id="key" size="48" placeholder="sk-or-…" autocomplete="off"> <button class="btn primary" id="saveKey">儲存</button></p>
+  const fal = k.provider === "fal", label = fal ? "fal" : "OpenRouter";
+  view.innerHTML = `<h2>設定</h2><div class="card"><strong>連線方式</strong>
+    <p><select id="provider"><option value="openrouter" ${fal ? "" : "selected"}>直連 OpenRouter</option>
+    <option value="fal" ${fal ? "selected" : ""}>透過 fal 連 OpenRouter</option></select> <button class="btn" id="saveProvider">套用</button></p>
+    <p class="small muted">新任務使用此設定；續譯沿用原任務的連線方式。</p>
+    ${fal ? `<p class="small">費用由 fal 結算；估價參考 OpenRouter 價目，實際帳單以 fal 為準。此處不提供 fal 餘額查詢。</p>` : ""}</div>
+    <div class="card"><strong>${label} 金鑰</strong>
+    <p class="small">${k.set ? `已設定（結尾 ${esc(k.hint)}）` : `尚未設定。到 ${fal ? "fal.ai" : "openrouter.ai"} 建立金鑰，貼在下面。`}</p>
+    <p><input type="password" id="key" size="48" placeholder="${fal ? "FAL_KEY" : "sk-or-…"}" autocomplete="off"> <button class="btn primary" id="saveKey">儲存</button></p>
     <p class="muted small">只存在這台電腦的 ${esc(k.file)}，不會顯示在畫面上，也不會寫進紀錄。</p>
     <div id="bal" class="small"></div></div>
     <div class="card"><strong>翻譯設定</strong><p class="small">模型與推理程度用預設（目前測試結果最好的組合），不需要選。預算上限會依每本書的估價自動設定。</p></div>`;
+  $("#saveProvider").onclick = async () => {
+    try { await api("settings/provider", {provider: $("#provider").value}); toast("已套用"); settingsView(); }
+    catch (e) { toast(e.message); }
+  };
   $("#saveKey").onclick = async () => {
     try { await api("settings/key", {key: $("#key").value}); toast("已儲存"); settingsView(); }
     catch (e) { toast(e.message); }
@@ -154,7 +164,7 @@ async function runCard(id, o) {
   } else if (!r) {
     const k = await api("settings");
     body = `<strong>開始翻譯</strong><div id="est" class="small muted">估價中…</div>
-      ${k.set ? "" : `<p class="issue">還沒設定 OpenRouter 金鑰：<a href="#/settings">去設定</a></p>`}
+      ${k.set ? "" : `<p class="issue">還沒設定目前連線方式的金鑰：<a href="#/settings">去設定</a></p>`}
       <button class="btn primary" id="start" disabled>開始翻譯</button>`;
   } else {
     const st = RUNSTATUS[r.status] || r.status;

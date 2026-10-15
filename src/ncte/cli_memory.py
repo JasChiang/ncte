@@ -325,7 +325,7 @@ def review(epub: Annotated[str, typer.Argument()],
     # fixes are retranslated with the same kind of context the book was translated with (memory in context mode)
     last = state.conn.execute("SELECT mode FROM runs WHERE book_id=? AND mode='context' LIMIT 1", (book.id,)).fetchone()
     opts = RunOptions(mode="context" if last else "baseline", model=cfg.openrouter.model, budget_usd=budget_usd,
-                      unit_ids=unit_id or None, client="fake" if fake else "openrouter", review_only=True)
+                      unit_ids=unit_id or None, client="fake" if fake else cfg.openrouter.provider, review_only=True)
     _run(book, opts, fake=fake, cfg=cfg)
 
 
@@ -662,7 +662,7 @@ def names_gender_scan(epub: Annotated[str, typer.Argument()],
     cfg = state.cfg
     book = _book(epub)
     opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
-                      client="fake" if fake else "openrouter", gender_only=True)
+                      client="fake" if fake else cfg.openrouter.provider, gender_only=True)
     _run(book, opts, fake=fake, cfg=cfg)
     typer.echo(f"see: ncte names gender {epub}")
 
@@ -679,7 +679,7 @@ def reader_check(epub: Annotated[str, typer.Argument()],
     cfg = state.cfg
     book = _book(epub)
     opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
-                      client="fake" if fake else "openrouter", reader_only=True)
+                      client="fake" if fake else cfg.openrouter.provider, reader_only=True)
     _run(book, opts, fake=fake, cfg=cfg)
 
 
@@ -694,7 +694,7 @@ def names_relations(epub: Annotated[str, typer.Argument()],
     cfg = state.cfg
     book = _book(epub)
     opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
-                      client="fake" if fake else "openrouter", relations_only=True)
+                      client="fake" if fake else cfg.openrouter.provider, relations_only=True)
     _run(book, opts, fake=fake, cfg=cfg)
 
 
@@ -710,7 +710,7 @@ def names_address_check(epub: Annotated[str, typer.Argument()],
     cfg = state.cfg
     book = _book(epub)
     opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
-                      client="fake" if fake else "openrouter", address_only=True)
+                      client="fake" if fake else cfg.openrouter.provider, address_only=True)
     _run(book, opts, fake=fake, cfg=cfg)
     typer.echo(f"see: ncte names address {epub}")
 
@@ -825,7 +825,7 @@ def names_propose(epub: Annotated[str, typer.Argument()],
     cfg = state.cfg
     book = _book(epub)
     opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
-                      client="fake" if fake else "openrouter", naming_only=True)
+                      client="fake" if fake else cfg.openrouter.provider, naming_only=True)
     _run(book, opts, fake=fake, cfg=cfg)
     typer.echo(f"see: ncte names proposals {epub}")
 

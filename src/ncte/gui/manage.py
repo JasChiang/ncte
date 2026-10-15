@@ -76,23 +76,41 @@ def exported_file(cfg: Any, book: Any) -> Path:
 
 
 # ---------------------------------------------------------------- API key (stored in .env, never sent back)
-def key_status(env_path: Path) -> dict[str, Any]:
+def key_status(env_path: Path, provider: str = "openrouter") -> dict[str, Any]:
     from ..config import get_api_key
 
-    key = get_api_key()
-    return {"set": bool(key), "hint": f"…{key[-4:]}" if key else None, "file": str(env_path.resolve())}
+    key = get_api_key(provider)
+    return {"provider": provider, "set": bool(key), "hint": f"…{key[-4:]}" if key else None, "file": str(env_path.resolve())}
 
 
-def set_key(env_path: Path, key: str) -> dict[str, Any]:
+def set_key(env_path: Path, key: str, provider: str = "openrouter") -> dict[str, Any]:
     key = key.strip()
-    if not re.fullmatch(r"sk-or-[A-Za-z0-9_\-]{20,}", key):
+    if provider not in ("openrouter", "fal"):
+        raise NCTEError("未知的連線方式")
+    if provider == "fal" and not re.fullmatch(r"[A-Za-z0-9_:.-]{10,}", key):
+        raise NCTEError("fal 金鑰格式不正確")
+    if provider == "openrouter" and not re.fullmatch(r"sk-or-[A-Za-z0-9_\-]{20,}", key):
         raise NCTEError("這不像 OpenRouter 的金鑰（應以 sk-or- 開頭）")
+    name = "FAL_KEY" if provider == "fal" else "OPENROUTER_API_KEY"
+    _save_env(env_path, name, key)
+    return key_status(env_path, provider)
+
+
+def _save_env(env_path: Path, name: str, value: str) -> None:
     lines = env_path.read_text(encoding="utf-8").splitlines() if env_path.is_file() else []
-    lines = [x for x in lines if not x.startswith("OPENROUTER_API_KEY=")] + [f"OPENROUTER_API_KEY={key}"]
-    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    lines = [x for x in lines if x.split("=", 1)[0].strip() != name] + [f"{name}={value}"]
+    env_path.touch(mode=0o600, exist_ok=True)
     env_path.chmod(0o600)
-    os.environ["OPENROUTER_API_KEY"] = key  # this process uses the new key right away
-    return key_status(env_path)
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    os.environ[name] = value
+
+
+def set_provider(env_path: Path, cfg: Any, provider: str) -> dict[str, Any]:
+    if provider not in ("openrouter", "fal"):
+        raise NCTEError("未知的連線方式")
+    _save_env(env_path, "NCTE_LLM_PROVIDER", provider)
+    cfg.openrouter.provider = provider
+    return key_status(env_path, provider)
 
 
 def balance(client: Any) -> dict[str, Any]:

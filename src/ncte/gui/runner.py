@@ -53,7 +53,7 @@ class Runner:
     def options(self, budget: float) -> Any:
         from ..translation.orchestrator import RunOptions
 
-        return RunOptions(mode="context", model=self.cfg.openrouter.model, budget_usd=budget, client=self.client)
+        return RunOptions(mode="context", model=self.cfg.openrouter.model, budget_usd=budget, client="fake" if self.client == "fake" else self.cfg.openrouter.provider)
 
     def estimate(self, ws: Any, ref: str) -> dict[str, Any]:
         from ..translation.dryrun import dry_run

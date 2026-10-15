@@ -46,7 +46,7 @@ class LLMResponse:
 
 
 class LLMClient(Protocol):
-    name: str  # "openrouter" | "fake"
+    name: str  # "openrouter" | "fal" | "fake"
 
     def complete(self, req: LLMRequest) -> LLMResponse: ...
 

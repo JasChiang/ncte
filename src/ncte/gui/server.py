@@ -51,7 +51,7 @@ class App:
         if parts == ["library"]:
             return data.library(self.ws)
         if parts == ["settings"]:
-            return manage.key_status(self.env_path)
+            return manage.key_status(self.env_path, self.ws.cfg.openrouter.provider)
         if parts == ["balance"]:
             return manage.balance(self.runner.client_factory(self.ws.cfg))
         if len(parts) >= 3 and parts[0] == "book":
@@ -88,8 +88,14 @@ class App:
             vol = body.get("volume")
             return manage.import_upload(self.ws, str(body.get("upload", "")), body.get("series") or None,
                                         float(vol) if vol not in (None, "") else None)
+        if parts == ["settings", "provider"]:
+            if self.runner.busy:
+                raise NCTEError("請先暫停翻譯再切換連線方式")
+            return manage.set_provider(self.env_path, self.ws.cfg, str(body.get("provider", "")))
         if parts == ["settings", "key"]:
-            return manage.set_key(self.env_path, str(body.get("key", "")))
+            if self.runner.busy:
+                raise NCTEError("請先暫停翻譯再更換金鑰")
+            return manage.set_key(self.env_path, str(body.get("key", "")), self.ws.cfg.openrouter.provider)
         if parts == ["run", "pause"]:
             return {"pausing": self.runner.pause()}
         if len(parts) == 3 and parts[0] == "run" and parts[2] == "continue":

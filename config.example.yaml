@@ -6,6 +6,7 @@ app:
   mode: "baseline"          # baseline | context
   lookahead_scope: "current_scene"
 openrouter:
+  provider: "openrouter"  # openrouter | fal; fal uses FAL_KEY and its fixed compatible endpoint
   base_url: "https://openrouter.ai/api/v1"
   model: "google/gemini-3.8-flash"   # verified against GET /models before every run
   review_model: null        # null = same as model

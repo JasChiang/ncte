@@ -99,6 +99,27 @@ export OPENROUTER_API_KEY=sk-or-v1-...     # 或 cp .env.example .env 後填入
 ```
 `import`、`inspect`、`validate`、`report`、`status`、`--dry-run` 都不需要金鑰。
 
+也可以透過 fal 使用 OpenRouter 模型，保留原有直連方式：
+
+```yaml
+openrouter:
+  provider: fal  # 預設 openrouter；模型等其他設定沿用
+```
+
+將 `FAL_KEY=你的金鑰` 放進專案根目錄的 `.env`（不要提交或貼到對話中）。
+網頁「設定」也能切換連線方式、分別儲存兩種金鑰；切換選擇以
+`NCTE_LLM_PROVIDER=fal` / `openrouter` 保存於 `.env`，其優先權高於 YAML，
+環境變數又高於 `.env`。執行中的任務需先暫停；續譯沿用任務建立時的連線設定。
+不會在兩種連線間自動切換，也不需要新增 Python 套件。
+
+fal 使用官方 OpenAI 相容入口 `https://fal.run/openrouter/router/openai/v1`，
+模型與參考價格仍查 OpenRouter 公開 `/models`，不會把 fal 金鑰送到 OpenRouter。
+模型目錄不保證該模型在 fal 的即時可用性；估價參考 OpenRouter，回應有 `usage.cost`
+時記錄回報費用，沒有時保留估算標記，最終帳單以 fal 為準。fal 路徑目前不提供餘額查詢
+及 `/generation` 費用補查；歷史費用校準按連線方式分開。結構化輸出與 reasoning
+參數沿用現有請求及本地 Pydantic 驗證，真實模型相容性仍須用金鑰小量驗證。
+
+
 ## 使用流程
 ```bash
 # 1. 匯入並檢查（不呼叫 LLM）

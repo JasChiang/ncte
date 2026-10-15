@@ -1,7 +1,7 @@
 """Configuration loading (spec §3.2).
 
 Priority: explicit --config file > ./ncte.yaml > ./config.yaml > built-in defaults.
-The API key is *only* read from the OPENROUTER_API_KEY environment variable or a local
+API keys are read from OPENROUTER_API_KEY (direct) or FAL_KEY (fal), or a local
 ``.env`` file; it is never stored in the config model dump, logs or reports.
 """
 
@@ -33,6 +33,7 @@ class AppConfig(_Strict):
 
 
 class OpenRouterConfig(_Strict):
+    provider: Literal["openrouter", "fal"] = "openrouter"
     base_url: str = "https://openrouter.ai/api/v1"
     model: str = DEFAULT_MODEL
     review_model: str | None = None
@@ -144,6 +145,11 @@ def load_config(path: str | Path | None = None, *, workspace: str | None = None)
     env_ws = os.environ.get("NCTE_WORKSPACE")
     if env_ws and not workspace:
         cfg.app.workspace = env_ws
+    provider = os.environ.get("NCTE_LLM_PROVIDER") or _read_dotenv(Path(".env")).get("NCTE_LLM_PROVIDER")
+    if provider:
+        if provider not in ("openrouter", "fal"):
+            raise ConfigError("NCTE_LLM_PROVIDER must be openrouter or fal")
+        cfg.openrouter.provider = "fal" if provider == "fal" else "openrouter"
     return cfg
 
 
@@ -160,17 +166,19 @@ def _read_dotenv(path: Path) -> dict[str, str]:
     return out
 
 
-def get_api_key() -> str | None:
-    key = os.environ.get("OPENROUTER_API_KEY")
+def get_api_key(provider: str = "openrouter") -> str | None:
+    name = "FAL_KEY" if provider == "fal" else "OPENROUTER_API_KEY"
+    key = os.environ.get(name)
     if key:
         return key.strip() or None
-    return _read_dotenv(Path(".env")).get("OPENROUTER_API_KEY") or None
+    return _read_dotenv(Path(".env")).get(name) or None
 
 
 def redact(text: str, key: str | None = None) -> str:
     """Remove the API key (and anything that looks like an OpenRouter key) from text."""
     import re
 
-    if key:
-        text = text.replace(key, "***")
+    for secret in (key, get_api_key(), get_api_key("fal")):
+        if secret:
+            text = text.replace(secret, "***")
     return re.sub(r"sk-or-[A-Za-z0-9_\-]{8,}", "sk-or-***", text)

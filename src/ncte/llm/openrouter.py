@@ -101,10 +101,13 @@ class OpenRouterClient:
         return min(self.backoff_base * (2 ** (attempt - 1)), 60.0) * (0.5 + random.random())
 
     # ------------------------------------------------------------------ API
+    def _catalog(self) -> tuple[str, dict[str, str]]:
+        return f"{self.base_url}/models", ({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {})
+
     def list_models(self) -> list[dict[str, Any]]:
-        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        url, headers = self._catalog()
         try:
-            resp = self._http.get(f"{self.base_url}/models", headers=headers)
+            resp = self._http.get(url, headers=headers)
         except httpx.HTTPError as exc:
             raise RetryableAPIError(f"model list request failed: {redact(str(exc), self.api_key)}") from exc
         if resp.status_code != 200:
