@@ -24,6 +24,7 @@ from ..llm.base import LLMClient, LLMRequest, LLMResponse, StructuredMode
 from ..llm.cost import estimate_tokens
 from ..llm.prompt_loader import Prompt, load_prompt
 from ..llm.schemas import SCHEMAS, TranslationBatchOutput, strict_json_schema
+from ..llm.short_ids import ShortIds
 from ..qa.rules import Finding, check_batch, check_translation
 
 _FENCE = re.compile(r"^```(?:json)?\s*\n(.*)\n```\s*$", re.S)
@@ -98,8 +99,10 @@ class BatchResult:
     structured_mode: str = ""
 
 
-def parse_json_output(content: str, model: type[BaseModel]) -> tuple[BaseModel, str]:
-    """Strict parse; the only local repair is removing a single Markdown code fence."""
+def parse_json_output(content: str, model: type[BaseModel],
+                      decode: Callable[[Any], Any] | None = None) -> tuple[BaseModel, str]:
+    """Strict parse; the only local repair is removing a single Markdown code fence. ``decode`` maps short ids back
+    before the answer is checked."""
     text = content.strip()
     status = "strict"
     try:
@@ -113,6 +116,8 @@ def parse_json_output(content: str, model: type[BaseModel]) -> tuple[BaseModel, 
         except json.JSONDecodeError as exc2:
             raise ModelOutputError(f"invalid JSON inside code fence: {exc2}") from exc2
         status = "repaired_fence"
+    if decode is not None:
+        data = decode(data)
     try:
         return model.model_validate(data), status
     except ValidationError as exc:
@@ -137,23 +142,26 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
                     on_downgrade: Callable[[str], None] | None = None) -> tuple[BaseModel, int, StructuredMode]:
     """One logical LLM call with schema validation. Returns (parsed, request_id, mode_used)."""
     schema_model = SCHEMAS[stage.split(":")[0]]
+    ids = ShortIds.for_payload(payload)  # the model reads and writes P1/C1… instead of long ids
     system = prompt.render(payload)
     if correction:
+        for long_id, code in ids.to_short.items():
+            correction = correction.replace(long_id, code)
         system += f"\n\n## 重要更正\n上一次的輸出未通過程式驗證：{correction}\n請嚴格依照規則與輸出格式重新輸出。\n"
     messages = [{"role": "system", "content": system},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}]
+                {"role": "user", "content": json.dumps(ids.encode(payload), ensure_ascii=False)}]
     current: StructuredMode = mode
     max_tokens = cfg.openrouter.max_output_tokens
     auto_cap = max_tokens is None
     if auto_cap:
-        max_tokens = auto_max_tokens(messages[1]["content"])
+        max_tokens = auto_max_tokens(messages[-1]["content"])
     while True:
         req = LLMRequest(stage=stage, model=model, messages=messages, schema_name=f"ncte_{stage.split(':')[0]}",
                          json_schema=strict_json_schema(schema_model) if current == "json_schema" else None,
                          structured_mode=current, temperature=cfg.openrouter.temperature,
                          max_tokens=max_tokens, prompt_version=prompt.version_id,
                          extra={"reasoning": {"effort": cfg.openrouter.reasoning_effort}}
-                         if cfg.openrouter.reasoning_effort else {})
+                         if cfg.openrouter.reasoning_effort else {}, id_codes=ids.to_long)
         rid = recorder.start(req, unit_ids, est_cost)
         try:
             resp = client.complete(req)
@@ -176,7 +184,7 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
                 continue
             raise ModelOutputError("output truncated (finish_reason=length)")
         try:
-            parsed, status = parse_json_output(resp.content, schema_model)
+            parsed, status = parse_json_output(resp.content, schema_model, ids.decode)
         except ModelOutputError:
             recorder.success(rid, resp, "invalid")
             raise

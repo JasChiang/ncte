@@ -144,7 +144,7 @@ class FakeLLM:
 
     def complete(self, req: LLMRequest) -> LLMResponse:
         stage = req.stage if req.stage in self.responders else req.stage.split(":")[0]
-        payload = json.loads(req.messages[-1]["content"])
+        payload = _real_ids(json.loads(req.messages[-1]["content"]), req.id_codes)
         with self._lock:
             self.calls.append(req)
             self.payloads.append(payload)
@@ -193,3 +193,17 @@ class FakeLLM:
                            usage={"prompt_tokens": pin, "completion_tokens": pout, "total_tokens": pin + pout,
                                   "cost": cost}, cost_usd=cost, latency_ms=1, finish_reason="stop",
                            structured_mode=req.structured_mode)
+
+
+def _real_ids(value: Any, codes: dict[str, str]) -> Any:
+    """The fake reads the request with real ids (the engine sends short codes, ``llm/short_ids``); real ids in its answer
+    pass through the engine's mapping unchanged."""
+    if not codes:
+        return value
+    if isinstance(value, str):
+        return codes.get(value, value)
+    if isinstance(value, dict):
+        return {k: _real_ids(v, codes) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_real_ids(v, codes) for v in value]
+    return value

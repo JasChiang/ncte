@@ -13,7 +13,6 @@ def test_temperature_omitted_when_model_does_not_accept_it(conn, cfg, fixtures):
 
 
 def test_retranslating_one_unit_sees_its_scene(conn, cfg, fixtures):
-    import json
 
     from ncte.llm.fake import FakeLLM
 
@@ -27,7 +26,7 @@ def test_retranslating_one_unit_sees_its_scene(conn, cfg, fixtures):
     target = members[len(members) // 2]
     fake = FakeLLM()
     run_book(conn, cfg, fixtures["basic"], fake, mode="context", unit_ids=[target["id"]], force=True)
-    p = next(json.loads(c.messages[1]["content"]) for c in fake.calls if c.stage.startswith("translate"))
+    p = next(pl for c, pl in zip(fake.calls, fake.payloads, strict=True) if c.stage.startswith("translate"))
     around = {u["unit_id"] for u in p["context_before"] + p["context_after"]}
     assert [u["unit_id"] for u in p["units"]] == [target["id"]]
     assert around == {r["id"] for r in members} - {target["id"]}  # the whole (small) scene, nothing outside it
