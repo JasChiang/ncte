@@ -413,8 +413,8 @@ async function peopleView(id) {
       ${p.aka.length ? `<div class="muted small">其他稱呼：<span class="ja">${p.aka.map(esc).join("・")}</span></div>` : ""}
       ${genderLine(p, upto)}
       <div class="row" style="margin-top:12px;gap:24px">
-        <div style="flex:1 1 240px"><strong>被怎麼叫</strong>${called.map(a => `<div>${esc(nm(a.speaker))} → <span class="ja">${esc(a.ja)}</span>（${esc(a.zh || "")}）<span class="muted small">×${a.uses}</span></div>`).join("") || '<div class="muted">—</div>'}</div>
-        <div style="flex:1 1 240px"><strong>怎麼叫別人</strong>${calls.map(a => `<div>→ ${a.to === pid ? "自稱" : esc(nm(a.to))}：<span class="ja">${esc(a.ja)}</span>（${esc(a.zh || "")}）<span class="muted small">×${a.uses}</span></div>`).join("") || '<div class="muted">—</div>'}</div></div>
+        <div style="flex:1 1 240px"><strong>被怎麼叫</strong>${byPerson(called, a => a.speaker, k => esc(nm(k)) + " →") || '<div class="muted">—</div>'}</div>
+        <div style="flex:1 1 240px"><strong>怎麼叫別人</strong>${byPerson(calls, a => a.to, k => "→ " + (k === pid ? "自稱" : esc(nm(k)))) || '<div class="muted">—</div>'}</div></div>
       <div style="margin-top:12px"><strong>常一起出場</strong><div>${Object.entries(co).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([o, k]) => `<a href="#" data-k="${esc(o)}">${esc(nm(o))}</a> <span class="muted small">${k}</span>`).join("　") || "—"}</div></div>
       <div style="margin-top:12px"><strong>說話例句</strong>${EX.map(e => `<div class="ja">${esc(e.text)}</div>`).join("") || '<div class="muted">—</div>'}</div>
       <div style="margin-top:12px"><strong>已知事實</strong> <span class="muted small">${F.length} 筆</span><div class="scroll"><table><tr><th>段</th><th>內容</th><th>類型</th><th>原文依據</th></tr>
@@ -429,6 +429,14 @@ async function peopleView(id) {
   const gs = $("#genderSet"); if (gs) gs.onchange = async () => {
     try { await api(`book/${id}/characters/${peopleState.person}/gender`, {gender: gs.value}); invalidate(id); toast("性別已更新（之後的翻譯會用）"); peopleView(id); }
     catch (e) { toast(e.message); } };
+}
+// every form one person uses for another on one line, most used first (「エルリア（艾爾莉亞）×40・お前（妳）×12」)
+function byPerson(list, key, label) {
+  const groups = new Map();
+  list.forEach(a => { const k = key(a); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(a); });
+  return [...groups.entries()].sort((x, y) => y[1].reduce((n, a) => n + a.uses, 0) - x[1].reduce((n, a) => n + a.uses, 0))
+    .map(([k, forms]) => `<div style="margin-bottom:3px">${label(k)} ${forms.sort((x, y) => y.uses - x.uses).map(a =>
+      `<span class="ja">${esc(a.ja)}</span>（${esc(a.zh || "")}）<span class="muted small">×${a.uses}</span>`).join("・")}</div>`).join("");
 }
 function genderLine(p, upto) {
   // gender as known at the slider position: explicit (a word in the text), inferred (tone), or set by you
