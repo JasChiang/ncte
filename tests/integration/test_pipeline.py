@@ -310,3 +310,24 @@ def test_reader_look_and_review_are_split_when_the_filter_refuses(conn, cfg, fix
     assert review_ok  # reviewed in parts
     assert not conn.execute("SELECT 1 FROM qa_findings WHERE run_id=? AND type IN ('reader_blocked','review_blocked')",
                             (rid,)).fetchone()  # every part went through
+
+
+def test_line_said_to_a_woman_with_you_is_flagged(conn, cfg, fixtures):
+    """The reading records who a line is said to; 你 to a woman (written female in the source) is flagged."""
+    import json as _json
+
+    from ncte.qa import second_person
+
+    from ..scripted import RESPONDERS
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    u = conn.execute("SELECT x.*, n.ordinal, n.id uid, n.plain_text FROM utterances x JOIN units n ON n.id=x.unit_id "
+                     "WHERE x.book_id=? LIMIT 1", (book.id,)).fetchone()
+    her = conn.execute("SELECT id FROM characters WHERE book_id=? LIMIT 1", (book.id,)).fetchone()[0]
+    conn.execute("UPDATE utterances SET addressee_ids_json=? WHERE unit_id=?", (_json.dumps([her]), u["uid"]))
+    conn.execute("INSERT OR REPLACE INTO character_gender(character_id, book_id, gender, certainty, evidence_quote, ordinal, "
+                 "origin, updated_at) VALUES (?,?,?,?,?,?,?,?)", (her, book.id, "female", "explicit", "彼女", 0, "llm", "t"))
+    unit = conn.execute("SELECT * FROM units WHERE id=?", (u["uid"],)).fetchone()
+    assert "妳" in (second_person.check(conn, book.id, unit, "「你在做什麼？」") or "")
+    assert second_person.check(conn, book.id, unit, "「妳在做什麼？」") is None
+    assert second_person.check(conn, book.id, unit, "「你們在做什麼？」") is None

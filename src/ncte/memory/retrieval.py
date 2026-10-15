@@ -104,8 +104,12 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
         if u["unit_id"] not in batch_ids:
             continue
         sid = u["speaker_id_nullable"]
-        utts.append({"unit_id": u["unit_id"], "quote_index": u["quote_index"], "quote": u["quote_text"][:60],
-                     "speaker": names.get(sid) if sid else None, "status": u["status"]})
+        item = {"unit_id": u["unit_id"], "quote_index": u["quote_index"], "quote": u["quote_text"][:60],
+                "speaker": names.get(sid) if sid else None, "status": u["status"]}
+        to = [names[x] for x in json.loads(u["addressee_ids_json"] or "[]") if x in names]
+        if to:  # who the line is said to: 你 or 妳 follows that person, not the last woman mentioned
+            item["to"] = to
+        utts.append(item)
     actions = [a for a in state.get("actions", []) if a.get("unit_id") in batch_ids]
     for a in actions:
         a["subject_candidates"] = [names.get(x, x) for x in a.get("subject_candidates", [])]

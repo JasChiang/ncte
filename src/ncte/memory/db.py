@@ -564,6 +564,9 @@ CREATE TABLE character_impressions (
     updated_at TEXT NOT NULL
 );
 """),
+    (19, "who each line is said to, as the read pass judged it (你／妳 for the person spoken to)", """
+ALTER TABLE utterances ADD COLUMN addressee_ids_json TEXT NOT NULL DEFAULT '[]';
+"""),
 ]
 
 

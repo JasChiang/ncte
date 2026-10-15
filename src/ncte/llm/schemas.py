@@ -74,6 +74,7 @@ class UtteranceAnalysis(_M):
     resolution_status: Resolution = Field(alias="status")
     speaker_ref: str | None = Field(alias="speaker")
     contradictions: list[str] = Field(alias="conflicts")
+    listener_refs: list[str] = Field(default_factory=list, alias="to")  # who the line is said to
 
 
 class ActionAnalysis(_M):

@@ -21,6 +21,8 @@ _VOCATIVE_END = "、，,！!？?…―─"
 
 def check(conn: sqlite3.Connection, book_id: str, unit: sqlite3.Row, text: str) -> str | None:
     """Evidence for a finding, or None."""
+    if ev := _by_addressee(conn, book_id, unit, text):
+        return ev
     singular = text.replace("你們", "")  # 「米莉絲、威澤爾，你們…」 speaks to a group: 你們 is right
     if "你" not in singular or "妳" in text:
         return None
@@ -37,4 +39,29 @@ def check(conn: sqlite3.Connection, book_id: str, unit: sqlite3.Row, text: str) 
             called = q.startswith(form) and len(q) > len(form) and q[len(form)] in _VOCATIVE_END
             if called and gender_at(conn, forms[form], hz) == "female":
                 return f"「{form}、…」 calls her by name, but the translation uses 你 (she is female): 妳"
+    return None
+
+
+def _by_addressee(conn: sqlite3.Connection, book_id: str, unit: sqlite3.Row, text: str) -> str | None:
+    """The reading said who the unit's lines are said to (one person, the same for every line): their gender, written
+    in the source (not inferred), against a lone 你／妳 in the translation. 你們／妳們 (a group) are left alone."""
+    import json
+
+    to: set[str] = set()
+    for u in conn.execute("SELECT addressee_ids_json FROM utterances WHERE unit_id=?", (unit["id"],)):
+        to |= set(json.loads(u[0] or "[]"))
+    if len(to) != 1:
+        return None
+    from ..memory.repository import gender_view
+
+    g = gender_view(conn, next(iter(to)), pos(conn, book_id, unit["ordinal"]))
+    if not g or g[1] != "explicit":
+        return None
+    singular = text.replace("你們", "").replace("妳們", "")
+    name = conn.execute("SELECT coalesce(display_name_zh, canonical_name) FROM characters WHERE id=?", (next(iter(to)),)).fetchone()
+    who = name[0] if name else "?"
+    if g[0] == "female" and "你" in singular and "妳" not in singular:
+        return f"the line is said to {who} (female): 你 should be 妳"
+    if g[0] == "male" and "妳" in singular and "你" not in singular:
+        return f"the line is said to {who} (male): 妳 should be 你"
     return None

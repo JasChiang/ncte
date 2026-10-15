@@ -51,6 +51,7 @@ class LlmClaim:
     status: str
     candidates: list[Candidate]
     contradictions: list[str] = field(default_factory=list)
+    listeners: list[str] = field(default_factory=list)  # character ids the line is said to
 
 
 def resolve(program_ev: list[TagEvidence], llm: LlmClaim | None, head: Resolution | None = None) -> Resolution:
