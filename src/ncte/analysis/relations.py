@@ -26,18 +26,23 @@ PAIRS_PER_REQUEST = 8
 MAX_EVIDENCE = 10  # per kind and pair
 
 
-def _names(c: sqlite3.Row) -> set[str]:
-    out = {c["canonical_name"], c["display_name_zh"] or ""}
+def _names(c: sqlite3.Row, proper: set[str]) -> set[str]:
+    """The names a fact's text may name this character by: only proper names (in the glossary as a character name,
+    or the Chinese of one) — a character called 「母親」 must not take every fact that mentions somebody's mother."""
     zh = c["display_name_zh"] or ""
+    out = {c["canonical_name"], zh, *json.loads(c["aliases_json"] or "[]")}
     if "·" in zh:
         out.add(zh.split("·")[0])
-    out.update(json.loads(c["aliases_json"] or "[]"))
-    return {n for n in out if n and len(n) >= 2}
+    return {n for n in out if n and len(n) >= 2 and n in proper}
 
 
 def candidate_pairs(conn: sqlite3.Connection, book_id: str) -> tuple[list[dict[str, Any]], dict[str, sqlite3.Row]]:
     chars = {c["id"]: c for c in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,))}
-    names = {cid: _names(c) for cid, c in chars.items()}
+    proper: set[str] = set()
+    for g in conn.execute(f"SELECT source_term, target_term FROM glossary WHERE {SERIES_SCOPE} AND category='character'",
+                          (book_id,)):
+        proper |= {g[0], g[1], *(g[1].split("·")[:1] if "·" in g[1] else [])}
+    names = {cid: _names(c, proper) for cid, c in chars.items()}
     pairs: dict[tuple[str, str], dict[str, Any]] = {}
 
     def pair(a: str, b: str) -> dict[str, Any]:

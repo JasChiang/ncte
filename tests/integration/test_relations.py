@@ -90,3 +90,18 @@ def test_relations_command(tmp_path, fixtures):
     assert r.invoke(app, ["-w", str(ws), "translate", epub, "--fake", "--mode", "context"]).exit_code == 0
     out = r.invoke(app, ["-w", str(ws), "names", "relations", epub, "--fake"])
     assert out.exit_code == 0, out.output and "relations:" in out.output
+
+
+def test_a_character_called_mother_does_not_take_every_mothers_fact(conn, cfg, fixtures):
+    from ncte.memory.repository import upsert_character
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    a, _ = _two_characters(conn, book.id)
+    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
+    mom, _ = upsert_character(conn, book.id, "母", name_zh="母親", aliases=[], unit_id=u["id"], ordinal=u["ordinal"], origin="t")
+    conn.execute("INSERT INTO facts(id, book_id, subject, predicate, object, fact_type, certainty, fact_json, "
+                 "evidence_unit_ids_json, evidence_quote, first_revealed_unit_id, first_revealed_ordinal, created_at) "
+                 "VALUES ('f_x', ?, ?, '被母親稱讚過', '小時候', 'objective', 'explicit', '{}', '[]', 'q', ?, ?, ?)",
+                 (book.id, a, u["id"], u["ordinal"], utcnow()))
+    pairs, _ = relations.candidate_pairs(conn, book.id)
+    assert not any({p["a"], p["b"]} == {a, mom} for p in pairs)  # 「母親」 is not a proper name to match by
