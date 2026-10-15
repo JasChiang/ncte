@@ -133,6 +133,9 @@ def make_handler(app: App, port: int) -> type[BaseHTTPRequestHandler]:
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "ncte-gui"
+        # requests are served one at a time: a connection the browser opens ahead and never uses would otherwise
+        # block every later request
+        timeout = 3
 
         def log_message(self, fmt: str, *args: Any) -> None:  # keep the terminal quiet
             return
