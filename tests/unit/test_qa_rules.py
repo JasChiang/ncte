@@ -25,6 +25,8 @@ def test_errors():
 
 def test_warnings():
     assert ("too_short", "high") in run("あ" * 40, "啊")
+    assert run("　魔《ま》導《どう》車《しや》。", "　魔導車。", ruby=3) == set()  # readings are not counted
+    assert ("japanese_residue", "error") in run("「王命が下されていますッ!!」", "「已經下達王命了ッ!!」")  # one is enough
     assert ("quote_mismatch", "medium") in run("「あいうえお、かきくけこ」", "啊咿嗚欸喔，咖嘰咕")
     assert ("non_taiwan_glyph", "error") in run("これは国です", "这是国家")  # slid into Simplified: retried
     assert ("number_mismatch", "low") in run("１２歳の春だった", "那是十二歲的春天")
@@ -34,6 +36,10 @@ def test_warnings():
 def test_glossary_checks():
     g = [{"source_term": "ミナ", "target_term": "米娜", "verified": True, "category": "character"}]
     assert ("glossary_mismatch", "high") in run("ミナは笑った。", "米奈笑了。", glossary=g)
+    full = [{"source_term": "レイド・フリーデン", "target_term": "雷德·弗里登", "verified": 1, "aliases": ["レイド"]}]
+    assert run("レイドは頷いた。", "雷德點了點頭。", glossary=full) == set()  # the given name alone is rendered
+    assert ("glossary_mismatch", "high") in run("レイドは頷いた。", "萊德點了點頭。", glossary=full)
+    assert ("glossary_mismatch", "high") in run("レイド・フリーデンです", "我是雷德。", glossary=full)
     assert run("ミナは笑った。", "米娜笑了。", glossary=g) == set()
     assert ("possible_added_name", "high") in run("彼女は笑った。", "米娜笑了。", glossary=g)
 

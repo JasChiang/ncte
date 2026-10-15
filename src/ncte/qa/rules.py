@@ -85,14 +85,16 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
         kana = KANA_RE.findall(residue)
         if kana and len(kana) / max(len(vis), 1) > 0.3:
             add("japanese_residue", "error", f"{len(kana)} kana in output (mostly untranslated)")
-        elif len(kana) >= 2:
-            add("japanese_residue", "medium", f"kana left in output: {''.join(kana)[:20]}")
+        elif kana:  # even one left behind (「…王命了ッ!!」) is visible to the reader: retried with this correction
+            add("japanese_residue", "error", f"kana left in output: {''.join(kana)[:20]} — write it in Chinese "
+                                             f"(a small ッ/っ before !! is just dropped)")
 
     if ruby_count and RUBY_LEAK_RE.search(text):
         add("ruby_notation_leak", "medium", RUBY_LEAK_RE.search(text).group(0))  # type: ignore[union-attr]
 
-    if len(vis_src) >= 12:
-        ratio = len(vis) / len(vis_src)
+    body_src = _visible(match_text(plain_text))  # ruby readings (魔《ま》導《どう》車《しや》) are not text to translate
+    if len(body_src) >= 12:
+        ratio = len(vis) / len(body_src)
         if ratio < 0.25:
             add("too_short", "high", f"length ratio {ratio:.2f} (possible omission)")
         elif ratio < 0.4:
@@ -137,12 +139,20 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
         terms = [g.get("source_term") or g.get("ja"), *(g.get("aliases") or [])]
         return any(t and t in src_match for t in terms)
 
+    def rendered(ja: str, zh: str) -> bool:
+        if zh in flat:
+            return True
+        if ja in src_match:
+            return False
+        # only a shorter form is in the source (「レイド」 for レイド・フリーデン): a part of the full rendering will do
+        return any(len(p) >= 2 and p in flat for p in re.split(r"[・･·]", zh))
+
     for g in gl:
         ja, zh = g.get("source_term") or g.get("ja"), g.get("target_term") or g.get("zh")
         if not ja or not zh:
             continue
         in_src = in_source(g)
-        if in_src and zh not in flat:
+        if in_src and not rendered(ja, zh):
             sev = "high" if g.get("verified") else "low"
             add("glossary_mismatch", sev, f"{ja} → expected 「{zh}」")
             # another name form of the same entity used instead (the official name rendered with the nickname's rendering)
