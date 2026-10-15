@@ -70,3 +70,12 @@ details summary{cursor:pointer}
 .ctxrow.here{background:var(--warn-soft);font-weight:600}
 .ctxbtn{margin-top:4px;padding:1px 6px;font-size:11px;white-space:nowrap}
 @media (max-width:820px){.ctx{padding-left:10px}.ctxrow{grid-template-columns:32px 1fr}}
+.addr-row{display:grid;grid-template-columns:7.5em 1fr;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)}
+.addr-row:last-child{border-bottom:0}
+.addr-who{font-weight:600;font-size:13px;line-height:1.5;word-break:keep-all}
+.addr-forms{display:flex;flex-wrap:wrap;gap:5px}
+.form-tag{display:inline-flex;align-items:baseline;gap:5px;padding:2px 8px;border:1px solid var(--line);border-radius:6px;background:var(--bg);font-size:12.5px;line-height:1.5}
+.form-tag .zh{color:var(--accent)}
+.form-tag .n{color:var(--muted);font-size:11px;font-family:var(--mono)}
+@media (max-width:600px){.addr-row{grid-template-columns:1fr;gap:4px}}
+.addr-h{display:flex;gap:10px;align-items:baseline;margin-bottom:4px;padding-bottom:4px;border-bottom:2px solid var(--line)}
