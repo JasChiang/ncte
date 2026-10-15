@@ -240,6 +240,22 @@ def _is_description(name: str) -> bool:
         n.endswith(g) and len(n) > len(g) + 1 for g in GENERIC_REFERENTS))
 
 
+NEW_NARRATOR = "new_narrator"
+NARRATOR_NAME = "（敘述者）"
+
+
+def new_narrator(conn: sqlite3.Connection, book_id: str, first: sqlite3.Row) -> str:
+    """A placeholder character for an unnamed first-person narrator of this volume (never linked across volumes)."""
+    n = conn.execute("SELECT COUNT(*) FROM characters WHERE book_id=? AND is_narrator=1", (book_id,)).fetchone()[0]
+    name = NARRATOR_NAME if n == 0 else f"（敘述者{n + 1}）"
+    cid = repo.character_id_for(book_id, name)
+    conn.execute("INSERT OR IGNORE INTO characters(id, book_id, canonical_name, display_name_zh, aliases_json, "
+                 "known_from_unit_id, known_from_ordinal, status, origin, created_at, updated_at, is_narrator) "
+                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,1)",
+                 (cid, book_id, name, name, "[]", first["id"], first["ordinal"], "partial", "narrator", utcnow(), utcnow()))
+    return cid
+
+
 def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row,
                          parsed: SceneAnalysisOutput | None, *, run_id: str | None = None) -> dict[str, int]:
     """Validate an analysis against the source and persist it. ``parsed=None`` → program-only analysis."""
@@ -258,6 +274,13 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         stats["rejected"] += 1
         repo.reject(conn, book_id, sid, "scene_analyze", item, reason)
 
+    if parsed is not None and parsed.narration is not None and parsed.narration.person == "first" \
+            and parsed.narration.narrator_ref == NEW_NARRATOR and rows:
+        # a first-person narrator with no name (yet): a card of their own, so their lines, facts, relations and how
+        # others address them have somewhere to go; after reading it is matched to a named character or kept (ADR-045)
+        cid = new_narrator(conn, book_id, rows[0])
+        ref_map[NEW_NARRATOR] = cid
+        names_of[cid] = []
     if parsed is not None:
         existing_alias = repo.alias_map(repo.characters(conn, book_id))
         reveals: list[tuple[str, str, str, Any, list[str]]] = []

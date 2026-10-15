@@ -38,7 +38,7 @@ VERIFY_BATCH = 25  # items per second-look request
 
 # rules that read words, not meaning: what they find is checked with context before it goes to review
 CONFIRM_RULES = ("offensive_term", "narration_first_person", "narrator_self_form", "latin_word", "possible_added_name",
-                 "second_person_gender")
+                 "second_person_gender", "narrator_name_leak")
 
 
 class ContextOrchestrator(Orchestrator):
@@ -78,6 +78,9 @@ class ContextOrchestrator(Orchestrator):
                                   "outside quotes: use the focal character's name, 他／她, or leave the subject out"))
                 if self_forms and (ev := self_form_slip(r["plain_text"], t["text"], self_forms)):
                     found.append(("narrator_self_form", ev))
+                if "敘述者" in t["text"] and not any(w in r["plain_text"] for w in ("語り手", "ナレーター", "叙述")):
+                    found.append(("narrator_name_leak", "「敘述者」 is the card's placeholder for the unnamed narrator; "
+                                  "in the text the narrator is 「我」"))
                 for typ, ev in found:  # the scene's review looks at it with the context and fixes it
                     self._finding(r["id"], typ, "high", ev)
                 if found:

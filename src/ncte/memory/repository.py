@@ -137,9 +137,18 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
                 "UPDATE speaker_hypotheses SET candidate_character_id=? WHERE candidate_character_id=?",
                 "UPDATE OR IGNORE speech_examples SET character_id=? WHERE character_id=?",
                 "UPDATE facts SET subject=? WHERE subject=?",
+                "UPDATE facts SET object_ref=? WHERE object_ref=?",
+                "UPDATE relation_notes SET a_id=? WHERE a_id=?",
+                "UPDATE relation_notes SET b_id=? WHERE b_id=?",
+                "UPDATE OR IGNORE relations SET a_id=? WHERE a_id=?",
+                "UPDATE OR IGNORE relations SET b_id=? WHERE b_id=?",
+                "UPDATE OR IGNORE character_impressions SET character_id=? WHERE character_id=?",
                 "UPDATE entities SET character_id=? WHERE character_id=?"):
         conn.execute(sql, (keep_id, drop_id))
     conn.execute("DELETE FROM speech_examples WHERE character_id=?", (drop_id,))
+    conn.execute("DELETE FROM relations WHERE a_id=? OR b_id=?", (drop_id, drop_id))  # duplicates of kept ones
+    conn.execute("DELETE FROM character_impressions WHERE character_id=?", (drop_id,))
+    conn.execute("UPDATE characters SET is_narrator=1 WHERE id=? AND ?", (keep_id, int(drop["is_narrator"] or 0)))
     conn.execute("UPDATE prop_states SET holder_character_id=? WHERE holder_character_id=?", (keep_id, drop_id))
     _merge_address(conn, keep_id, drop_id)
     g_keep = conn.execute("SELECT 1 FROM character_gender WHERE character_id=?", (keep_id,)).fetchone()

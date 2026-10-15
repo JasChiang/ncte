@@ -138,6 +138,8 @@ def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
     from .repository import gender_view
 
     out: dict[str, Any] = {"name_ja": head, "name_zh": zh, "aliases_ja": [n for n in shown if n != head]}
+    if c["is_narrator"] or head.startswith("（敘述者"):  # the unnamed first-person narrator (ADR-045): 「我」 in the text
+        out["narrator"] = True
     if g := gender_view(conn, c["id"], hz):
         out["gender"] = g[0] if g[1] == "explicit" else f"{g[0]} (inferred)"
     return out

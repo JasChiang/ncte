@@ -91,8 +91,33 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
             (book_id, sc["id"])) if not r[0].lstrip(" 　").startswith(("「", "『"))][:12]
         items.append({"ref": f"n:{sc['id']}", "kind": "narration", "first_answer": narr["person"], "paragraphs": paras})
     items = items[:MAX_ITEMS]
+    items += narrator_items(conn, book_id, names)
     items += address_items(conn, book_id, names)[:MAX_ADDRESS_ITEMS]
     return items
+
+
+def narrator_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]) -> list[dict[str, Any]]:
+    """Each unnamed first-person narrator card, with what reading gathered about them, against the named characters:
+    is the narrator one of them (named later, or never tied while reading)? (ADR-045)"""
+    out = []
+    named = [r for r in conn.execute(
+        "SELECT c.id, COUNT(u.id) n FROM characters c LEFT JOIN utterances u ON u.speaker_id_nullable=c.id WHERE "
+        "c.book_id=? AND c.is_narrator=0 GROUP BY c.id ORDER BY n DESC LIMIT 15", (book_id,))]
+    for c in conn.execute("SELECT * FROM characters WHERE book_id=? AND is_narrator=1 AND canonical_name LIKE '（敘述者%'",
+                          (book_id,)):
+        facts = [f"{f['predicate']} {f['object']}" for f in conn.execute(
+            "SELECT predicate, object FROM facts WHERE book_id=? AND (subject=? OR object_ref=?) AND retracted_by IS NULL "
+            "ORDER BY first_revealed_ordinal LIMIT 10", (book_id, c["id"], c["id"]))]
+        called = [f"{names.get(a['speaker_id'], '?')}：{a['form_ja']}" for a in conn.execute(
+            "SELECT speaker_id, form_ja FROM address_terms WHERE book_id=? AND addressee_id=? AND speaker_id!=? "
+            "ORDER BY uses DESC LIMIT 8", (book_id, c["id"], c["id"]))]
+        lines = [match_text(u["quote_text"])[:100] for u in conn.execute(
+            "SELECT quote_text FROM utterances WHERE book_id=? AND speaker_id_nullable=? LIMIT 6", (book_id, c["id"]))]
+        if not (facts or called or lines):
+            continue
+        out.append({"ref": f"r:{c['id']}", "kind": "narrator", "facts": facts, "called": called, "lines": lines,
+                    "candidates": {r["id"]: names[r["id"]] for r in named if r["id"] in names}})
+    return out
 
 
 def address_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]) -> list[dict[str, Any]]:
@@ -186,6 +211,12 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
                 continue
             set_usage(conn, book_id, row, answer, a.reason)
             stats[f"address_{answer}"] = stats.get(f"address_{answer}", 0) + 1
+        elif kind == "r":
+            if answer in item["candidates"]:  # the narrator is this named character: one card from here on
+                _narrator_is(conn, book_id, key, answer)
+                stats["narrators_matched"] = stats.get("narrators_matched", 0) + 1
+            else:
+                stats["narrators_kept"] = stats.get("narrators_kept", 0) + 1
         elif kind == "m":
             if answer != "same":
                 unit = conn.execute("SELECT id FROM units WHERE book_id=? AND ordinal=?",
@@ -202,3 +233,19 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
         reharvest_scene(conn, book_id, sid)
     repo.refresh_profiles(conn, book_id)
     return stats
+
+
+def _narrator_is(conn: sqlite3.Connection, book_id: str, placeholder: str, named: str) -> None:
+    """Fold the narrator card into the named character; the name stays hidden before it first appeared (ADR-032)."""
+    from ..memory.entities import record_link
+
+    c = conn.execute("SELECT * FROM characters WHERE id=?", (named,)).fetchone()
+    if c is None:
+        return
+    unit = conn.execute("SELECT id FROM units WHERE book_id=? AND ordinal=?", (book_id, c["known_from_ordinal"])).fetchone()
+    own = [c["canonical_name"], *json.loads(c["aliases_json"] or "[]")]
+    repo.merge_characters(conn, named, placeholder)
+    for form in own:
+        record_link(conn, book_id, form, c["canonical_name"], "alias" if form != c["canonical_name"] else "official",
+                    origin="narrator_match", status="accepted", unit_id=unit[0] if unit else None, quote=None,
+                    ordinal=c["known_from_ordinal"])

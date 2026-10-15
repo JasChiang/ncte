@@ -54,6 +54,10 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
         (book_id, scene["id"], upto)))
     state = json.loads(scene["state_json"] or "{}")
     participants = {p["character_id"] for p in state.get("participants", [])}
+    # the scene's narrator (named or not, rarely named in their own narration) and whoever speaks in it are present
+    participants |= {x for x in ((state.get("narration") or {}).get("narrator"),) if x}
+    participants |= {r[0] for r in conn.execute("SELECT DISTINCT speaker_id_nullable FROM utterances WHERE book_id=? AND "
+                                                "scene_id=? AND speaker_id_nullable IS NOT NULL", (book_id, scene["id"]))}
     forms_at = vis.form_positions(conn, book_id)
     views = {c["id"]: v for c in vis.visible_characters(conn, book_id, upto)
              if (v := vis.character_view(conn, book_id, c, upto, forms_at)) is not None}
@@ -78,6 +82,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
                 "aliases_ja": v["aliases_ja"], "speech_profile": prof, "verified_examples": examples}
         if v.get("gender"):
             card["gender"] = v["gender"]
+        if v.get("narrator"):
+            card["narrator"] = True
         present.append(card)
     # relations among the people of this scene, as the story has shown them so far (ADR-039): how they talk to each other
     ids = {c["character_id"] for c in present}

@@ -139,7 +139,7 @@ const FINDING = {read_blocked: "內容過濾擋下，這段沒有讀到（說話
   latin_word: "原文沒有的英文單字", possible_added_name: "可能補了原文沒有的人名", glossary_mismatch: "譯名和名詞表不一致",
   quote_mismatch: "引號和原文不對應", untranslated: "沒有翻譯", japanese_residue: "殘留日文", non_taiwan_glyph: "簡體或日文字形",
   placeholder_error: "排版標記不對", number_mismatch: "數字和原文不同", too_short: "譯文比原文短很多", too_long: "譯文比原文長很多",
-  empty_translation: "譯文是空的", cantonese: "粵語用字", ruby_notation_leak: "讀音標記留在譯文裡", name_form_substitution: "稱呼被換成另一種"};
+  empty_translation: "譯文是空的", narrator_name_leak: "譯文寫出了敘述者的記號", cantonese: "粵語用字", ruby_notation_leak: "讀音標記留在譯文裡", name_form_substitution: "稱呼被換成另一種"};
 function findingLabel(t) { return FINDING[t] || (t.startsWith("review:reader_") ? "讀者檢查：" + t.slice(14) : t.startsWith("review:") ? "審稿：" + t.slice(7) : t); }
 let poll = null;
 async function overviewView(id) {
