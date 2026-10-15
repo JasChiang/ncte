@@ -133,6 +133,14 @@ async function settingsView() {
 // ------------------------------------------------------------ overview
 const RUNSTATUS = {completed: "完成", completed_with_failures: "完成（有段落失敗，可再試一次）", running: "進行中",
   interrupted: "已暫停", running_elsewhere: "另一個程序正在翻譯", budget_exhausted: "達到預算上限", awaiting_names: "等你決定譯法", stopped_fatal: "停止（連線或帳戶問題）", created: "準備中"};
+const FINDING = {read_blocked: "內容過濾擋下，這段沒有讀到（說話者與記憶只靠程式）", reader_blocked: "內容過濾擋下，讀者檢查沒看到這段",
+  review_blocked: "內容過濾擋下，審稿沒看到這段", content_blocked: "內容過濾擋下，保留日文原文", second_person_gender: "對女性用了「你」",
+  narration_first_person: "第三人稱的敘述出現「我」", narrator_self_form: "敘述者自稱和全書不一致", offensive_term: "可能是貶稱",
+  latin_word: "原文沒有的英文單字", possible_added_name: "可能補了原文沒有的人名", glossary_mismatch: "譯名和名詞表不一致",
+  quote_mismatch: "引號和原文不對應", untranslated: "沒有翻譯", japanese_residue: "殘留日文", non_taiwan_glyph: "簡體或日文字形",
+  placeholder_error: "排版標記不對", number_mismatch: "數字和原文不同", too_short: "譯文比原文短很多", too_long: "譯文比原文長很多",
+  empty_translation: "譯文是空的", cantonese: "粵語用字", ruby_notation_leak: "讀音標記留在譯文裡", name_form_substitution: "稱呼被換成另一種"};
+function findingLabel(t) { return FINDING[t] || (t.startsWith("review:reader_") ? "讀者檢查：" + t.slice(14) : t.startsWith("review:") ? "審稿：" + t.slice(7) : t); }
 let poll = null;
 async function overviewView(id) {
   const o = await loadBook(id, "overview");
@@ -251,7 +259,7 @@ function rowHtml(u) {
       ${u.status === "human" ? chip("c-acc", "人工修改") + ` <button class="btn small" data-act="revert">改回機器譯文</button>` : ""}
       ${u.note ? `<div class="note">（註：${esc(u.note)}） <button class="btn small" data-act="drop-note">刪除譯註</button></div>` : ""}
       ${u.wordplay.map(w => `<div class="note">梗「${esc(w.term)}」：${esc(w.explanation)}</div>`).join("")}
-      ${u.findings.map(f => `<div class="issue">⚑ ${esc(f.type)}：${esc(f.evidence)}</div>`).join("")}</div>
+      ${u.findings.map(f => `<div class="issue" title="${esc(f.type)}">⚑ ${esc(findingLabel(f.type))}：${esc(f.evidence)}</div>`).join("")}</div>
     <div>${u.quotes.map(q => { const [c, l] = STATUS[q.status] || ["c-unk", q.status];
       return `<div>${esc(q.speaker || "？")} ${chip(c, l)}${q.disputed ? chip("c-warn", "有爭議") : ""}${q.second ? `<div class="muted small" title="讀完後再確認一次的結果">再確認：${esc(q.second)}</div>` : ""}</div>`; }).join("") || `<span class="muted small">敘述</span>`}</div></div>`;
 }
