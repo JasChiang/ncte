@@ -22,7 +22,7 @@ MIN_REPLACE = 2  # a one-character rendering (「社」) also occurs inside othe
 
 
 def affected_units(conn: sqlite3.Connection, book_id: str, *, form: str, old_zh: str, address_id: int | None = None,
-                   ) -> list[dict[str, Any]]:
+                   added: bool = False) -> list[dict[str, Any]]:
     """Units of the series whose source has ``form`` and whose current translation contains ``old_zh``. With an
     ``address_id``, only the quotes in which that speaker used the form for that person."""
     from ..analysis.naming import term_pattern
@@ -39,6 +39,15 @@ def affected_units(conn: sqlite3.Connection, book_id: str, *, form: str, old_zh:
         rows = [r for r in conn.execute(f"SELECT u.* FROM units u WHERE {where} AND u.translatable=1 AND "
                                         "instr(u.plain_text, ?) > 0 ORDER BY u.book_id, u.ordinal", (*ids, form[:1]))
                 if pat.search(match_text(r["plain_text"]))]
+    if added and len(old_zh) >= MIN_REPLACE:
+        # the translator also wrote the name where the source leaves it implied (「…と高らかに笑って」 → 「加利恩如此
+        # 放聲大笑」): a person's name rendering is distinctive enough to find in any paragraph
+        seen = {r["id"] for r in rows}
+        where, ids = scope_clause(conn, book_id, "u.book_id")
+        rows = sorted([*rows, *(r for r in conn.execute(
+            f"SELECT u.* FROM units u JOIN translations t ON t.unit_id=u.id WHERE {where} AND u.translatable=1 AND "
+            "instr(t.text, ?) > 0 GROUP BY u.id", (*ids, old_zh)) if r["id"] not in seen)],
+            key=lambda r: (r["book_id"], r["ordinal"]))
     out = []
     for r in rows:
         tr = latest_translation(conn, r["id"], r["source_hash"])
@@ -82,6 +91,11 @@ def for_proposal(conn: sqlite3.Connection, book_id: str, pid: int, old_zh: str) 
     if row is None or row["kind"] == "character":
         return []
     if row["kind"] == "name":
-        return affected_units(conn, book_id, form=row["ref"], old_zh=old_zh)
+        from ..series import SERIES_SCOPE
+
+        g = conn.execute(f"SELECT category FROM glossary WHERE {SERIES_SCOPE} AND source_term=?",
+                         (book_id, row["ref"])).fetchone()
+        return affected_units(conn, book_id, form=row["ref"], old_zh=old_zh,
+                              added=g is not None and g["category"] == "character")
     a = conn.execute("SELECT form_ja FROM address_terms WHERE id=?", (int(row["ref"]),)).fetchone()
     return affected_units(conn, book_id, form=a[0], old_zh=old_zh, address_id=int(row["ref"])) if a else []

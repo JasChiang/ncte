@@ -2,7 +2,7 @@
 
 One run at a time, in a background thread with its own database connections (the server keeps answering while it
 works). The person chooses nothing technical: the configured model and reasoning effort are used, and the budget is
-set automatically from the dry-run estimate (×1.5) as a guard against runaway cost — when it is reached the page asks
+set automatically from the dry-run estimate (×2) as a guard against runaway cost — when it is reached the page asks
 whether to continue, showing what was spent and what is still left.
 """
 
@@ -16,7 +16,7 @@ from typing import Any
 from ..config import Config
 from ..errors import NCTEError
 
-BUDGET_FACTOR = 1.5
+BUDGET_FACTOR = 2.0  # a guard against runaway cost, not a forecast: normal variation never reaches it
 MIN_BUDGET_USD = 0.5
 # what the person sees, in pipeline order (context mode reads the whole book before translating)
 STAGES = [("read", "讀", ("scene_analyze", "memory_update")), ("verify", "覆核", ("verify",)),

@@ -129,7 +129,7 @@ async function overviewView(id) {
   view.innerHTML = `<div class="card" id="runcard"><p class="muted">讀取翻譯狀態…</p></div><div class="row">
     ${stat("已翻譯", `${o.translated} / ${o.translatable}`)}${stat("已花費", "US$" + o.spent_usd.toFixed(2))}
     ${stat("有疑點的段落", o.flagged_units, `<a class="small" href="#/b/${id}/review?f=flagged">去看</a>`)}
-    ${stat("待決定的譯法", o.pending_names, `<a class="small" href="#/b/${id}/names">去決定</a>`)}
+    ${stat("可再確認的譯法", o.pending_names, `<a class="small" href="#/b/${id}/names">去看看</a>`)}
     ${stat("說話者未定", o.unknown_speakers)}${stat("譯註", o.notes)}${stat("人工修改", o.human_edits)}</div>
     <details class="card"><summary><strong>執行紀錄</strong></summary><div class="scroll"><table><tr><th>run</th><th>模式</th><th>模型</th><th>狀態</th><th>待處理</th><th>費用</th></tr>
     ${o.runs.map(r => `<tr><td class="mono small">${esc(r.id)}</td><td>${esc(r.mode)}</td><td>${esc(r.model)}</td>
@@ -159,7 +159,7 @@ async function runCard(id, o) {
     const st = RUNSTATUS[r.status] || r.status;
     let action = "";
     if (r.status === "awaiting_names") action = `<p class="small">有些名字和稱呼的譯法要你決定：<a href="#/b/${id}/names">去定名</a>，決定完回來按繼續。</p><button class="btn primary" data-go>繼續翻譯</button>`;
-    else if (r.status === "budget_exhausted") { const more = Math.round((r.spent_usd + (r.left_usd || 0) * 1.5) * 100) / 100;
+    else if (r.status === "budget_exhausted") { const more = Math.round((r.spent_usd + (r.left_usd || 0) * 2) * 100) / 100;
       action = `<p class="small">已花 ${money(r.spent_usd)}，達到這次的上限 ${money(r.budget_usd)}。${r.left_usd ? `估計剩下的部分還要約 ${money(r.left_usd)}。` : ""}已完成的部分都保留著，繼續會從停下的地方接著做。</p>
         <button class="btn primary" data-go data-budget="${Math.max(more, r.budget_usd + 1)}">把上限提高到 ${money(Math.max(more, r.budget_usd + 1))} 並繼續</button>`; }
     else if (r.status !== "completed") action = `<button class="btn primary" data-go>繼續翻譯</button>`;

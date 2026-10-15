@@ -379,6 +379,36 @@ def pending(conn: sqlite3.Connection, book_id: str, *, include_done: bool = Fals
             for r in conn.execute(q + " ORDER BY status='pending' DESC, importance DESC, id", ids)]
 
 
+def auto_settle(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
+    """No pause (``context.naming = auto``): the model's proposal stays in use, after the program's checks.
+
+    A one-character personal name gives way to the first two-character alternative (a lone 「海」 reads as a word);
+    a character fix the model was sure about (another person / the same person) is applied, an unsure one is left
+    as it is. Name and address choices stay listed as open, so a person can still decide later (and carry the
+    change into existing translations, ADR-029)."""
+    stats = {"kept": 0, "alternative": 0, "fixed": 0, "left": 0}
+    for row in conn.execute("SELECT * FROM naming_proposals WHERE book_id=? AND status='pending'", (book_id,)).fetchall():
+        opts = json.loads(row["options_json"])
+        if row["kind"] == "character":
+            if len(opts) == 2 and opts[0].get("action") in ("rename", "merge"):  # the model's verdict was clear
+                _fix_character(conn, book_id, row["ref"], opts[0])
+                stats["fixed"] += 1
+            else:
+                stats["left"] += 1
+            conn.execute("UPDATE naming_proposals SET status='applied' WHERE id=?", (row["id"],))
+            continue
+        zh = row["chosen_zh"]
+        if row["kind"] == "name" and len(zh) == 1:
+            alt = next((o["zh"] for o in opts[1:] if len(o["zh"]) >= 2), None)
+            if alt:
+                _set_name(conn, book_id, row["ref"], alt)
+                conn.execute("UPDATE naming_proposals SET chosen_zh=? WHERE id=?", (alt, row["id"]))
+                stats["alternative"] += 1
+                continue
+        stats["kept"] += 1  # in use already; stays listed as open for a later look
+    return stats
+
+
 def decide(conn: sqlite3.Connection, book_id: str, pid: int, zh: str) -> dict[str, Any]:
     """A human choice: becomes the verified rendering (glossary) or the human address rendering."""
     row = conn.execute("SELECT * FROM naming_proposals WHERE id=?", (pid,)).fetchone()

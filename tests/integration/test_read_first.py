@@ -63,6 +63,7 @@ def low_thresholds(monkeypatch):
 
 
 def test_naming_pauses_for_choices_then_translates(conn, cfg, fixtures, low_thresholds):
+    cfg.context.naming = "review"  # the pause for a person's choice (not the default)
     fake = FakeLLM(responders={**RESPONDERS, "naming": naming_responder})
     book, rid, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
     assert s.status == "awaiting_names"
@@ -103,6 +104,8 @@ def test_naming_off_and_legacy_flow_skip_it(conn, cfg, fixtures):
 
 
 def test_single_character_name_needs_a_decision(conn, cfg, fixtures, low_thresholds):
+    cfg.context.naming = "review"  # the pause for a person's choice (not the default)
+
     def one_char(payload, req):
         return {"names": [{"ref": "カイト", "zh": "凱", "reason": "簡短", "alternatives": []}], "address": []}
 
@@ -110,6 +113,17 @@ def test_single_character_name_needs_a_decision(conn, cfg, fixtures, low_thresho
     book, _, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
     assert s.status == "awaiting_names"
     assert [p["chosen_zh"] for p in naming.pending(conn, book.id)] == ["凱"]
+
+
+def test_no_pause_takes_a_two_character_alternative_for_a_lone_character(conn, cfg, fixtures, low_thresholds):
+    def one_char(payload, req):
+        return {"names": [{"ref": "カイト", "zh": "凱", "reason": "簡短",
+                           "alternatives": [{"zh": "海斗", "reason": "音譯"}]}], "address": []}
+
+    fake = FakeLLM(responders={**RESPONDERS, "naming": one_char})
+    book, _, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")  # default: no pause
+    assert s.status == "completed"
+    assert conn.execute("SELECT target_term FROM glossary WHERE source_term='カイト'").fetchone()[0] == "海斗"
 
 
 def test_human_renderings_are_not_proposed_or_overwritten(conn, cfg, fixtures, low_thresholds):
@@ -150,6 +164,8 @@ def test_cli_proposals_and_decide(tmp_path, fixtures):
 
 
 def test_address_renderings_proposed_per_speaker(conn, cfg, fixtures, low_thresholds):
+    cfg.context.naming = "review"  # the pause for a person's choice (not the default)
+
     def addr(payload, req):
         return {"names": [], "address": [
             {"ref": a["ref"], "zh": "阿海", "reason": "同伴間親暱", "alternatives": [{"zh": "海斗", "reason": "直呼"}]}
@@ -227,6 +243,7 @@ def test_book_matter_scenes_are_translated_not_analysed(conn, cfg, fixtures, mon
 
 
 def test_proposals_keep_examples_out_of_the_request(conn, cfg, fixtures, low_thresholds):
+    cfg.context.naming = "review"  # the pause for a person's choice (not the default)
     fake = FakeLLM(responders={**RESPONDERS, "naming": naming_responder})
     book, _, _ = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
     sent = next(json.loads(c.messages[1]["content"]) for c in fake.calls if c.stage == "naming")
@@ -368,9 +385,17 @@ def test_rename_reaches_existing_translations(conn, cfg, fixtures):
     assert replace_rendering(conn, units, "海斗", "凱特") >= 1
     t = conn.execute("SELECT text FROM translations WHERE unit_id=? ORDER BY id DESC LIMIT 1", (u,)).fetchone()[0]
     assert t == "凱特來了"
+    # the translator wrote the name where the source only implies him: found too, for a person's name
+    v = conn.execute("SELECT id FROM units WHERE book_id=? AND kind='text' AND plain_text NOT LIKE '%カイト%' LIMIT 1",
+                     (book.id,)).fetchone()[0]
+    conn.execute("UPDATE translations SET text='凱特笑了' WHERE unit_id=?", (v,))
+    assert v not in {x["unit_id"] for x in affected_units(conn, book.id, form="カイト", old_zh="凱特")}
+    assert v in {x["unit_id"] for x in affected_units(conn, book.id, form="カイト", old_zh="凱特", added=True)}
 
 
 def test_address_decision_leaves_the_bare_name_alone(conn, cfg, fixtures, low_thresholds):
+    cfg.context.naming = "review"  # the pause for a person's choice (not the default)
+
     def addr(payload, req):
         return {"names": [], "address": [{"ref": a["ref"], "zh": "阿海", "reason": "", "alternatives": [{"zh": "海斗", "reason": ""}]}
                                           for a in payload["address"] if a["ja"] == "カイト"]}

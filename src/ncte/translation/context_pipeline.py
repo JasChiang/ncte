@@ -21,7 +21,7 @@ import sqlite3
 from typing import Any
 
 from ..analysis.memory_update import apply_memory_update, build_memory_payload
-from ..analysis.naming import apply_naming, build_naming_payload, model_view, pending
+from ..analysis.naming import apply_naming, auto_settle, build_naming_payload, model_view, pending
 from ..analysis.scene import apply_scene_analysis, build_analysis_payload, get_scene
 from ..errors import FatalAPIError, LLMError, ModelOutputError
 from ..llm.prompt_loader import load_prompt
@@ -174,6 +174,12 @@ class ContextOrchestrator(Orchestrator):
         job = self._job("naming", self.book.id)
         if job is not None and job["status"] in ("pending", "running"):
             self.stage_naming()
+        if self.cfg.context.naming == "auto" and not self.opts.unit_ids:
+            with self.lock, Transaction(self.conn):
+                settled = auto_settle(self.conn, self.book.id)
+            self.reload_glossary()
+            if any(settled.values()):
+                self.log(f"naming (no pause): {settled}")
         if self.cfg.context.naming == "review" and not self.opts.unit_ids:
             with self.lock:
                 left = pending(self.conn, self.book.id)
@@ -254,6 +260,7 @@ class ContextOrchestrator(Orchestrator):
             if not pending:
                 continue
             self.log(f"translate {sid} ({i + 1}/{len(scenes)})")
+            self.reload_glossary()  # a rendering changed while the run goes on is used from the next scene
             self.run_batches(make_batches(pending, self.cfg.translation.unit_target_japanese_chars, by_scene=True,
                                           position=positions), concurrency=1)
             self.after_scene(sid)

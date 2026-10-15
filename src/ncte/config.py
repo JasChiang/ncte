@@ -83,7 +83,9 @@ class ContextConfig(_Strict):
     memory_update: bool = True  # LLM memory extraction after each scene
     include_memory: bool = True  # inject characters / summaries / facts into translation requests
     read_first: bool = True  # ADR-023: analyse + remember every scene first, then name, then translate
-    naming: Literal["review", "auto", "off"] = "review"  # ADR-023: propose renderings; review = pause for choices
+    # ADR-023/035: propose renderings; auto (default) = keep the model's choice after program checks and go on
+    # (change them later in the web UI); review = pause for a person's choices
+    naming: Literal["review", "auto", "off"] = "auto"
     skip_book_matter: bool = True  # ADR-024: no story analysis for covers, TOC, afterword, colophon (still translated)
 
 
