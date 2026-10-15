@@ -18,3 +18,16 @@ def test_a_group_is_never_merged_into_a_revealed_name():
     assert _revealed(None, "b", [henchmen], "c_1", ["取り巻き"], 50) is None  # even when the model says so
     assert _revealed(None, "b", [henchmen], None, ["取り巻き"], 50) is None
     assert _revealed(None, "b", [hooded], None, ["フードの少女"], 50) == "c_2"
+
+
+def test_a_size_cut_waits_for_a_quiet_point():
+    from ncte.analysis.scene import segment_units
+
+    def row(i, text):
+        return {"id": f"u{i}", "ordinal": i, "resource_href": "a.xhtml", "is_separator": 0, "kind": "text",
+                "blank_before": 0, "spine_index": 1, "plain_text": text}
+
+    rows = [row(i, "　地の文。") for i in range(8)] + [row(8 + i, "「台詞」") for i in range(4)] + \
+        [row(12, "　地の文。"), row(13, "　地の文。"), row(14, "　地の文。")]
+    scenes = segment_units(rows, {}, 9)  # the limit falls inside the exchange of lines (8–11)
+    assert [len(s.unit_ids) for s in scenes] == [13, 2]  # cut after it, between two narration paragraphs

@@ -1,6 +1,7 @@
 """Deterministic dialogue analysis (spec §5.3).
 
-* quote detection (「…」 with nested 『』, multi-paragraph quotes that close in a later unit)
+* quote detection (「…」 with nested 『』, multi-paragraph quotes that close in a later unit; a paragraph that is one
+  『…』 on its own — a voice that is not quite speech: a monster, a thought heard, a crowd — counts as a quote too)
 * explicit dialogue-tag detection («「…」とミナは言った», «ミナが口を開いた。「…」»)
 * adjacent action narration («「…」\\n　カイトは頭をかいた。») → *action* evidence (inferred only)
 * speech profiles computed only from explicit / human-verified examples
@@ -14,6 +15,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 OPEN, CLOSE = "「", "」"
+# what may follow a whole-paragraph 『…』 for it to still be a line someone says: nothing, or a speech tag
+# (『帰ったか』と、アインの脳裏に声が届いた / 『この苦しみを…』──と). 『私』の世界は… is emphasis inside narration.
+_VOICE_TAIL = re.compile(r"^[\s　]*(?:$|[──―─]*[\s　]*と)")
 RUBY = re.compile(r"《[^》]*》")
 
 SPEECH_VERBS = (
@@ -108,7 +112,27 @@ def find_quotes(units: list[UnitText]) -> list[Quote]:
         if depth > 0 and start is not None:
             out.append(Quote(u.id, idx, start, len(t), t[start:], True, False, link))
             carry = (u.id, idx)
+        if idx == 0 and carry is None:
+            voice = _voice(t)
+            if voice is not None:
+                out.append(Quote(u.id, 0, voice[0], voice[1], t[voice[0]:voice[1]], True, True, None))
     return out
+
+
+def _voice(t: str) -> tuple[int, int] | None:
+    """A paragraph that is a single top-level 『…』 (optionally followed by a speech tag): (start, end) of it."""
+    start = len(t) - len(t.lstrip(" 　"))
+    if not t.startswith("『", start):
+        return None
+    depth = 0
+    for i in range(start, len(t)):
+        if t[i] == "『":
+            depth += 1
+        elif t[i] == "』":
+            depth -= 1
+            if depth == 0:
+                return (start, i + 1) if _VOICE_TAIL.match(t[i + 1:]) else None
+    return None
 
 
 def _alias_pattern(aliases: dict[str, str]) -> re.Pattern[str] | None:

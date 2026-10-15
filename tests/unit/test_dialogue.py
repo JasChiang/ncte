@@ -144,3 +144,15 @@ def test_speech_profile_and_style_hints():
     assert speech_profile(["「俺は知らねえよ」"])["formality"] == "casual"
     hints = style_hints("「私が行く」", {"c_mina": prof, "c_kaito": {"first_person": ["俺"]}})
     assert [h.character_id for h in hints] == ["c_mina"]
+
+
+def test_a_paragraph_that_is_one_double_bracket_is_a_voice():
+    from ncte.analysis.dialogue import UnitText, find_quotes
+
+    us = [UnitText("u1", "『お前は何故、俺を恐れない？』", 1), UnitText("u2", "『帰ったか』と、アインの脳裏に声が届いた。", 2),
+          UnitText("u3", "『私』の世界は、ゆっくりと黒に塗りつぶされた。", 3), UnitText("u4", "「『光在れ』って言ったの」", 4),
+          UnitText("u5", "『この苦しみを早く終わらせて』──と。", 5)]
+    got = {q.unit_id: q.text for q in find_quotes(us)}
+    assert got["u1"] == "『お前は何故、俺を恐れない？』" and got["u2"] == "『帰ったか』" and got["u5"].startswith("『この")
+    assert "u3" not in got  # emphasis inside narration
+    assert got["u4"].startswith("「") and len([q for q in find_quotes(us) if q.unit_id == "u4"]) == 1

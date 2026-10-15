@@ -38,6 +38,7 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
     per_spine: dict[int | None, int] = {}
     cur: Scene | None = None
     prev_href: str | None = None
+    prev_row: sqlite3.Row | None = None
     for r in rows:
         reason = None
         if cur is None or r["resource_href"] != prev_href:
@@ -52,7 +53,7 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
             reason = "heading"
         elif r["blank_before"] >= 2:
             reason = "blank_lines"
-        elif len(cur.unit_ids) >= max_units:
+        elif len(cur.unit_ids) >= max_units and (_calm(r, prev_row) or len(cur.unit_ids) >= max_units + MAX_SIZE_SLACK):
             reason = "max_size"
         if reason:
             n = per_spine.get(r["spine_index"], 0) + 1
@@ -65,7 +66,19 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
         cur.has_body = cur.has_body or r["kind"] != "heading"
         cur.end_ordinal = r["ordinal"]
         prev_href = r["resource_href"]
+        prev_row = r
     return scenes
+
+
+MAX_SIZE_SLACK = 30  # how far past the size limit a cut may wait for a quiet point
+
+
+def _calm(r: sqlite3.Row, prev: sqlite3.Row | None) -> bool:
+    """A cut forced by size waits until it falls between two narration paragraphs (not inside an exchange of lines)."""
+    def talk(x: sqlite3.Row | None) -> bool:
+        t = (x["plain_text"] if x is not None else "").lstrip(" 　")
+        return t.startswith(("「", "『")) or "」" in t[-3:]
+    return not talk(r) and not talk(prev)
 
 
 def segment_book(conn: sqlite3.Connection, cfg: Config, book_id: str) -> list[Scene]:
