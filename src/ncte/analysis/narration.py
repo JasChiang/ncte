@@ -46,8 +46,12 @@ _ZH_I = re.compile(r"(?<![敵自忘唯])我")
 
 
 def first_person_slip(plain: str, text: str) -> bool:
-    """A narration paragraph of a third-person book whose translation says 「我」 outside quotes."""
-    if not is_narration(plain):
+    """A narration paragraph of a third-person book whose translation says 「我」 outside quotes.
+
+    Not when the source paragraph itself says 「僕」「私」 outside quotes: a character's thoughts told in their own
+    words (「そうだ僕は知っていたのだ」, 銀河鉄道の夜) are rightly 「我」.
+    """
+    if not is_narration(plain) or FIRST_PERSON.search(narration_only(plain)):
         return False
     from ..epub.units import PH_RE
 

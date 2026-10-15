@@ -47,5 +47,7 @@ def test_narration_person_slip():
 
     assert first_person_slip("　村長の後を追って邸宅内に入る。", "和平常一樣互相鬥嘴幾句後，我跟在村長身後走進了宅邸內。")
     assert not first_person_slip("　その場に敵味方はない。", "在那種情況下無關敵我。")
+    # a character's own thoughts in the narration (free indirect thought) keep 我
+    assert not first_person_slip("　けれども涙がいっぱいになりました。そうだ僕は知っていたのだ。", "他眼眶蓄滿淚水。沒錯，我明明是知道的。")
     assert not first_person_slip("「俺がレイドだ」", "「我就是雷德」")
     assert not first_person_slip("　彼は言った。", "他說：「我會去的。」")
