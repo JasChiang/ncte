@@ -88,6 +88,10 @@ def default_reader(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     return {"issues": []}
 
 
+def default_relations(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+    return {"relations": []}
+
+
 DEFAULTS: dict[str, Responder] = {
     "translate": default_translate,
     "scene_analyze": default_scene_analyze,
@@ -97,6 +101,7 @@ DEFAULTS: dict[str, Responder] = {
     "verify": default_verify,
     "scenes": default_scenes,
     "reader": default_reader,
+    "relations": default_relations,
 }
 
 

@@ -79,3 +79,4 @@ details summary{cursor:pointer}
 .form-tag .n{color:var(--muted);font-size:11px;font-family:var(--mono)}
 @media (max-width:600px){.addr-row{grid-template-columns:1fr;gap:4px}}
 .addr-h{display:flex;gap:10px;align-items:baseline;margin-bottom:4px;padding-bottom:4px;border-bottom:2px solid var(--line)}
+svg text.rel-label{fill:var(--accent);paint-order:stroke;stroke:var(--panel);stroke-width:3px}

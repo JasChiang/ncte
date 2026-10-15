@@ -248,6 +248,21 @@ class ReaderOutput(_M):
     issues: list[ReaderIssue]
 
 
+# ------------------------------------------------------------ relations (ADR-039)
+class RelationOut(_M):
+    a: str  # character ref
+    b: str
+    relation: str  # 父女、未婚夫妻、師生、前世宿敵…
+    a_is: str  # what a is to b: 父親
+    b_is: str  # what b is to a: 女兒
+    facts: list[str]  # fact refs that show it
+    reason: str
+
+
+class RelationsOutput(_M):
+    relations: list[RelationOut]
+
+
 SCHEMAS: dict[str, type[BaseModel]] = {
     "translate": TranslationBatchOutput,
     "scene_analyze": SceneAnalysisOutput,
@@ -257,6 +272,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "verify": VerifyOutput,
     "scenes": SceneBreaksOutput,
     "reader": ReaderOutput,
+    "relations": RelationsOutput,
 }
 
 

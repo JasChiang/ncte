@@ -129,6 +129,10 @@ class ContextOrchestrator(Orchestrator):
             self.conn.execute(
                 "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
                 (self.book.id, self.run_id, "verify", self.book.id, len(scene_ids), "pending", utcnow()))
+        if self.cfg.context.read_first and not self.opts.unit_ids:
+            self.conn.execute(
+                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (self.book.id, self.run_id, "relations", self.book.id, len(scene_ids), "pending", utcnow()))
         if self.cfg.context.reader_pass and not self.opts.unit_ids:
             self.conn.execute(
                 "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
@@ -162,6 +166,8 @@ class ContextOrchestrator(Orchestrator):
             self.read_pass(scenes)
             if not self._stop_reason:
                 self.verify_pass()
+            if not self._stop_reason:
+                self.relations_pass()
             if self._stop_reason or not self.naming_pass():
                 return
             self.translate_pass(scenes)
@@ -229,6 +235,34 @@ class ContextOrchestrator(Orchestrator):
                     stats[k] = stats.get(k, 0) + v
         self._set_job("verify", self.book.id, "succeeded", None, stats)
         self.log(f"second look: {stats}")
+
+    def relations_pass(self, *, record_job: bool = True) -> int:
+        """Pass 1c (ADR-039): relations between characters, from the facts gathered while reading."""
+        from ..analysis import relations
+        from ..llm.schemas import RelationsOutput
+
+        job = self._job("relations", self.book.id)
+        if record_job and (job is None or job["status"] not in ("pending", "running")):
+            return 0
+        with self.lock:
+            req, lookup = relations.payload(self.conn, self.book.id)
+        n = 0
+        if req["facts"]:
+            try:
+                parsed = self._llm("relations", load_prompt("relations"), req, [])
+            except FatalAPIError:
+                raise
+            except LLMError as exc:  # the graph falls back to scenes shared
+                self._finding(None, "relations_failed", "low", str(exc)[:300])
+                parsed = None
+            if parsed is not None:
+                assert isinstance(parsed, RelationsOutput)
+                with self.lock:
+                    n = relations.apply(self.conn, self.book.id, parsed, lookup)
+        if record_job:
+            self._set_job("relations", self.book.id, "succeeded", None, {"relations": n})
+        self.log(f"relations: {n}")
+        return n
 
     def reader_pass(self, *, record_job: bool = True) -> dict[str, int]:
         """Pass 4 (ADR-038): read the Chinese like a reader; what a reader cannot follow goes back to the translator."""

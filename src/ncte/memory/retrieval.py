@@ -79,6 +79,15 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
         if v.get("gender"):
             card["gender"] = v["gender"]
         present.append(card)
+    # relations among the people of this scene, as the story has shown them so far (ADR-039): how they talk to each other
+    ids = {c["character_id"] for c in present}
+    for r in conn.execute("SELECT * FROM relations WHERE book_id=? AND since_ordinal<=?", (book_id, horizon)):
+        if r["a_id"] in ids and r["b_id"] in ids:
+            for card in present:
+                if card["character_id"] == r["a_id"]:
+                    card.setdefault("relations", []).append({"with": names.get(r["b_id"]), "is": r["a_is"] or r["relation_zh"]})
+                elif card["character_id"] == r["b_id"]:
+                    card.setdefault("relations", []).append({"with": names.get(r["a_id"]), "is": r["b_is"] or r["relation_zh"]})
     batch_ids = {r["id"] for r in batch_rows}
     utts = []
     for u in conn.execute("SELECT * FROM utterances WHERE book_id=? AND scene_id=? ORDER BY unit_id, quote_index",

@@ -500,6 +500,21 @@ CREATE TABLE address_usage (
     PRIMARY KEY (speaker_id, addressee_id, form_ja)
 );
 """),
+    (16, "relations between characters, summarized from evidence-backed facts, visible from their evidence (ADR-039)", """
+CREATE TABLE relations (
+    book_id TEXT NOT NULL,
+    a_id TEXT NOT NULL,
+    b_id TEXT NOT NULL,
+    relation_zh TEXT NOT NULL,
+    a_is TEXT,
+    b_is TEXT,
+    since_ordinal INTEGER NOT NULL,
+    fact_ids_json TEXT NOT NULL,
+    reason TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (book_id, a_id, b_id, relation_zh)
+);
+"""),
 ]
 
 

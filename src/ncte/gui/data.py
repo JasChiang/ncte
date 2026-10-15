@@ -230,6 +230,15 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
         kinds = [k for s, k in sorted(matter_first.items()) if s <= ordinal]
         return bool(kinds) and kinds[-1] != "story"
 
+    from ..analysis.dialogue import FIRST_PERSON
+
+    # how each one says "I" in their lines (all lines the read pass gave them, inferred too)
+    fp_re = re.compile("|".join(sorted((re.escape(w) for w in FIRST_PERSON if w not in ("自分", "うち", "ウチ")),
+                                       key=len, reverse=True)))
+    first_person: dict[str, Counter[str]] = defaultdict(Counter)
+    for u in conn.execute("SELECT speaker_id_nullable sp, quote_text FROM utterances WHERE book_id=? AND sp IS NOT NULL",
+                          (book.id,)):
+        first_person[u["sp"]].update(fp_re.findall(RUBY.sub("", u["quote_text"] or "")))
     genders = {g["character_id"]: g for g in conn.execute(
         f"SELECT g.* FROM character_gender g JOIN characters c ON c.id=g.character_id WHERE c.{SERIES_SCOPE}",
         (book.id,))}
@@ -241,7 +250,7 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
         out[cid] = {"ja": c["canonical_name"], "zh": c["display_name_zh"] or c["canonical_name"],
                     "aka": json.loads(c["aliases_json"] or "[]"), "from": c["known_from_ordinal"] if cv == here else -1,
                     "scenes": scene_count.get(cid, 0), "lines": lines.get(cid, 0), "facts": facts.get(cid, []),
-                    "examples": examples.get(cid, [])[:6],
+                    "examples": examples.get(cid, [])[:6], "first_person": first_person[cid].most_common(4),
                     "info": cv == here and info(c["known_from_ordinal"])}  # earlier volumes: never book matter here
         g = genders.get(cid)
         if g is not None and vols.get(g["book_id"], 1.0) <= here:
@@ -260,7 +269,11 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
                         "usage": usage,
                         "uses": a["uses"], "at": a["first_ordinal"] if v == here else -1,
                         "certainty": a["certainty"], "origin": a["zh_origin"]})
-    return {"characters": out, "address": address, "scenes": st["scenes"], "chapters": st["chapters"]}
+    rels = [{"a": r["a_id"], "b": r["b_id"], "rel": r["relation_zh"], "a_is": r["a_is"], "b_is": r["b_is"],
+             "at": r["since_ordinal"] if r["book_id"] == book.id else -1, "reason": r["reason"]}
+            for r in conn.execute(f"SELECT * FROM relations WHERE {SERIES_SCOPE}", (book.id,))
+            if vols.get(r["book_id"], 1.0) <= here and r["a_id"] in out and r["b_id"] in out]
+    return {"characters": out, "address": address, "relations": rels, "scenes": st["scenes"], "chapters": st["chapters"]}
 
 
 def glossary(conn: sqlite3.Connection, book: Book) -> list[dict[str, Any]]:

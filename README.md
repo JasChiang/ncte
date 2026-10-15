@@ -114,6 +114,7 @@ ncte names gender 書.epub                    # 角色性別（原文明寫／�
 ncte names gender 書.epub エルリア female      # 人工設定（unknown＝不提供，翻譯用「你」）
 ncte names gender-scan 書.epub               # 已讀過的舊書補記性別（只呼叫記憶更新，不動其他記憶）
 ncte names address-check 書.epub            # 已讀過的舊書補做稱呼歸類（當面叫／提到／自稱／轉述／無關，ADR-037）
+ncte names relations 書.epub                # 已讀過的舊書補做人物關係（由事實歸納，ADR-039）
 ```
 
 ### 系列翻譯風格（每一集都適用）

@@ -411,10 +411,11 @@ async function peopleView(id) {
     card = `<div class="row" style="align-items:baseline;gap:10px"><h2 style="margin:0">${esc(p.zh)}</h2><span class="ja">${esc(p.ja)}</span>
       <span class="muted small">初登場 §${p.from}・出場 ${p.scenes} 場景・台詞 ${p.lines} 句</span></div>
       ${p.aka.length ? `<div class="muted small">其他稱呼：<span class="ja">${p.aka.map(esc).join("・")}</span></div>` : ""}
+      ${(p.first_person || []).length ? `<div class="small" style="margin-top:4px">自稱：${p.first_person.map(([w, n]) => `<span class="form-tag"><span class="ja">${esc(w)}</span><span class="n">×${n}</span></span>`).join(" ")}</div>` : ""}
       ${genderLine(p, upto)}
       <div class="row" style="margin-top:12px;gap:24px">
         <div style="flex:1 1 320px"><div class="addr-h"><strong>別人怎麼叫他</strong><span class="muted small">左邊是說話的人</span></div>${byPerson(called, a => a.speaker, k => esc(nm(k))) || '<div class="muted">—</div>'}</div>
-        <div style="flex:1 1 320px"><div class="addr-h"><strong>他怎麼叫別人</strong><span class="muted small">左邊是被叫的人</span></div>${byPerson(calls, a => a.to, k => k === pid ? "（自稱）" : esc(nm(k))) || '<div class="muted">—</div>'}</div></div>
+        <div style="flex:1 1 320px"><div class="addr-h"><strong>他怎麼叫別人</strong><span class="muted small">左邊是被叫的人</span></div>${byPerson(calls, a => a.to, k => k === pid ? "（提到自己）" : esc(nm(k))) || '<div class="muted">—</div>'}</div></div>
       <div style="margin-top:12px"><strong>常一起出場</strong><div>${Object.entries(co).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([o, k]) => `<a href="#" data-k="${esc(o)}">${esc(nm(o))}</a> <span class="muted small">${k}</span>`).join("　") || "—"}</div></div>
       <div style="margin-top:12px"><strong>說話例句</strong>${EX.map(e => `<div class="ja">${esc(e.text)}</div>`).join("") || '<div class="muted">—</div>'}</div>
       <div style="margin-top:12px"><strong>已知事實</strong> <span class="muted small">${F.length} 筆</span><div class="scroll"><table><tr><th>段</th><th>內容</th><th>類型</th><th>原文依據</th></tr>
@@ -449,7 +450,7 @@ function genderLine(p, upto) {
     : '<span class="muted">不明（翻譯時用「你」）</span>'}
     <select id="genderSet" title="改成你確定的性別">${[["unknown", "不明"], ["female", "女"], ["male", "男"]].map(([v, t]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${t}</option>`).join("")}</select></div>`;
 }
-const G = {mode: "talk", mentions: false, n: 12, hideMinor: true, series: false, focus: null, pair: null};
+const G = {mode: "rel", mentions: false, n: 12, hideMinor: true, series: false, focus: null, pair: null};
 const GROUPISH = /(たち|みんな|観客|生徒たち|周り|の声|チーム|們|觀眾|路人|大家)$/;
 function layout(nodes, edges, W, H) {
   // small deterministic force layout: nodes that share many scenes end up close together
@@ -479,6 +480,9 @@ async function graphView(id) {
   let nodes = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a]);
   if (G.hideMinor) nodes = nodes.filter(c => cnt[c] >= 2);
   if (G.n) nodes = nodes.slice(0, G.n);
+  // relations known by this point (ADR-039): from the facts, shown from where the story reveals them
+  const rels = (d.relations || []).filter(r => r.at <= upto && ok(r.a) && ok(r.b));
+  if (G.mode === "rel") rels.forEach(r => [r.a, r.b].forEach(c => { if (!nodes.includes(c)) { nodes.push(c); cnt[c] = cnt[c] || 1; } }));
   const inSet = new Set(nodes);
   const pairScenes = {};
   scenes.forEach(s => { const m = members(s).filter(c => inSet.has(c)); m.forEach((a, i) => m.slice(i + 1).forEach(b => {
@@ -486,6 +490,9 @@ async function graphView(id) {
   const addr = d.address.filter(a => inSet.has(a.speaker) && inSet.has(a.to) && a.speaker !== a.to && (a.at == null || a.at <= upto));
   const edges = G.mode === "addr"
     ? Object.values(addr.reduce((m, a) => { const k = [a.speaker, a.to].sort().join("|"); (m[k] = m[k] || {a: a.speaker, b: a.to, w: 0}).w += a.uses; return m; }, {}))
+    : G.mode === "rel"
+    ? Object.values(rels.reduce((m, r) => { const k = [r.a, r.b].sort().join("|");
+        (m[k] = m[k] || {a: r.a, b: r.b, w: 1 + (pairScenes[k] || []).length, labels: []}).labels.push(r.rel); return m; }, {}))
     : Object.entries(pairScenes).map(([k, ss]) => { const [a, b] = k.split("|"); return {a, b, w: ss.length}; });
   const W = 820, H = 560, P = layout(nodes, edges, W, H), mx = Math.max(1, ...edges.map(e => e.w));
   const maxN = Math.max(1, ...nodes.map(c => cnt[c]));
@@ -502,14 +509,15 @@ async function graphView(id) {
   } else {
     edges.forEach(e => { const op = Math.min(dim(e.a), dim(e.b)), pk = [e.a, e.b].sort().join("|");
       svg += `<g data-pair="${esc(pk)}" style="cursor:pointer;opacity:${op}"><line x1="${P[e.a].x}" y1="${P[e.a].y}" x2="${P[e.b].x}" y2="${P[e.b].y}" stroke="transparent" stroke-width="12"/>
-        <line x1="${P[e.a].x}" y1="${P[e.a].y}" x2="${P[e.b].x}" y2="${P[e.b].y}" stroke="${G.pair === pk ? "var(--accent)" : "var(--muted)"}" stroke-opacity="${.25 + .6 * e.w / mx}" stroke-width="${1 + 7 * e.w / mx}"><title>${esc(nm(e.a))}・${esc(nm(e.b))}：${e.w} 個場景</title></line></g>`; });
+        <line x1="${P[e.a].x}" y1="${P[e.a].y}" x2="${P[e.b].x}" y2="${P[e.b].y}" stroke="${G.pair === pk ? "var(--accent)" : "var(--muted)"}" stroke-opacity="${.25 + .6 * e.w / mx}" stroke-width="${1 + 7 * e.w / mx}"><title>${esc(nm(e.a))}・${esc(nm(e.b))}：${e.labels ? esc(e.labels.join("、")) : e.w + " 個場景"}</title></line>
+        ${e.labels ? `<text x="${(P[e.a].x + P[e.b].x) / 2}" y="${(P[e.a].y + P[e.b].y) / 2 - 4}" font-size="11.5" text-anchor="middle" class="rel-label">${esc(e.labels.join("・"))}</text>` : ""}</g>`; });
   }
   nodes.forEach(c => { const r = 20 + 16 * Math.sqrt(cnt[c] / maxN);
     svg += `<g data-k="${esc(c)}" style="cursor:pointer;opacity:${dim(c)}"><circle cx="${P[c].x}" cy="${P[c].y}" r="${r}" fill="${G.focus === c ? "var(--accent-soft)" : "var(--panel)"}" stroke="var(--accent)" stroke-width="${G.focus === c ? 3 : 1.6}"/>
       <text x="${P[c].x}" y="${P[c].y + 5}" text-anchor="middle" font-size="13" font-weight="600">${esc(nm(c))}</text><title>${esc(nm(c))}：${cnt[c]} 個場景</title></g>`; });
   const sel = (name, opts, cur) => `<select data-ctl="${name}">${opts.map(([v, l]) => `<option value="${v}" ${String(v) === String(cur) ? "selected" : ""}>${l}</option>`).join("")}</select>`;
   view.innerHTML = `<div class="row" style="align-items:center;margin-bottom:10px;gap:10px">
-      <div class="seg"><button data-m="talk" class="${G.mode === "talk" ? "on" : ""}">一起出場</button><button data-m="addr" class="${G.mode === "addr" ? "on" : ""}">誰怎麼叫誰</button></div>
+      <div class="seg"><button data-m="rel" class="${G.mode === "rel" ? "on" : ""}">關係</button><button data-m="talk" class="${G.mode === "talk" ? "on" : ""}">一起出場</button><button data-m="addr" class="${G.mode === "addr" ? "on" : ""}">誰怎麼叫誰</button></div>
       ${G.mode === "talk" ? `<label class="small"><input type="checkbox" data-ctl="mentions" ${G.mentions ? "checked" : ""}> 只被提到也算</label>` : ""}
       ${sel("n", [[12, "12 人"], [20, "20 人"], [0, "全部"]], G.n)}
       <label class="small"><input type="checkbox" data-ctl="hideMinor" ${G.hideMinor ? "checked" : ""}> 隱藏路人、群體</label>
@@ -517,7 +525,7 @@ async function graphView(id) {
       ${G.focus ? `<button class="btn" data-clear>取消聚焦</button>` : ""}</div>
     <div class="row" style="align-items:flex-start"><div class="card scroll" style="flex:1 1 560px;padding:6px"><svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:540px">${svg}</svg></div>
     <div class="card" style="flex:0 1 340px;min-width:280px" id="gside">${graphSide(d, nm, upto, pairScenes, addr, cnt)}</div></div>
-    <p class="muted small">${G.mode === "talk" ? (G.mentions ? "線＝同一場景出現（含只被提到）" : "線＝兩人在同一場景都有台詞") : "箭頭＝誰用什麼稱呼叫誰"}；圓圈大小＝出場場景數。點人物聚焦，點線看兩人的互動。${ov.title}</p>`;
+    <p class="muted small">${G.mode === "rel" ? `線＝故事中的關係（依讀到的事實整理，讀到揭露處才出現）${rels.length ? "" : "；這本書還沒有整理關係（ncte names relations）"}` : G.mode === "talk" ? (G.mentions ? "線＝同一場景出現（含只被提到）" : "線＝兩人在同一場景都有台詞") : "箭頭＝誰用什麼稱呼叫誰"}；圓圈大小＝出場場景數。點人物聚焦，點線看兩人的互動。${ov.title}</p>`;
   view.querySelectorAll("[data-m]").forEach(b => b.onclick = () => { G.mode = b.dataset.m; G.pair = null; graphView(id); });
   view.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { G.series = b.dataset.s === "1"; graphView(id); });
   view.querySelectorAll("[data-ctl]").forEach(el => el.onchange = () => { const k = el.dataset.ctl; G[k] = el.type === "checkbox" ? el.checked : +el.value; graphView(id); });

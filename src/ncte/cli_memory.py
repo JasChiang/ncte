@@ -683,6 +683,21 @@ def reader_check(epub: Annotated[str, typer.Argument()],
     _run(book, opts, fake=fake, cfg=cfg)
 
 
+@names_app.command("relations")
+def names_relations(epub: Annotated[str, typer.Argument()],
+                    budget_usd: Annotated[float, typer.Option("--budget-usd")] = 0.3,
+                    fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
+    """Summarize relations between characters from the facts (ADR-039), for a book already read."""
+    from .cli import _run
+    from .translation.orchestrator import RunOptions
+
+    cfg = state.cfg
+    book = _book(epub)
+    opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
+                      client="fake" if fake else "openrouter", relations_only=True)
+    _run(book, opts, fake=fake, cfg=cfg)
+
+
 @names_app.command("address-check")
 def names_address_check(epub: Annotated[str, typer.Argument()],
                         budget_usd: Annotated[float, typer.Option("--budget-usd")] = 0.5,
