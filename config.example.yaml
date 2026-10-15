@@ -18,9 +18,11 @@ openrouter:
   require_schema: true
   temperature: 0.3
   reasoning_effort: null    # low | medium | high (model-dependent); null = model default; --reasoning-effort overrides
+  stage_reasoning: {}       # per step, e.g. {memory_update: low, translate: "max:3000"} (level, default, or max:<reasoning tokens>)
 translation:
   style: "natural_traditional_taiwan"
-  unit_target_japanese_chars: 1400
+  unit_target_japanese_chars: 1400   # baseline mode / scene_max_chars: 0
+  scene_max_chars: 6000     # context mode: one translation request per scene up to this many characters
   unit_hard_max_japanese_chars: 2500
   include_previous_units: 2
   include_next_units: 1
