@@ -165,7 +165,7 @@ def apply(conn: sqlite3.Connection, book_id: str, results: list[tuple[RelationsO
                      "llm", json.dumps([{"kind": k, "id": i, "at": o} for k, i, o in cited])))
                 placed.append((a, b, rel, since, (r.replaces or "").strip() or None))
                 n += 1
-        for a, b, rel, since, replaces in placed:  # 宿敵 → 未婚夫妻: the earlier relation ends where the later begins
+        for a, b, _rel, since, replaces in placed:  # 宿敵 → 未婚夫妻: the earlier relation ends where the later begins
             if replaces:
                 conn.execute("UPDATE relations SET until_ordinal=? WHERE book_id=? AND relation_zh=? AND since_ordinal<? "
                              "AND ((a_id=? AND b_id=?) OR (a_id=? AND b_id=?))",
