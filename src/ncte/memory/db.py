@@ -567,6 +567,16 @@ CREATE TABLE character_impressions (
     (19, "who each line is said to, as the read pass judged it (你／妳 for the person spoken to)", """
 ALTER TABLE utterances ADD COLUMN addressee_ids_json TEXT NOT NULL DEFAULT '[]';
 """),
+    (20, "who a group character is made of (「跟班兩人」 = the two followers), judged after reading", """
+CREATE TABLE group_members (
+    group_id TEXT NOT NULL,
+    member_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    reason TEXT,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (group_id, member_id)
+);
+"""),
 ]
 
 

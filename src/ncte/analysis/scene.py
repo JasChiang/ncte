@@ -197,16 +197,34 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
 
     if forms := established_self_forms(conn, book_id, scene["seq"]):
         extra["established_self_forms"] = forms
+    kin = _relations_so_far(conn, book_id, scene["start_ordinal"])
     return {
         **extra,
         "task": "scene_analyze", "scene_id": scene["id"],
         "units": [{"unit_id": r["id"], "source": r["plain_text"]} for r in rows],
         "quotes": q_payload,
-        "known_characters": [{"character_id": c["id"], **v, "speech_profile": json.loads(c["speech_profile_json"] or "{}")}
+        "known_characters": [{"character_id": c["id"], **v, "speech_profile": json.loads(c["speech_profile_json"] or "{}"),
+                              **({"relations": kin[c["id"]]} if kin.get(c["id"]) else {})}
                              for c in known
                              if (v := vis.character_view(conn, book_id, c, scene["start_ordinal"] - 1, forms_at))],
         "glossary": [g for g in glossary if str(g.get("ja", "")) in scene_text],
     }
+
+
+def _relations_so_far(conn: sqlite3.Connection, book_id: str, before: int) -> dict[str, list[str]]:
+    """Relations noted before this scene, by character: 「島村的妹妹」 tells the reader of the sister's own story who
+    「姉ちゃん」 is (a translator knows who is whose sister)."""
+    names = {r["id"]: r["display_name_zh"] or r["canonical_name"] for r in repo.characters(conn, book_id)}
+    out: dict[str, list[str]] = {}
+    for r in conn.execute("SELECT a_id, b_id, a_is, b_is, relation_zh FROM relation_notes WHERE book_id=? AND first_ordinal<? "
+                          "UNION SELECT a_id, b_id, a_is, b_is, relation_zh FROM relations WHERE book_id=? AND since_ordinal<? "
+                          "AND (until_ordinal IS NULL OR until_ordinal>=?)", (book_id, before, book_id, before, before)):
+        for me, other, role in ((r[0], r[1], r[2]), (r[1], r[0], r[3])):
+            if me in names and other in names:
+                line = f"{names[other]}的{role or r[4]}"
+                if line not in out.setdefault(me, []):
+                    out[me].append(line)
+    return {k: v[:6] for k, v in out.items()}
 
 
 REVEAL_WINDOW = 400  # units: a description is matched to a revealed name only if it was introduced shortly before

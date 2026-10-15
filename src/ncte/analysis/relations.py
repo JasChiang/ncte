@@ -47,7 +47,7 @@ def candidate_pairs(conn: sqlite3.Connection, book_id: str) -> tuple[list[dict[s
 
     def pair(a: str, b: str) -> dict[str, Any]:
         k = (a, b) if a < b else (b, a)
-        return pairs.setdefault(k, {"a": k[0], "b": k[1], "notes": [], "facts": [], "address": [], "together": 0})
+        return pairs.setdefault(k, {"a": k[0], "b": k[1], "notes": [], "facts": [], "address": [], "together": 0, "via": {}})
 
     for n in conn.execute("SELECT * FROM relation_notes WHERE book_id=? ORDER BY first_ordinal", (book_id,)):
         if n["a_id"] in chars and n["b_id"] in chars:
@@ -62,6 +62,24 @@ def candidate_pairs(conn: sqlite3.Connection, book_id: str) -> tuple[list[dict[s
     for t in conn.execute("SELECT * FROM address_terms WHERE book_id=? AND speaker_id!=addressee_id", (book_id,)):
         if t["speaker_id"] in chars and t["addressee_id"] in chars:
             pair(t["speaker_id"], t["addressee_id"])["address"].append(t)
+    # a relation stated about a group (法雷格—跟班兩人：主從) is material for each member's own pair too; the model
+    # decides whether it holds for that person (ADR-046)
+    members: dict[str, list[str]] = {}
+    for g in conn.execute("SELECT group_id, member_id FROM group_members WHERE book_id=?", (book_id,)):
+        if g[0] in chars and g[1] in chars:
+            members.setdefault(g[0], []).append(g[1])
+    for (a, b), p in list(pairs.items()):
+        for grp, other in ((a, b), (b, a)):
+            for m in members.get(grp, []):
+                if m == other:
+                    continue
+                q = pair(m, other)
+                label = chars[grp]["display_name_zh"] or chars[grp]["canonical_name"]
+                for kind in ("notes", "facts"):
+                    for row in p[kind]:
+                        if row not in q[kind]:
+                            q[kind].append(row)
+                            q["via"][(kind, row["id"])] = label
     speaking: dict[str, set[str]] = {}
     for u in conn.execute("SELECT scene_id, speaker_id_nullable sp FROM utterances WHERE book_id=? AND sp IS NOT NULL",
                           (book_id,)):
@@ -103,16 +121,19 @@ def requests(pairs: list[dict[str, Any]], chars: dict[str, sqlite3.Row], *, rech
                 r = f"n{len(ev) + 1}"
                 ev[r] = ("note", n["id"], n["first_ordinal"])
                 allowed[pid].add(r)
-                who_a = cref[n["a_id"]]
-                notes.append({"ref": r, "at": n["first_ordinal"], "text": f"{who_a} 是 {cref[n['b_id']]} 的{n['a_is'] or ''}"
+                who_a = cref.get(n["a_id"]) or _label(chars, n["a_id"])
+                via = p["via"].get(("notes", n["id"]))
+                notes.append({"ref": r, "at": n["first_ordinal"], "text": (f"〔關於群體「{via}」〕" if via else "")
+                              + f"{who_a} 是 {cref.get(n['b_id']) or _label(chars, n['b_id'])} 的{n['a_is'] or ''}"
                               f"（{n['relation_zh']}，{n['kind']}）", "quote": n["evidence_quote"]})
             for f in p["facts"][:MAX_EVIDENCE]:
                 r = f"f{len(ev) + 1}"
                 ev[r] = ("fact", f["id"], f["first_revealed_ordinal"])
                 allowed[pid].add(r)
                 subj = cref.get(f["subject"]) or (chars[f["subject"]]["display_name_zh"] if f["subject"] in chars else f["subject"])
-                facts.append({"ref": r, "at": f["first_revealed_ordinal"], "text": f"{subj} {f['predicate']} {f['object']}",
-                              "quote": f["evidence_quote"]})
+                via = p["via"].get(("facts", f["id"]))
+                facts.append({"ref": r, "at": f["first_revealed_ordinal"], "quote": f["evidence_quote"],
+                              "text": (f"〔關於群體「{via}」〕" if via else "") + f"{subj} {f['predicate']} {f['object']}"})
             items.append({"pair": pid, "a": cref[p["a"]], "b": cref[p["b"]], "notes": notes, "facts": facts,
                           "address": [{"from": cref[t["speaker_id"]], "to": cref[t["addressee_id"]], "form": t["form_ja"],
                                        "uses": t["uses"]} for t in p["address"][:MAX_EVIDENCE]],
@@ -125,6 +146,11 @@ def requests(pairs: list[dict[str, Any]], chars: dict[str, sqlite3.Row], *, rech
         out.append((req, {"_chars": {r: c for c, r in cref.items()}, "_ev": ev, "_allowed": allowed,
                           "_pairs": {f"p{k}": (p["a"], p["b"]) for k, p in enumerate(group, 1)}}))
     return out
+
+
+def _label(chars: dict[str, sqlite3.Row], cid: str) -> str:
+    c = chars.get(cid)
+    return (c["display_name_zh"] or c["canonical_name"]) if c is not None else cid
 
 
 def unanswered(pairs: list[dict[str, Any]], results: list[tuple[RelationsOutput, dict[str, Any]]]) -> list[dict[str, Any]]:
