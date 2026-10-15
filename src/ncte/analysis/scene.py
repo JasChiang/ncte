@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from typing import Any
@@ -209,6 +210,13 @@ def _revealed(conn: sqlite3.Connection, book_id: str, known: list[Any], same_as:
     return None if shared else str(hits[0]["id"])
 
 
+def _is_description(name: str) -> bool:
+    """「黒髪の女性」「艶やかな茶髪の美しい女性」「フードをかぶった少女」: words describing someone, not a name."""
+    n = name.strip()
+    return len(n) >= 4 and (bool(re.search(r"[のなたいる]", n[1:-1])) or any(
+        n.endswith(g) and len(n) > len(g) + 1 for g in GENERIC_REFERENTS))
+
+
 def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row,
                          parsed: SceneAnalysisOutput | None, *, run_id: str | None = None) -> dict[str, int]:
     """Validate an analysis against the source and persist it. ``parsed=None`` → program-only analysis."""
@@ -260,9 +268,16 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             aliases = [a for a in nc.aliases_ja if a and a != name and len(a) <= MAX_NAME_LEN and a not in PRONOUNS
                        and a not in GENERIC_REFERENTS and a not in common and not names_a_group(a)
                        and _standalone(a, scene_text, [name, *existing_alias, *(x.name_ja for x in parsed.new_characters)])]
+            proposed_zh = nc.proposed_name_zh.strip()[:MAX_NAME_LEN] or None
+            # described first and named in the same scene (「艶やかな茶髪の美しい女性」 … 「オリビア」): the model marks
+            # the name among the aliases; the person is known by the name, the description stays an alias
+            real = next((k.ja.strip() for k in nc.alias_kinds if k.kind == "name" and k.ja.strip() in aliases), None)
+            if real and _is_description(name) and real not in existing_alias:
+                aliases = [name, *(a for a in aliases if a != real)]
+                name, proposed_zh = real, None
             gl = conn.execute(f"SELECT target_term FROM glossary WHERE {SERIES_SCOPE} AND source_term=?",
                               (book_id, name)).fetchone()
-            zh = gl[0] if gl else (nc.proposed_name_zh.strip()[:MAX_NAME_LEN] or None)
+            zh = gl[0] if gl else proposed_zh
             cid, created = repo.upsert_character(conn, book_id, name, name_zh=zh, aliases=aliases, unit_id=first.id,
                                                  ordinal=first.ordinal, origin="scene_analysis")
             if created:

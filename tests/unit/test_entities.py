@@ -31,3 +31,12 @@ def test_a_size_cut_waits_for_a_quiet_point():
         [row(12, "　地の文。"), row(13, "　地の文。"), row(14, "　地の文。")]
     scenes = segment_units(rows, {}, 9)  # the limit falls inside the exchange of lines (8–11)
     assert [len(s.unit_ids) for s in scenes] == [13, 2]  # cut after it, between two narration paragraphs
+
+
+def test_a_description_is_not_a_name():
+    from ncte.analysis.scene import _is_description
+
+    for d in ("黒髪の女性", "艶やかな茶髪の美しい女性", "フードをかぶった少女", "年配の給仕"):
+        assert _is_description(d), d
+    for n in ("オリビア", "シルヴァード", "ユールシア", "安達", "しまむら", "あだっち", "ファレグ", "大司教モルト"):
+        assert not _is_description(n), n
