@@ -322,8 +322,10 @@ def review(epub: Annotated[str, typer.Argument()],
     cfg.review.automatic_review = "all" if scope == "all" else "flagged_only"
     cfg.review.maximum_review_passes = 1
     book = _book(epub)
-    opts = RunOptions(mode="baseline", model=cfg.openrouter.model, budget_usd=budget_usd, unit_ids=unit_id or None,
-                      client="fake" if fake else "openrouter", review_only=True)
+    # fixes are retranslated with the same kind of context the book was translated with (memory in context mode)
+    last = state.conn.execute("SELECT mode FROM runs WHERE book_id=? AND mode='context' LIMIT 1", (book.id,)).fetchone()
+    opts = RunOptions(mode="context" if last else "baseline", model=cfg.openrouter.model, budget_usd=budget_usd,
+                      unit_ids=unit_id or None, client="fake" if fake else "openrouter", review_only=True)
     _run(book, opts, fake=fake, cfg=cfg)
 
 

@@ -32,9 +32,11 @@ def flagged_units(conn: sqlite3.Connection, book_id: str, run_id: str | None, un
     ph = ",".join("?" * len(unit_ids))
     run_clause = "run_id=?" if run_id else "book_id=?"
     for r in conn.execute(f"SELECT unit_id, type, evidence FROM qa_findings WHERE {run_clause} AND unit_id IN ({ph}) AND "
-                          "severity='high' AND status='open' AND type NOT LIKE 'review%'",
+                          "status='open' AND (severity IN ('high','error') OR (type LIKE 'review%' AND "
+                          "severity IN ('medium','high')))",
                           (run_id or book_id, *unit_ids)):
-        reasons.setdefault(r["unit_id"], []).append(f"{r['type']}: {(r['evidence'] or '')[:120]}")
+        # a reviewer's earlier issue that is still open (found but not fixed) is looked at again, with its note
+        reasons.setdefault(r["unit_id"], []).append(f"{r['type']}: {(r['evidence'] or '')[:160]}")
     for r in conn.execute(f"SELECT unit_id, notes_json, status FROM utterances WHERE book_id=? AND unit_id IN ({ph})",
                           (book_id, *unit_ids)):
         notes = json.loads(r["notes_json"])
@@ -121,9 +123,18 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
             stats["issues"] += 1
             orch._finding(issue.unit_id, f"review:{issue.issue_type}", SEV[issue.severity],
                           f"{issue.evidence} → {issue.suggestion}"[:600])
-            if issue.needs_retranslation and issue.severity in ("medium", "high"):
+            # a concrete fix is acted on even when the reviewer called it "style" (a leftover ッ stayed otherwise);
+            # the new translation goes through the program checks again
+            if issue.severity in ("medium", "high") and (issue.needs_retranslation or issue.suggestion.strip()):
                 to_fix.setdefault(issue.unit_id, []).append(
                     {"issue_type": issue.issue_type, "evidence": issue.evidence, "suggestion": issue.suggestion})
+        # what the program already knows is wrong (a leftover ッ) is fixed whatever severity the reviewer gave it
+        with orch.lock:
+            for r in conn.execute(f"SELECT unit_id, type, evidence FROM qa_findings WHERE book_id=? AND status='open' "
+                                  f"AND severity='error' AND unit_id IN ({','.join('?' * len(valid))})",
+                                  (orch.book.id, *valid)):
+                to_fix.setdefault(r["unit_id"], []).append(
+                    {"issue_type": r["type"], "evidence": r["evidence"] or "", "suggestion": r["evidence"] or ""})
         if to_fix:
             _retranslate_with_feedback(orch, [rows[u] for u in to_fix], to_fix, stats)
         flagged_by_reviewer = {i.unit_id for i in parsed.issues if i.unit_id in valid and i.severity != "low"}
@@ -195,8 +206,11 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
                  json.dumps(ur.notes, ensure_ascii=False), utcnow(), ur.translator_note or None))
             if status == "succeeded":
                 stats["fixed"] += 1
-                orch.conn.execute("UPDATE qa_findings SET status='resolved' WHERE run_id=? AND unit_id=? AND "
-                                  "status='open' AND severity='high'", (orch.run_id, uid))
+                # what was found on the old text (by any run, the reviewer's own issue included) is settled by the
+                # new translation; anything the new one still has is recorded below as after_review
+                orch.conn.execute("UPDATE qa_findings SET status='resolved' WHERE book_id=? AND unit_id=? AND "
+                                  "status='open' AND (severity IN ('high','error') OR type LIKE 'review%')",
+                                  (orch.book.id, uid))
                 orch.conn.execute("UPDATE jobs SET status='succeeded' WHERE run_id=? AND stage='translate' AND "
                                   "target_id=?", (orch.run_id, uid))
             else:

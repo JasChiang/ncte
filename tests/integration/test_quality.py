@@ -218,3 +218,46 @@ def test_recheck_keeps_reviewer_decisions(conn, cfg, fixtures, seeded):
     stats = recheck_book(conn, book.id)
     assert stats["newly_flagged"] == 0
     assert conn.execute("SELECT COUNT(*) FROM translations WHERE status='needs_review'").fetchone()[0] == 0
+
+
+def test_a_concrete_fix_is_applied_even_when_called_style(conn, cfg, fixtures, seeded):
+    """§78 (real book): the reviewer saw a leftover ッ, wrote the fixed sentence, but said no retranslation needed."""
+    cfg.review.automatic_review = "flagged_only"
+
+    def style_only(payload, req):
+        return {"issues": [{"unit_id": i["unit_id"], "issue_type": "style", "severity": "medium",
+                            "evidence": f"原文「{i['source'][:10]}」", "suggestion": "完整翻譯這一段",
+                            "needs_retranslation": False} for i in payload["items"]]}
+
+    fake = FakeLLM(responders={"translate": defective, "review": style_only})
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], fake)
+    best = latest_texts(conn, book.id)
+    omitted = text_of(conn, book, "朝の市場")
+    assert "review_retranslation" in best[omitted]["flags_json"] and best[omitted]["text"] != "早上。"
+
+
+def test_review_command_keeps_context_mode_and_fixes_program_errors(tmp_path, fixtures):
+    """A stored translation that a stricter rule now calls an error (a leftover ッ) is retranslated by `ncte review`,
+    with the book's memory (context mode), whatever severity the reviewer gives it."""
+    import sqlite3
+
+    from typer.testing import CliRunner
+
+    from ncte.cli import app
+    from ncte.config import load_config
+    from ncte.workspace import Workspace
+
+    ws, epub, runner = tmp_path / "ws", str(fixtures["basic"]), CliRunner()
+    assert runner.invoke(app, ["-w", str(ws), "translate", epub, "--fake", "--mode", "context"]).exit_code == 0
+    cfg = load_config(workspace=str(ws))
+    conn, book = Workspace(cfg).open_book(epub)
+    t = conn.execute("SELECT t.id, t.unit_id FROM translations t JOIN units u ON u.id=t.unit_id WHERE u.book_id=? AND "
+                     "u.kind='text' ORDER BY u.ordinal LIMIT 1 OFFSET 3", (book.id,)).fetchone()
+    conn.execute("UPDATE translations SET text=text || 'ッ' WHERE id=?", (t["id"],))
+    assert runner.invoke(app, ["-w", str(ws), "recheck", epub]).exit_code == 0
+    r = runner.invoke(app, ["-w", str(ws), "review", epub, "--fake"])
+    assert r.exit_code == 0, r.output
+    assert "mode=context" in r.output
+    db = sqlite3.connect(str(conn.execute("PRAGMA database_list").fetchone()[2]))
+    latest = db.execute("SELECT text FROM translations WHERE unit_id=? ORDER BY rowid DESC LIMIT 1", (t["unit_id"],)).fetchone()[0]
+    assert "ッ" not in latest
