@@ -145,7 +145,7 @@ class OpenRouterClient:
         return out
 
     def build_payload(self, req: LLMRequest) -> dict[str, Any]:
-        payload: dict[str, Any] = {"model": req.model, "messages": req.messages, "stream": False}
+        payload: dict[str, Any] = {"model": req.model, "messages": self._cached(req), "stream": False}
         if req.temperature is not None:
             payload["temperature"] = req.temperature
         if req.max_tokens:
@@ -157,7 +157,21 @@ class OpenRouterClient:
         elif req.structured_mode == "json_object":
             payload["response_format"] = {"type": "json_object"}
         payload.update(req.extra)
+        if self.name == "openrouter" and req.model.startswith("google/"):
+            # explicit caching works on Google AI Studio, not on Vertex (measured 2026-10-15); others stay as fallback
+            payload["provider"] = {**payload.get("provider", {}), "order": ["google-ai-studio"], "allow_fallbacks": True}
         return payload
+
+    def _cached(self, req: LLMRequest) -> list[dict[str, Any]]:
+        """The system prompt (the same rules on every request of a task) marked for prompt caching.
+
+        Gemini caches nothing on its own here: three identical prompts were all billed in full; with the marker the
+        repeated ~1,750 tokens were read from the cache and a request cost 1/6–1/9 as much. Dynamic data stays in
+        the user message after it. Only on direct OpenRouter: fal passing the marker on is not verified."""
+        msgs: list[dict[str, Any]] = [dict(m) for m in req.messages]
+        if self.name == "openrouter" and msgs and msgs[0].get("role") == "system" and isinstance(msgs[0]["content"], str):
+            msgs[0]["content"] = [{"type": "text", "text": msgs[0]["content"], "cache_control": {"type": "ephemeral"}}]
+        return msgs
 
     def complete(self, req: LLMRequest) -> LLMResponse:
         payload = self.build_payload(req)

@@ -44,7 +44,7 @@ def test_success_and_payload():
     assert resp.generation_id == "gen-abc123" and resp.provider == "Google"
     rf = seen["body"]["response_format"]
     assert rf["type"] == "json_schema" and rf["json_schema"]["strict"] is True
-    assert seen["body"]["provider"] == {"require_parameters": True}
+    assert seen["body"]["provider"]["require_parameters"] is True
     assert seen["auth"] == f"Bearer {KEY}"
 
 
@@ -184,3 +184,20 @@ def test_provider_location_error_is_retried():
 
     make(h).complete(req())
     assert calls["n"] == 2
+
+
+def test_system_prompt_marked_for_caching_and_google_prefers_ai_studio():
+    from ncte.llm.fal_openrouter import FalOpenRouterClient
+
+    req = LLMRequest(stage="translate", model="google/gemini-3.8-flash", schema_name="t", json_schema={"type": "object"},
+                     messages=[{"role": "system", "content": "rules"}, {"role": "user", "content": "{}"}])
+    body = OpenRouterClient("k").build_payload(req)
+    assert body["messages"][0]["content"] == [{"type": "text", "text": "rules", "cache_control": {"type": "ephemeral"}}]
+    assert body["messages"][1]["content"] == "{}"  # the data stays plain, after the cached part
+    assert body["provider"] == {"require_parameters": True, "order": ["google-ai-studio"], "allow_fallbacks": True}
+    assert req.messages[0]["content"] == "rules"  # the request itself (and its hash) is unchanged
+    other = OpenRouterClient("k").build_payload(LLMRequest(stage="t", model="openai/gpt-6-luna", schema_name="t",
+                                                            messages=[{"role": "system", "content": "r"}]))
+    assert "order" not in other.get("provider", {})
+    fal = FalOpenRouterClient("k").build_payload(req)  # not verified through fal: sent as before
+    assert fal["messages"][0]["content"] == "rules" and "order" not in fal["provider"]
