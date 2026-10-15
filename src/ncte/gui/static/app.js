@@ -132,7 +132,7 @@ async function settingsView() {
 
 // ------------------------------------------------------------ overview
 const RUNSTATUS = {completed: "完成", completed_with_failures: "完成（有段落失敗，可再試一次）", running: "進行中",
-  interrupted: "已暫停", budget_exhausted: "達到預算上限", awaiting_names: "等你決定譯法", stopped_fatal: "停止（連線或帳戶問題）", created: "準備中"};
+  interrupted: "已暫停", running_elsewhere: "另一個程序正在翻譯", budget_exhausted: "達到預算上限", awaiting_names: "等你決定譯法", stopped_fatal: "停止（連線或帳戶問題）", created: "準備中"};
 let poll = null;
 async function overviewView(id) {
   const o = await loadBook(id, "overview");
@@ -173,12 +173,14 @@ async function runCard(id, o) {
     else if (r.status === "budget_exhausted") { const more = Math.round((r.spent_usd + (r.left_usd || 0) * 2) * 100) / 100;
       action = `<p class="small">已花 ${money(r.spent_usd)}，達到這次的上限 ${money(r.budget_usd)}。${r.left_usd ? `估計剩下的部分還要約 ${money(r.left_usd)}。` : ""}已完成的部分都保留著，繼續會從停下的地方接著做。</p>
         <button class="btn primary" data-go data-budget="${Math.max(more, r.budget_usd + 1)}">把上限提高到 ${money(Math.max(more, r.budget_usd + 1))} 並繼續</button>`; }
+    else if (r.status === "running_elsewhere") action = `<p class="small">${esc(p.elsewhere.source)}（pid ${esc(p.elsewhere.pid)}）正在翻譯這本書；這裡不能同時繼續，等它結束或在那邊暫停後再回來。</p>`;
     else if (r.status !== "completed") action = `<button class="btn primary" data-go>繼續翻譯</button>`;
     body = `<strong>${esc(st)}</strong>　<span class="muted small">已花 ${money(r.spent_usd)}／上限 ${money(r.budget_usd)}</span>
       ${p.error ? `<p class="issue">${esc(p.error)}</p>` : ""}${r.status === "stopped_fatal" ? `<p class="small">如果是餘額不足，儲值後按繼續即可。</p>` : ""}
       ${bars}<div style="margin-top:10px">${action} ${exportBtns}</div>`;
   }
-  if (p.other_busy) body += `<p class="muted small">另一本書正在翻譯，同時只能翻一本。</p>`;
+  if (p.elsewhere && (!r || r.status !== "running_elsewhere")) body += `<p class="muted small">${esc(p.elsewhere.source)}正在翻譯同系列的另一本，同一個系列一次只能翻一本。</p>`;
+  else if (p.other_busy && !p.elsewhere) body += `<p class="muted small">另一本書正在翻譯，同時只能翻一本。</p>`;
   card.innerHTML = body;
   const on = (sel, fn) => { const b = card.querySelector(sel); if (b) b.onclick = fn; };
   on("#pause", async () => { await api("run/pause", {}); toast("會在目前這個請求完成後暫停"); });

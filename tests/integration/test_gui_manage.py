@@ -162,3 +162,27 @@ def test_fal_settings_preserve_direct_key_and_resume_config(site, fixtures, monk
     _, saved, opts = load_run(conn, rid)
     assert saved.openrouter.provider == opts.client == "fal"
     assert call("/api/settings")[1]["hint"] == "…cccc"
+
+
+def test_page_does_not_continue_a_run_the_cli_is_working_on(site, fixtures):
+    """fal real run: the page offered「繼續」for a run the CLI was still working on, and both sent the same requests."""
+    from ncte.translation.orchestrator import RunOptions, create_run
+    from ncte.translation.run_lock import SeriesLock
+
+    call, app, _, _ = site
+    _, imp = _upload_and_import(call, fixtures["basic"])
+    bid = imp["book_id"]
+    conn, book = app.ws.open_book(bid)
+    rid = create_run(conn, app.ws.cfg, book, RunOptions(mode="context", model=app.ws.cfg.openrouter.model, client="fake"))
+    conn.execute("UPDATE runs SET status='running' WHERE id=?", (rid,))
+    cli = SeriesLock(conn)  # stands in for the CLI process holding the series
+    cli.acquire(rid, "cli")
+    try:
+        p = call(f"/api/book/{bid}/run")[1]
+        assert p["run"]["status"] == "running_elsewhere" and p["elsewhere"]["source"] == "指令列"
+        st, err = call(f"/api/run/{rid}/continue", {})
+        assert st == 400 and "指令列" in err["error"]
+        assert call(f"/api/book/{bid}/start", {})[0] == 400
+    finally:
+        cli.release()
+    assert call(f"/api/book/{bid}/run")[1]["run"]["status"] == "interrupted"  # the CLI ended: resumable

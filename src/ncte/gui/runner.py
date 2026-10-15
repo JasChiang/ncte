@@ -75,6 +75,7 @@ class Runner:
             if self.busy:
                 raise NCTEError("另一本書正在翻譯，請等它完成或先暫停")
             conn, book = ws.open_book(ref)
+            _not_elsewhere(conn)
             budget = self.estimate(ws, ref)["budget_usd"]
             rid = create_run(conn, self.cfg, book, self.options(budget))
             self._launch(rid, book.id)
@@ -89,6 +90,7 @@ class Runner:
             if self.busy:
                 raise NCTEError("另一本書正在翻譯，請等它完成或先暫停")
             conn = ws.find_run(run_id)
+            _not_elsewhere(conn)
             row = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
             if budget is not None:
                 data = json.loads(row["config_json"])
@@ -128,6 +130,7 @@ class Runner:
             cls = ContextOrchestrator if opts.mode == "context" else Orchestrator
             self.orch = cls(conn, cfg, self.client_factory(cfg), resolve_book(conn, row["book_id"]), run_id, opts,
                             log=self.log.append)
+            self.orch.lock_source = "gui"
             self.orch.run()
         except Exception as exc:  # shown on the page; the run stays resumable
             from ..config import get_api_key, redact
@@ -150,8 +153,17 @@ class Runner:
             return {"run": None, "busy": self.busy and self.book_id == book_id, "other_busy": self.busy}
         live = self.busy and self.run_id == row["id"]
         status = row["status"]
-        if status == "running" and not live:
-            status = "interrupted"  # the program was closed mid-run: resumable
+        elsewhere = None
+        if not live:
+            from ..translation.run_lock import SOURCES, holder
+
+            if (owner := holder(conn)) is not None:  # the CLI (or another page) is working on this series
+                elsewhere = {"source": SOURCES.get(str(owner.get("source")), "另一個程序"), "pid": owner.get("pid"),
+                             "run_id": owner.get("run_id"), "since": owner.get("since")}
+                if owner.get("run_id") == row["id"]:
+                    status = "running_elsewhere"
+            elif status == "running":
+                status = "interrupted"  # the program was closed mid-run: resumable
         counts: dict[str, dict[str, int]] = {}
         for r in conn.execute("SELECT stage, status, COUNT(*) n FROM jobs WHERE run_id=? GROUP BY 1,2", (row["id"],)):
             counts.setdefault(r["stage"], {})[r["status"]] = r["n"]
@@ -174,7 +186,8 @@ class Runner:
             left = self._left[row["id"]]
         return {"run": {"id": row["id"], "status": status, "budget_usd": row["budget_usd"], "spent_usd": round(spent, 4),
                         "left_usd": left, "model": row["model"]},
-                "stages": stages, "busy": live, "other_busy": self.busy and not live,
+                "stages": stages, "busy": live, "other_busy": (self.busy and not live) or elsewhere is not None,
+                "elsewhere": elsewhere,
                 "log": list(self.log)[-8:] if live or self.run_id == row["id"] else [],
                 "error": self.error if self.run_id == row["id"] else None}
 
@@ -182,3 +195,10 @@ class Runner:
 def budget_for(estimate: float) -> float:
     return round(max(MIN_BUDGET_USD, estimate * BUDGET_FACTOR), 2)
 
+
+def _not_elsewhere(conn: Any) -> None:
+    """Refuse before any change when another program (the CLI) is working on this series."""
+    from ..translation.run_lock import RunLocked, holder
+
+    if (owner := holder(conn)) is not None:
+        raise RunLocked(owner)

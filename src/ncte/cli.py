@@ -297,7 +297,8 @@ def _run(book: Book, opts: Any, *, fake: bool, as_json: bool = False, run_id: st
     if fake:
         typer.echo("⚠ using FakeLLM: output is placeholder text, not a translation")
     rid = run_id or create_run(state.conn, cfg, book, opts)
-    typer.echo(f"run {rid}  book {book.id}  mode={opts.mode}  model={opts.model}  budget=${opts.budget_usd}")
+    via = "" if fake else f"  via={'fal' if client.name == 'fal' else 'OpenRouter'}"  # NCTE_LLM_PROVIDER in .env applies here
+    typer.echo(f"run {rid}  book {book.id}  mode={opts.mode}  model={opts.model}{via}  budget=${opts.budget_usd}")
     orch = _orchestrator(cfg, client, book, rid, opts)
     summary = orch.run()
     data = summary.__dict__

@@ -481,7 +481,20 @@ class Orchestrator:
         return self._estimate({"units": units, "ctx": units}, batch.chars)
 
     # ------------------------------------------------------------ main loop
+    lock_source = "cli"  # who holds the series lock while this runs (the web page sets "gui")
+
     def run(self) -> RunSummary:
+        from .run_lock import SeriesLock
+
+        # before anything changes: another program working on this series keeps its run, its jobs and its money
+        series_lock = SeriesLock(self.conn)
+        series_lock.acquire(self.run_id, self.lock_source)
+        try:
+            return self._run_locked()
+        finally:
+            series_lock.release()
+
+    def _run_locked(self) -> RunSummary:
         self._set_run_status("running")
         try:
             self.prepare()
