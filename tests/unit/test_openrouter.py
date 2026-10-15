@@ -201,3 +201,20 @@ def test_system_prompt_marked_for_caching_and_google_prefers_ai_studio():
     assert "order" not in other.get("provider", {})
     fal = FalOpenRouterClient("k").build_payload(req)  # not verified through fal: sent as before
     assert fal["messages"][0]["content"] == "rules" and "order" not in fal["provider"]
+
+
+def test_shared_rules_cached_and_the_batch_rules_after():
+    from ncte.llm.prompt_loader import load_prompt
+
+    p = load_prompt("translate")
+    a_shared, a_own = p.render_parts({"units": [], "narration": {"person": "third"}})
+    b_shared, b_own = p.render_parts({"units": [{"source": "⟦1⟧強調⟦/1⟧"}]})
+    assert a_shared == b_shared and "narration" not in a_shared and "## 翻譯規則" in a_shared
+    assert "`narration`" in a_own and "⟦數字⟧" in b_own and "`narration`" not in b_own
+    assert p.render_parts({"units": []})[1] == ""
+    system = a_shared + "\n" + a_own
+    req = LLMRequest(stage="translate", model="google/gemini-3.8-flash", schema_name="t", cached_prefix_chars=len(a_shared),
+                     messages=[{"role": "system", "content": system}, {"role": "user", "content": "{}"}])
+    parts = OpenRouterClient("k").build_payload(req)["messages"][0]["content"]
+    assert parts[0] == {"type": "text", "text": a_shared, "cache_control": {"type": "ephemeral"}}
+    assert parts[1]["text"].strip() == a_own.strip() and "cache_control" not in parts[1]

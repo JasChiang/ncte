@@ -23,6 +23,7 @@ class LLMRequest:
     prompt_version: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
     id_codes: dict[str, str] = field(default_factory=dict)  # short code → real id (never sent; for offline fakes)
+    cached_prefix_chars: int = 0  # the system prompt's first N characters are the same on every request (cacheable)
 
     def request_hash(self) -> str:
         blob = json.dumps({"model": self.model, "messages": self.messages, "schema": self.json_schema,

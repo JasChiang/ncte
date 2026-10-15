@@ -170,7 +170,12 @@ class OpenRouterClient:
         the user message after it. Only on direct OpenRouter: fal passing the marker on is not verified."""
         msgs: list[dict[str, Any]] = [dict(m) for m in req.messages]
         if self.name == "openrouter" and msgs and msgs[0].get("role") == "system" and isinstance(msgs[0]["content"], str):
-            msgs[0]["content"] = [{"type": "text", "text": msgs[0]["content"], "cache_control": {"type": "ephemeral"}}]
+            text = msgs[0]["content"]
+            cut = req.cached_prefix_chars if 0 < req.cached_prefix_chars < len(text) else len(text)
+            parts: list[dict[str, Any]] = [{"type": "text", "text": text[:cut], "cache_control": {"type": "ephemeral"}}]
+            if cut < len(text):  # this request's own rules and any correction, after the cached part
+                parts.append({"type": "text", "text": text[cut:]})
+            msgs[0]["content"] = parts
         return msgs
 
     def complete(self, req: LLMRequest) -> LLMResponse:

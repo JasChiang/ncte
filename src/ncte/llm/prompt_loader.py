@@ -49,6 +49,23 @@ class Prompt:
         out = _BLOCK.sub(keep, self.text)
         return re.sub(r"\n{3,}", "\n\n", out)
 
+    def render_parts(self, payload: dict[str, Any]) -> tuple[str, str]:
+        """(the rules every request shares, the rules this request's data needs). The shared part comes first so it
+        can be cached across requests (ADR-043); the conditional blocks follow in their original order."""
+        static = re.sub(r"\n{3,}", "\n\n", _BLOCK.sub("", self.text)).rstrip() + "\n"
+        whole = self.render(payload)
+        if whole.strip() == static.strip():
+            return static, ""
+        blob = json.dumps(payload, ensure_ascii=False)
+        kept = []
+        for m in _BLOCK.finditer(self.text):
+            conds = [c.strip() for c in m.group(1).split("|")]
+            if any((c.startswith("text:") and c[5:] in blob) or f'"{c}"' in blob for c in conds):
+                body = m.group(2).strip("\n")
+                if not body.startswith("## "):  # a section heading of its own is folded into the one below
+                    kept.append(body)
+        return static, "## 本批資料的附加說明（輸入欄位與規則）\n" + "\n".join(kept) + "\n"
+
 
 def prompts_dirs() -> list[Path]:
     dirs = []

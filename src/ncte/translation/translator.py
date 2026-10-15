@@ -143,7 +143,8 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
     """One logical LLM call with schema validation. Returns (parsed, request_id, mode_used)."""
     schema_model = SCHEMAS[stage.split(":")[0]]
     ids = ShortIds.for_payload(payload)  # the model reads and writes P1/C1… instead of long ids
-    system = prompt.render(payload)
+    shared, own = prompt.render_parts(payload)  # shared rules first (cached), this request's own after
+    system = shared + ("\n" + own if own else "")
     if correction:
         for long_id, code in ids.to_short.items():
             correction = correction.replace(long_id, code)
@@ -161,7 +162,7 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
                          structured_mode=current, temperature=cfg.openrouter.temperature,
                          max_tokens=max_tokens, prompt_version=prompt.version_id,
                          extra={"reasoning": rp} if (rp := reasoning_param(reasoning_setting(cfg, stage))) else {},
-                         id_codes=ids.to_long)
+                         id_codes=ids.to_long, cached_prefix_chars=len(shared))
         rid = recorder.start(req, unit_ids, est_cost)
         try:
             resp = client.complete(req)
