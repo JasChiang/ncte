@@ -198,6 +198,7 @@ class Batch:
     rows: list[sqlite3.Row]
     meta: bool = False
     scene_id: str | None = None
+    whole_scene: bool = False  # a part of a long scene: it sees the rest of the scene as context
 
     @property
     def unit_ids(self) -> list[str]:
@@ -208,8 +209,39 @@ class Batch:
         return sum(len(r["plain_text"]) for r in self.rows)
 
 
+MAX_UNITS_PER_SCENE_BATCH = 200
+
+
+def scene_batches(rows: list[sqlite3.Row], max_chars: int, *, position: dict[int, int] | None = None) -> list[Batch]:
+    """One batch per scene, the way a translator works: the whole exchange in view. A scene longer than ``max_chars``
+    (the model found no pause to cut it at) is split into as few, as even parts as possible, each cut between two
+    narration paragraphs when there is one nearby, and each part sees the rest of the scene."""
+    from ..analysis.scene import _calm
+
+    out: list[Batch] = []
+    for b in make_batches(rows, 10 ** 9, by_scene=True, position=position, max_units=MAX_UNITS_PER_SCENE_BATCH):
+        if b.meta or b.chars <= max_chars:
+            out.append(b)
+            continue
+        parts = -(-b.chars // max_chars)
+        sizes = [len(r["plain_text"]) for r in b.rows]
+        cuts: list[int] = []
+        run, want = 0, b.chars / parts
+        for i, n in enumerate(sizes):
+            run += n
+            if len(cuts) < parts - 1 and run >= want * (len(cuts) + 1) and 0 < i + 1 < len(b.rows):
+                near = sorted(range(max(1, i - 7), min(i + 9, len(b.rows))), key=lambda k: abs(k - (i + 1)))
+                j = next((k for k in near if _calm(b.rows[k], b.rows[k - 1])), i + 1)  # the nearest quiet point
+                if not cuts or j > cuts[-1]:
+                    cuts.append(j)
+        edges = [0, *cuts, len(b.rows)]
+        out += [Batch(b.rows[a:z], False, b.scene_id, whole_scene=True) for a, z in zip(edges, edges[1:], strict=False)
+                if z > a]
+    return out
+
+
 def make_batches(rows: list[sqlite3.Row], target: int, *, by_scene: bool = False,
-                 position: dict[int, int] | None = None) -> list[Batch]:
+                 position: dict[int, int] | None = None, max_units: int = MAX_UNITS_PER_BATCH) -> list[Batch]:
     """Group rows into batches. ``position`` maps ordinal → index among *all* translatable body units of the
     book; when given, a batch never spans a gap (units in between that are not being translated now), because
     the model would then see two distant paragraphs side by side without the text that connects them."""
@@ -223,7 +255,7 @@ def make_batches(rows: list[sqlite3.Row], target: int, *, by_scene: bool = False
         n = len(r["plain_text"])
         gap = bool(position and cur and not meta and cur[-1]["ordinal"] in position and r["ordinal"] in position
                    and position[r["ordinal"]] - position[cur[-1]["ordinal"]] > 1)
-        if cur and (gap or key != cur_key or cur_len + n > target or len(cur) >= MAX_UNITS_PER_BATCH):
+        if cur and (gap or key != cur_key or cur_len + n > target or len(cur) >= max_units):
             batches.append(Batch(cur, cur_key[2] if cur_key else False, cur_key[1] if cur_key else None))
             cur, cur_len = [], 0
         cur.append(r)
@@ -390,7 +422,7 @@ class Orchestrator:
                                        "note": "These are chapter titles / table-of-contents labels / book title."}
             else:
                 ctx = neighbor_context(self.conn, self.cfg, self.book.id, batch.rows, scene_id=batch.scene_id,
-                                       whole_scene=bool(self.opts.unit_ids))
+                                       whole_scene=bool(self.opts.unit_ids) or batch.whole_scene)
                 text += " " + " ".join(c["source"] for c in ctx["context_before"] + ctx["context_after"])
             ctx["glossary"] = glossary_payload(self.glossary, text, upto=(self.volume, batch.rows[-1]["ordinal"]),
                                                revealed=self.link_revealed)

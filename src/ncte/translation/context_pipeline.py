@@ -30,7 +30,7 @@ from ..llm.schemas import MemoryUpdateOutput, NamingOutput, SceneAnalysisOutput,
 from ..memory.db import Transaction, utcnow
 from ..memory.retrieval import memory_context
 from .context_builder import BODY_KINDS
-from .orchestrator import Batch, Orchestrator, make_batches
+from .orchestrator import Batch, Orchestrator, make_batches, scene_batches
 from .translator import call_structured
 
 VERIFY_BATCH = 25  # items per second-look request
@@ -241,8 +241,12 @@ class ContextOrchestrator(Orchestrator):
                 continue
             self.log(f"scene {sid} ({i + 1}/{len(scenes)})")
             self.stage_scene_analyze(sid)
-            self.run_batches(make_batches(pending, self.cfg.translation.unit_target_japanese_chars, by_scene=True,
-                                          position=positions), concurrency=1)
+            if self.cfg.translation.scene_max_chars:  # one request per scene, like a translator reading it whole
+                batches = scene_batches(pending, self.cfg.translation.scene_max_chars, position=positions)
+            else:
+                batches = make_batches(pending, self.cfg.translation.unit_target_japanese_chars, by_scene=True,
+                                       position=positions)
+            self.run_batches(batches, concurrency=1)
             self.stage_memory_update(sid)
             self.after_scene(sid)
 
