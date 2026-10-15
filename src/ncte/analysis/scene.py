@@ -33,7 +33,12 @@ class Scene:
     has_body: bool = False
 
 
-def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units: int) -> list[Scene]:
+def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units: int,
+                  breaks: dict[str, str] | None = None) -> list[Scene]:
+    """``breaks``: unit id → "llm" (a scene the model starts there) or "stretch" (a stretch the model divided: no
+    size cuts inside it up to twice the limit, ADR-036)."""
+    breaks = breaks or {}
+    decided = False
     scenes: list[Scene] = []
     per_spine: dict[int | None, int] = {}
     cur: Scene | None = None
@@ -53,8 +58,16 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
             reason = "heading"
         elif r["blank_before"] >= 2:
             reason = "blank_lines"
+        elif breaks.get(r["id"]) == "llm":
+            reason = "llm"
+        elif decided and len(cur.unit_ids) < max_units * 2:
+            reason = None
         elif len(cur.unit_ids) >= max_units and (_calm(r, prev_row) or len(cur.unit_ids) >= max_units + MAX_SIZE_SLACK):
             reason = "max_size"
+        if reason in ("document", "manual", "separator", "heading", "blank_lines"):
+            decided = False  # the author's marker ends a stretch
+        if breaks.get(r["id"]) == "stretch":
+            decided = True
         if reason:
             n = per_spine.get(r["spine_index"], 0) + 1
             per_spine[r["spine_index"]] = n
@@ -87,7 +100,9 @@ def segment_book(conn: sqlite3.Connection, cfg: Config, book_id: str) -> list[Sc
         "AND spine_index IS NOT NULL ORDER BY ordinal", (book_id, *BODY_KINDS)).fetchall()
     overrides = {r["unit_id"]: r["action"] for r in
                  conn.execute("SELECT unit_id, action FROM scene_overrides WHERE book_id=?", (book_id,))}
-    scenes = segment_units(rows, overrides, cfg.memory.max_scene_units)
+    breaks = {r["unit_id"]: r["origin"] for r in conn.execute("SELECT unit_id, origin FROM scene_breaks WHERE book_id=?",
+                                                              (book_id,))}
+    scenes = segment_units(rows, overrides, cfg.memory.max_scene_units, breaks)
     with Transaction(conn):
         existing = {r["id"]: r for r in conn.execute("SELECT * FROM scenes WHERE book_id=?", (book_id,))}
         conn.execute("UPDATE units SET scene_id=NULL WHERE book_id=?", (book_id,))

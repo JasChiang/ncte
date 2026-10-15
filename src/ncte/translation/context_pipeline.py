@@ -43,6 +43,49 @@ class ContextOrchestrator(Orchestrator):
         self.naming_prompt = load_prompt("naming")
 
     # ------------------------------------------------------------ jobs
+    def ensure_jobs(self) -> None:
+        with self.lock:
+            fresh = not self.conn.execute("SELECT 1 FROM jobs WHERE run_id=?", (self.run_id,)).fetchone()
+        if fresh and self.cfg.context.scene_breaks == "llm" and not self.opts.unit_ids:  # a sample (--limit-units) too
+            self.choose_scene_breaks()
+        super().ensure_jobs()
+
+    def choose_scene_breaks(self) -> None:
+        """Before anything is read (ADR-036): the model divides long stretches the author left undivided."""
+        from ..analysis import scene_breaks as sb
+        from ..analysis.scene import segment_book
+        from ..llm.schemas import SceneBreaksOutput
+
+        with self.lock:
+            if self.conn.execute("SELECT 1 FROM scenes WHERE book_id=? AND version>0 LIMIT 1", (self.book.id,)).fetchone() \
+                    or self.conn.execute("SELECT 1 FROM scene_breaks WHERE book_id=? LIMIT 1", (self.book.id,)).fetchone():
+                return  # already read (scene ids are in use) or already divided
+            todo = sb.stretches(self.conn, self.book.id)
+        if not todo:
+            return
+        prompt, size = load_prompt("scenes"), self.cfg.memory.max_scene_units
+        stats = {"stretches": len(todo), "breaks": 0, "kept_program_cuts": 0}
+        for rows in todo:
+            try:
+                parsed = self._llm("scenes", prompt, sb.payload(rows, size), [r["id"] for r in rows])
+            except FatalAPIError:
+                raise
+            except LLMError as exc:
+                self._finding(None, "scene_breaks_failed", "low", str(exc)[:300])
+                stats["kept_program_cuts"] += 1
+                continue
+            assert isinstance(parsed, SceneBreaksOutput)
+            ok = sb.check(rows, [b.unit_id for b in parsed.breaks], size)
+            if ok is None:
+                stats["kept_program_cuts"] += 1
+                continue
+            with self.lock:
+                sb.save(self.conn, self.book.id, rows, ok, {b.unit_id: b.reason for b in parsed.breaks})
+            stats["breaks"] += len(ok)
+        with self.lock:
+            segment_book(self.conn, self.cfg, self.book.id)
+        self.log(f"scene breaks: {stats}")
+
     def create_extra_jobs(self) -> None:
         scene_ids = [r["scene_id"] for r in self.conn.execute(
             "SELECT DISTINCT u.scene_id, MIN(u.ordinal) o FROM jobs j JOIN units u ON u.id=j.target_id WHERE "

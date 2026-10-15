@@ -82,6 +82,8 @@ class ContextConfig(_Strict):
     scene_analysis: bool = True  # LLM scene / speaker analysis (program-only quote analysis always runs)
     memory_update: bool = True  # LLM memory extraction after each scene
     include_memory: bool = True  # inject characters / summaries / facts into translation requests
+    # ADR-036: inside a long stretch the author did not divide, the model chooses where scenes begin (program: size)
+    scene_breaks: Literal["llm", "program"] = "llm"
     read_first: bool = True  # ADR-023: analyse + remember every scene first, then name, then translate
     # ADR-023/035: propose renderings; auto (default) = keep the model's choice after program checks and go on
     # (change them later in the web UI); review = pause for a person's choices

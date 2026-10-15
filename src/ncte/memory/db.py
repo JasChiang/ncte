@@ -477,6 +477,16 @@ CREATE TABLE character_gender (
     (13, "gender certainty: explicit (a word in the text says so) or inferred (speech style …)", """
 ALTER TABLE character_gender ADD COLUMN certainty TEXT NOT NULL DEFAULT 'explicit';
 """),
+    (14, "scene breaks chosen by the model inside long stretches without the author's markers (ADR-036)", """
+CREATE TABLE scene_breaks (
+    book_id TEXT NOT NULL,
+    unit_id TEXT NOT NULL,
+    reason TEXT,
+    origin TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (book_id, unit_id)
+);
+"""),
 ]
 
 

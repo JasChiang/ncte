@@ -226,6 +226,16 @@ class VerifyOutput(_M):
     items: list[VerifyItem]
 
 
+# ------------------------------------------------------------------ scene breaks (ADR-036)
+class SceneBreak(_M):
+    unit_id: str  # the first paragraph of a new scene
+    reason: str
+
+
+class SceneBreaksOutput(_M):
+    breaks: list[SceneBreak]
+
+
 SCHEMAS: dict[str, type[BaseModel]] = {
     "translate": TranslationBatchOutput,
     "scene_analyze": SceneAnalysisOutput,
@@ -233,6 +243,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "naming": NamingOutput,
     "review": ReviewOutput,
     "verify": VerifyOutput,
+    "scenes": SceneBreaksOutput,
 }
 
 

@@ -78,6 +78,11 @@ def default_verify(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     return {"items": []}
 
 
+def default_scenes(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+    """No opinion: the program's own cuts stay."""
+    return {"breaks": []}
+
+
 DEFAULTS: dict[str, Responder] = {
     "translate": default_translate,
     "scene_analyze": default_scene_analyze,
@@ -85,6 +90,7 @@ DEFAULTS: dict[str, Responder] = {
     "naming": default_naming,
     "review": default_review,
     "verify": default_verify,
+    "scenes": default_scenes,
 }
 
 
