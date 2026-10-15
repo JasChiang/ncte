@@ -487,6 +487,19 @@ CREATE TABLE scene_breaks (
     PRIMARY KEY (book_id, unit_id)
 );
 """),
+    (15, "how a form found in someone's line is used: address / mention / self / quoted / unrelated (ADR-037)", """
+CREATE TABLE address_usage (
+    book_id TEXT NOT NULL,
+    speaker_id TEXT NOT NULL,
+    addressee_id TEXT NOT NULL,
+    form_ja TEXT NOT NULL,
+    usage TEXT NOT NULL,
+    reason TEXT,
+    origin TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (speaker_id, addressee_id, form_ja)
+);
+"""),
 ]
 
 

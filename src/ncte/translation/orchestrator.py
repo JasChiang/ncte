@@ -55,6 +55,7 @@ class RunOptions:
     review_only: bool = False
     naming_only: bool = False  # ADR-023: `ncte names propose` (context mode, read pass already done)
     gender_only: bool = False  # `ncte names gender-scan` (context mode, read pass already done)
+    address_only: bool = False  # `ncte names address-check` (ADR-037, read pass already done)
 
 
 @dataclass
@@ -486,6 +487,8 @@ class Orchestrator:
                 self.propose_names()
             elif self.opts.gender_only:
                 self.scan_genders()
+            elif self.opts.address_only:
+                self.classify_address()
             else:
                 self.ensure_jobs()
                 self.execute()
@@ -545,6 +548,9 @@ class Orchestrator:
 
     def propose_names(self) -> None:
         raise NCTEError("naming proposals need context mode")
+
+    def classify_address(self) -> None:
+        raise NCTEError("address check needs context mode")
 
     def scan_genders(self) -> None:
         raise NCTEError("gender scan needs context mode")

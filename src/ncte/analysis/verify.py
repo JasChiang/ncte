@@ -3,7 +3,9 @@
 Only what the first pass left in doubt is asked again, with the surrounding text: lines whose speaker the model and
 the program disagreed on (the model's answer was kept as ``inferred``) or that ended ``unknown`` because adjacent
 narration pointed at someone else, genders known only by inference, and characters merged when a name was
-revealed. The answers never become facts: a speaker stays ``inferred``; a doubtful inferred gender is dropped (the
+revealed, and every form of address the program found by matching a name in someone's line (ADR-037: is it calling
+that person, talking about them, the speaker about themselves, a quote of what others call them, or a word that only
+looks like the name?). The answers never become facts: a speaker stays ``inferred``; a doubtful inferred gender is dropped (the
 translation then uses 你); a merge judged "different" stops counting the merged description as this character
 (its forms leave the aliases) and becomes a finding for the user — lines moved by the merge are not moved back.
 """
@@ -21,6 +23,8 @@ from ..memory.db import utcnow
 
 CONTEXT_UNITS = 4  # paragraphs before and after a disputed line
 MAX_ITEMS = 150
+MAX_ADDRESS_ITEMS = 300  # forms found by the program's string match (ADR-037)
+ADDRESS_LINES = 2  # lines shown per form
 
 
 def _names(conn: sqlite3.Connection, book_id: str) -> dict[str, str]:
@@ -77,7 +81,33 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
         items.append({"ref": f"m:{c['id']}", "kind": "merge", "name": c["canonical_name"], "merged_forms": others,
                       "context": _window(conn, book_id, link["revealed_ordinal"] or c["known_from_ordinal"]),
                       "_ordinal": link["revealed_ordinal"]})
-    return items[:MAX_ITEMS]
+    items = items[:MAX_ITEMS]
+    items += address_items(conn, book_id, names)[:MAX_ADDRESS_ITEMS]
+    return items
+
+
+def address_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]) -> list[dict[str, Any]]:
+    """Forms the program matched (not confirmed by the memory model, not a person's choice, not classified yet)."""
+    from ..memory.address import usage_of
+
+    out = []
+    for a in conn.execute("SELECT * FROM address_terms WHERE book_id=? AND origin='program' AND uses>0 AND "
+                          "(zh_origin IS NULL OR zh_origin!='human') ORDER BY uses DESC", (book_id,)).fetchall():
+        if usage_of(conn, a) is not None or a["speaker_id"] not in names or a["addressee_id"] not in names:
+            continue
+        lines = []
+        for r in conn.execute("SELECT ut.quote_text, un.ordinal FROM address_observations o JOIN utterances ut ON "
+                              "ut.id=o.utterance_id JOIN units un ON un.id=ut.unit_id WHERE o.address_id=? ORDER BY "
+                              "un.ordinal LIMIT ?", (a["id"], ADDRESS_LINES)):
+            lines.append({"quote": match_text(r["quote_text"])[:160], "context": _window(conn, book_id, r["ordinal"])[1:-1]})
+        if not lines and a["evidence_quote"]:
+            lines.append({"quote": match_text(a["evidence_quote"])[:160], "context": []})
+        if not lines:
+            continue
+        out.append({"ref": f"a:{a['id']}", "kind": "address", "speaker": names[a["speaker_id"]],
+                    "person": names[a["addressee_id"]], "form": a["form_ja"],
+                    "self": a["speaker_id"] == a["addressee_id"], "lines": lines})
+    return out
 
 
 def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], parsed: VerifyOutput,
@@ -88,6 +118,7 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
     by_ref = {i["ref"]: i for i in items}
     stats = {"speakers_changed": 0, "speakers_unknown": 0, "speakers_kept": 0, "genders_dropped": 0,
              "genders_kept": 0, "merges_doubted": 0, "ignored": 0}
+    from ..memory.address import USAGES, set_usage
     scenes: set[str] = set()
     for a in parsed.items:
         item = by_ref.get(a.ref)
@@ -127,6 +158,13 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
                 conn.execute("DELETE FROM character_gender WHERE character_id=? AND origin='llm' AND certainty='inferred'",
                              (key,))
                 stats["genders_dropped"] += 1
+        elif kind == "a":
+            row = conn.execute("SELECT * FROM address_terms WHERE id=?", (int(key),)).fetchone()
+            if row is None or answer not in USAGES:
+                stats["ignored"] += 1
+                continue
+            set_usage(conn, book_id, row, answer, a.reason)
+            stats[f"address_{answer}"] = stats.get(f"address_{answer}", 0) + 1
         elif kind == "m":
             if answer != "same":
                 unit = conn.execute("SELECT id FROM units WHERE book_id=? AND ordinal=?",

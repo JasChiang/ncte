@@ -667,6 +667,23 @@ def names_gender_scan(epub: Annotated[str, typer.Argument()],
     typer.echo(f"see: ncte names gender {epub}")
 
 
+@names_app.command("address-check")
+def names_address_check(epub: Annotated[str, typer.Argument()],
+                        budget_usd: Annotated[float, typer.Option("--budget-usd")] = 0.5,
+                        fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
+    """Have the model classify forms of address the program found by name matching (ADR-037), for a book already read:
+    calling the person, talking about them, the speaker about themselves, quoting others, or unrelated."""
+    from .cli import _run
+    from .translation.orchestrator import RunOptions
+
+    cfg = state.cfg
+    book = _book(epub)
+    opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
+                      client="fake" if fake else "openrouter", address_only=True)
+    _run(book, opts, fake=fake, cfg=cfg)
+    typer.echo(f"see: ncte names address {epub}")
+
+
 @names_app.command("gender")
 def names_gender(epub: Annotated[str, typer.Argument()],
                  who: Annotated[str | None, typer.Argument(help="character name or id; omit to list")] = None,

@@ -248,12 +248,16 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
             out[cid]["gender"] = {"g": g["gender"], "sure": "human" if g["origin"] == "human" else g["certainty"],
                                   "quote": RUBY.sub("", g["evidence_quote"] or ""),
                                   "at": g["ordinal"] if vols.get(g["book_id"], 1.0) == here else -1}
+    from ..memory.address import usage_of
+
     address = []
     for a in conn.execute(f"SELECT * FROM address_terms WHERE {SERIES_SCOPE} ORDER BY uses DESC", (book.id,)):
         v = vols.get(a["book_id"], 1.0)
-        if v > here:  # first used in a later volume: not known while reading this one
+        usage = usage_of(conn, a)
+        if v > here or usage == "unrelated":  # later volume: not known yet; a look-alike word: not a form at all
             continue
         address.append({"speaker": a["speaker_id"], "to": a["addressee_id"], "ja": a["form_ja"], "zh": a["form_zh"],
+                        "usage": usage,
                         "uses": a["uses"], "at": a["first_ordinal"] if v == here else -1,
                         "certainty": a["certainty"], "origin": a["zh_origin"]})
     return {"characters": out, "address": address, "scenes": st["scenes"], "chapters": st["chapters"]}

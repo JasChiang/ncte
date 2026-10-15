@@ -438,7 +438,7 @@ function byPerson(list, key, label) {
   return [...groups.entries()].sort((x, y) => total(y[1]) - total(x[1])).map(([k, forms]) =>
     `<div class="addr-row"><div class="addr-who">${label(k)}</div><div class="addr-forms">${forms.sort((x, y) => y.uses - x.uses).map(a =>
       `<span class="form-tag"><span class="ja">${esc(a.ja)}</span><span class="zh">${a.zh ? esc(a.zh)
-        : '<span class="muted" title="只出現一次的稱呼不固定譯法，翻譯時依名字的譯名與當下語境決定">依上下文</span>'}</span><span class="n">×${a.uses}</span></span>`).join("")}</div></div>`).join("");
+        : '<span class="muted" title="只出現一次的稱呼不固定譯法，翻譯時依名字的譯名與當下語境決定">依上下文</span>'}</span><span class="n">×${a.uses}</span>${a.usage === "mention" ? '<span class="n" title="談到不在對話中的人，不是當面叫">提到</span>' : a.usage === "quoted" ? '<span class="n" title="轉述別人怎麼叫，不是他自己這樣叫">轉述</span>' : ""}</span>`).join("")}</div></div>`).join("");
 }
 function genderLine(p, upto) {
   // gender as known at the slider position: explicit (a word in the text), inferred (tone), or set by you

@@ -48,11 +48,13 @@ def test_second_look_changes_speaker_drops_doubtful_gender_and_flags_merge(conn,
                 out.append({"ref": it["ref"], "answer": "unknown", "reason": "no word says so"})
             elif it["kind"] == "merge":
                 out.append({"ref": it["ref"], "answer": "different", "reason": "test"})
+            elif it["kind"] == "address":
+                out.append({"ref": it["ref"], "answer": "unrelated" if it["self"] else "address", "reason": "test"})
         return {"items": out}
 
     fake = FakeLLM(responders={**RESPONDERS, "scene_analyze": _analyze, "memory_update": _memory, "verify": verify})
     run_book(conn, cfg, fixtures["basic"], fake, mode="context")
-    assert {it["kind"] for it in seen} == {"speaker", "gender", "merge"}
+    assert {it["kind"] for it in seen} == {"speaker", "gender", "merge", "address"}
     assert all(not k.startswith("_") for it in seen for k in it)
     line = conn.execute("SELECT u.*, c.canonical_name FROM utterances u JOIN characters c ON c.id=u.speaker_id_nullable "
                         "WHERE u.quote_text LIKE '%カイト、遅いですよ%'").fetchone()
@@ -77,3 +79,46 @@ def test_nothing_in_doubt_means_no_request(conn, cfg, fixtures):
 
     run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "verify": verify}), mode="context")
     assert all(p["items"] for p in calls)  # a request only when something is in doubt
+
+
+def test_forms_found_by_string_match_are_classified_before_naming(conn, cfg, fixtures):
+    """ADR-037: a program-matched form gets a second look; a look-alike word is never given onwards."""
+    from ncte.memory.address import context_items, usage_of
+
+    asked = []
+
+    def verify(payload, req):
+        out = []
+        for it in payload["items"]:
+            if it["kind"] == "address":
+                asked.append(it)
+                out.append({"ref": it["ref"], "answer": "unrelated", "reason": "test: not about the person"})
+        return {"items": out}
+
+    fake = FakeLLM(responders={**RESPONDERS, "verify": verify})
+    run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    assert asked and all(it["lines"] and it["form"] for it in asked)
+    rows = conn.execute("SELECT * FROM address_terms WHERE origin='program'").fetchall()
+    assert rows and all(usage_of(conn, r) == "unrelated" for r in rows if r["uses"] > 0)
+    book = conn.execute("SELECT id FROM books").fetchone()[0]
+    names = {r["id"]: r["canonical_name"] for r in conn.execute("SELECT * FROM characters")}
+    forms = {r["form_ja"] for r in rows}
+    items = context_items(conn, book, 10**6, "".join(forms), set(names), names)
+    assert not ({x["ja"] for x in items} & forms - {r["form_ja"] for r in conn.execute(
+        "SELECT form_ja FROM address_terms WHERE origin!='program' OR zh_origin='human'")})
+    naming_calls = [c for c in fake.calls if c.stage == "naming"]
+    for c in naming_calls:  # nothing to render for them either
+        import json
+        assert not ({a["ja"] for a in json.loads(c.messages[-1]["content"]).get("address", [])} & forms)
+
+
+def test_address_check_command_for_a_book_already_read(tmp_path, fixtures):
+    from typer.testing import CliRunner
+
+    from ncte.cli import app
+
+    ws, epub, r = tmp_path / "ws", str(fixtures["basic"]), CliRunner()
+    assert r.invoke(app, ["-w", str(ws), "translate", epub, "--fake", "--mode", "context"]).exit_code == 0
+    out = r.invoke(app, ["-w", str(ws), "names", "address-check", epub, "--fake"])
+    assert out.exit_code == 0, out.output
+    assert "address check:" in out.output

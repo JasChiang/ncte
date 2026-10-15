@@ -210,6 +210,30 @@ class ContextOrchestrator(Orchestrator):
         self._set_job("verify", self.book.id, "succeeded", None, stats)
         self.log(f"second look: {stats}")
 
+    def classify_address(self) -> None:
+        """``ncte names address-check``: the ADR-037 look at program-matched forms for a book already read."""
+        from ..analysis import verify
+
+        with self.lock:
+            names = verify._names(self.conn, self.book.id)
+            items = verify.address_items(self.conn, self.book.id, names)
+        stats: dict[str, int] = {"items": len(items)}
+        prompt = load_prompt("verify")
+        for i in range(0, len(items), VERIFY_BATCH):
+            chunk = items[i:i + VERIFY_BATCH]
+            try:
+                parsed = self._llm("verify", prompt, {"task": "verify", "items": chunk}, [])
+            except FatalAPIError:
+                raise
+            except LLMError as exc:
+                self._finding(None, "verify_failed", "low", str(exc)[:400])
+                continue
+            assert isinstance(parsed, VerifyOutput)
+            with self.lock, Transaction(self.conn):
+                for k, v in verify.apply(self.conn, self.book.id, chunk, parsed, self._finding).items():
+                    stats[k] = stats.get(k, 0) + v
+        self.log(f"address check: {stats}")
+
     def naming_pass(self) -> bool:
         """Pass 2: propose renderings. False when the run stops here for the user's choices."""
         if self.cfg.context.naming == "off":

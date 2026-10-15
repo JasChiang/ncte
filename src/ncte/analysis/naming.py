@@ -111,12 +111,12 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
     done_a = _proposed(conn, "address")
     where, ids = scope_clause(conn, book_id)
     address = []
-    from ..memory.address import _PRONOUNS, decided_variants
+    from ..memory.address import _PRONOUNS, NOT_USED, decided_variants, usage_of
 
     for a in conn.execute(f"SELECT * FROM address_terms WHERE {where} AND (zh_origin IS NULL OR zh_origin!='human') "
                           "AND uses>0 AND (book_id=? OR last_book_id=?) ORDER BY uses DESC", (*ids, book_id, book_id)):
-        if str(a["id"]) in done_a:
-            continue
+        if str(a["id"]) in done_a or usage_of(conn, a) in NOT_USED or a["speaker_id"] == a["addressee_id"]:
+            continue  # nothing to render for a quote of others / a look-alike word; one's own name is the name's
         address.append({"ref": str(a["id"]), "speaker": who.get(a["speaker_id"], a["speaker_id"]),
                         **({"pronoun": True} if a["form_ja"] in _PRONOUNS else {}),
                         "to": "（自稱）" if a["speaker_id"] == a["addressee_id"] else who.get(a["addressee_id"], a["addressee_id"]),
@@ -286,11 +286,11 @@ def flag_collisions(conn: sqlite3.Connection, book_id: str) -> int:
     where, ids = scope_clause(conn, book_id)
     rows = conn.execute(f"SELECT * FROM address_terms WHERE {where} AND form_zh IS NOT NULL", ids).fetchall()
     groups: dict[tuple[str, str], list[sqlite3.Row]] = {}
-    from ..memory.address import _PRONOUNS
+    from ..memory.address import _PRONOUNS, NOT_USED, usage_of
 
     for r in rows:
         if r["speaker_id"] == r["addressee_id"] or r["form_zh"] == who.get(r["addressee_id"]) \
-                or r["form_ja"] in _PRONOUNS:  # 「あんた」「お前」 to the same girl are both 「妳」: no distinction lost
+                or r["form_ja"] in _PRONOUNS or usage_of(conn, r) in NOT_USED:  # 「あんた」「お前」 to the same girl are both 「妳」: no distinction lost
             continue
         groups.setdefault((r["addressee_id"], r["form_zh"]), []).append(r)
     n = 0

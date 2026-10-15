@@ -237,6 +237,23 @@ def harvest_book(conn: sqlite3.Connection, book_id: str) -> int:
 
 
 DECIDED = ("human", "naming")
+# ADR-037: what the second look said a form in someone's line is. A quote of what others call him (「閣下と呼んでいた奴」)
+# or a word that only looks like a name (「欲張り最強セット」) is not how the speaker calls anyone: never given onwards.
+USAGES = ("address", "mention", "self", "quoted", "unrelated")
+NOT_USED = ("quoted", "unrelated")
+
+
+def usage_of(conn: sqlite3.Connection, r: sqlite3.Row) -> str | None:
+    row = conn.execute("SELECT usage FROM address_usage WHERE speaker_id=? AND addressee_id=? AND form_ja=?",
+                       (r["speaker_id"], r["addressee_id"], r["form_ja"])).fetchone()
+    return row[0] if row else None
+
+
+def set_usage(conn: sqlite3.Connection, book_id: str, r: sqlite3.Row, usage: str, reason: str, origin: str = "verify",
+              ) -> None:
+    conn.execute("INSERT OR REPLACE INTO address_usage(book_id, speaker_id, addressee_id, form_ja, usage, reason, "
+                 "origin, created_at) VALUES (?,?,?,?,?,?,?,?)",
+                 (book_id, r["speaker_id"], r["addressee_id"], r["form_ja"], usage, reason[:200], origin, utcnow()))
 
 
 def visible_terms(conn: sqlite3.Connection, book_id: str, horizon: int, text: str | None = None,
@@ -258,6 +275,8 @@ def visible_terms(conn: sqlite3.Connection, book_id: str, horizon: int, text: st
             continue
         if t is not None and r["form_ja"] not in t and not (
                 speakers and r["speaker_id"] in speakers and present is not None and r["addressee_id"] in present):
+            continue
+        if r["zh_origin"] != "human" and usage_of(conn, r) in NOT_USED:
             continue
         out.append(r)
     return sorted(out, key=lambda r: (vols.get(r["book_id"], 1.0), r["first_ordinal"]))
@@ -284,6 +303,8 @@ def context_items(conn: sqlite3.Connection, book_id: str, horizon: int, text: st
             item["same_nickname_decided"] = rel
         if r["certainty"] == "inferred":
             item["certainty"] = "inferred"
+        if (u := usage_of(conn, r)) in ("mention", "self"):
+            item["usage"] = u  # talked about, not called (ADR-037)
         if r["note"]:
             item["note"] = r["note"]
         out.append(item)
