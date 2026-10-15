@@ -97,7 +97,7 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
                 add("japanese_residue", "error", f"kana left in output: {''.join(stray)[:20]} — write it in Chinese "
                                                  f"(a small ッ/っ before !! is just dropped)")
             else:
-                add("japanese_residue", "medium", f"kana kept from the source (a name?): {'、'.join(kept)[:30]}")
+                add("japanese_residue", "low", f"kana kept from the source (a name?): {'、'.join(kept)[:30]}")
 
     if ruby_count and RUBY_LEAK_RE.search(text):
         add("ruby_notation_leak", "medium", RUBY_LEAK_RE.search(text).group(0))  # type: ignore[union-attr]

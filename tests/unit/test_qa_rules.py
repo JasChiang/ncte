@@ -27,7 +27,7 @@ def test_warnings():
     assert ("too_short", "high") in run("あ" * 40, "啊")
     assert run("　魔《ま》導《どう》車《しや》。", "　魔導車。", ruby=3) == set()  # readings are not counted
     assert ("japanese_residue", "error") in run("「王命が下されていますッ!!」", "「已經下達王命了ッ!!」")  # one is enough
-    assert ("japanese_residue", "medium") in run("藤木わしろでございます。", "我是藤木わしろ。")  # a name kept whole
+    assert ("japanese_residue", "low") in run("藤木わしろでございます。", "我是藤木わしろ。")  # a name kept whole: a note
     assert ("quote_mismatch", "medium") in run("「あいうえお、かきくけこ」", "啊咿嗚欸喔，咖嘰咕")
     assert ("quote_mismatch", "low") in run("アルテインという国", "「阿爾汀」這個國家")  # a pair added for emphasis
     assert ("non_taiwan_glyph", "error") in run("これは国です", "这是国家")  # slid into Simplified: retried
