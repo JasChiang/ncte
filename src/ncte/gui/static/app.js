@@ -436,7 +436,7 @@ function byPerson(list, key, label) {
   list.forEach(a => { const k = key(a); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(a); });
   return [...groups.entries()].sort((x, y) => y[1].reduce((n, a) => n + a.uses, 0) - x[1].reduce((n, a) => n + a.uses, 0))
     .map(([k, forms]) => `<div style="margin-bottom:3px">${label(k)} ${forms.sort((x, y) => y.uses - x.uses).map(a =>
-      `<span class="ja">${esc(a.ja)}</span>（${esc(a.zh || "")}）<span class="muted small">×${a.uses}</span>`).join("・")}</div>`).join("");
+      `<span class="ja">${esc(a.ja)}</span>（${a.zh ? esc(a.zh) : '<span class="muted" title="只出現一次的稱呼不固定譯法，翻譯時依名字的譯名與當下語境決定">依上下文</span>'}）<span class="muted small">×${a.uses}</span>`).join("・")}</div>`).join("");
 }
 function genderLine(p, upto) {
   // gender as known at the slider position: explicit (a word in the text), inferred (tone), or set by you
