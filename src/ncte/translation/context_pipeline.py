@@ -42,17 +42,36 @@ class ContextOrchestrator(Orchestrator):
         self.memory_prompt = load_prompt("memory_update")
         self.naming_prompt = load_prompt("naming")
 
+    def narration(self) -> str | None:
+        if not hasattr(self, "_narration"):
+            from ..analysis.narration import person
+
+            with self.lock:
+                self._narration = person(self.conn, self.book.id)
+        return self._narration
+
     def process_batch(self, batch: Batch) -> dict[str, int]:
         counts = super().process_batch(batch)
+        from ..analysis.narration import first_person_slip
         from ..qa import second_person
+
+        third = self.narration() == "third" and not batch.meta
 
         with self.lock, Transaction(self.conn):
             for r in batch.rows:
                 t = self.conn.execute("SELECT id, text FROM translations WHERE unit_id=? AND run_id=? ORDER BY id DESC "
                                       "LIMIT 1", (r["id"], self.run_id)).fetchone()
-                ev = second_person.check(self.conn, self.book.id, r, t["text"]) if t is not None else None
-                if ev:  # the scene's review looks at it with the context and fixes it
-                    self._finding(r["id"], "second_person_gender", "high", ev)
+                if t is None:
+                    continue
+                found = []
+                if ev := second_person.check(self.conn, self.book.id, r, t["text"]):
+                    found.append(("second_person_gender", ev))
+                if third and first_person_slip(r["plain_text"], t["text"]):
+                    found.append(("narration_first_person", "the narration is third person, but this paragraph says 我 "
+                                  "outside quotes: use the focal character's name, 他／她, or leave the subject out"))
+                for typ, ev in found:  # the scene's review looks at it with the context and fixes it
+                    self._finding(r["id"], typ, "high", ev)
+                if found:
                     self.conn.execute("UPDATE translations SET status='needs_review' WHERE id=?", (t["id"],))
         return counts
 
@@ -523,6 +542,8 @@ class ContextOrchestrator(Orchestrator):
             mem = memory_context(self.conn, self.book.id, scene=scene, batch_rows=batch.rows,
                                  max_evidence=self.cfg.memory.max_retrieved_evidence)
         ctx.update(mem)
+        if (who := self.narration()) is not None:  # ADR-040: whose voice the narration is
+            ctx["narration"] = who
         if ctx.get("address_terms") and ctx.get("glossary"):
             ctx["glossary"] = drop_address_forms(ctx["glossary"], ctx["address_terms"])
         if "style" in ctx:  # voice notes also for characters present in the scene but not named in the batch

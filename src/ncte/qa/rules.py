@@ -28,7 +28,11 @@ NUM_RE = re.compile(r"\d+")
 # and Japanese shinjitai forms that differ from the Taiwanese standard.
 NON_TW_GLYPHS = set(
     "这们说话时对见没还让发样爱书东车门问间开关头过应该实现动学习经买卖钱气电万与为从乐个写吗页颜听觉记认识谁请饭鸡鱼马鸟龙岛剑灵战杀伤恋梦惊么"
-    "気歩変実単戦剣様図広読売続関鉄声楽薬処拠払帰隠険験駅桜壊懐黒覚権歳円")
+    "気歩変実単戦剣様図広読売続関鉄声楽薬処拠払帰隠険験駅桜壊懐黒覚権歳円竜")
+# Japanese shinjitai → the Taiwanese form (never right in the translation, even when the source has them)
+JA_TO_TW = dict(zip("竜気剣戦様図読続関鉄声楽薬処帰険験駅壊黒覚歳歩変実単広売拠払隠懐権",
+                    "龍氣劍戰樣圖讀續關鐵聲樂藥處歸險驗驛壞黑覺歲步變實單廣賣據拂隱懷權", strict=True))
+ALWAYS_CHINESE = set(JA_TO_TW)
 PLAIN_KINDS = {"head_title", "ncx", "opf_title"}
 # Chinese slurs / strongly derogatory words that a literal rendering can produce by accident
 # (黒鬼 "black ogre" → 黑鬼, a racial slur in Chinese). Flagged for human review, never auto-fixed.
@@ -79,7 +83,11 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
 
     kana_src = KANA_RE.findall(vis_src)
     if text.strip() == source_text.strip() and kana_src:
-        add("untranslated", "error", "translation identical to Japanese source")
+        if len(vis_src) <= 10 and re.search(r"[\u4e00-\u9fff]", vis_src) and not re.search(r"[。、！？!?「」]", vis_src):
+            # a name kept as is (the author's signature 藤木わしろ)
+            add("untranslated", "low", "kept as in the source (a name?)")
+        else:
+            add("untranslated", "error", "translation identical to Japanese source")
     else:
         residue = vis
         for w in allowed_kana:
@@ -125,12 +133,20 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
     if nums_src - nums_out:
         add("number_mismatch", "low", f"numbers missing in output: {sorted(nums_src - nums_out)}")
 
+    # an English word the source does not have (「唯一對等 peer 的存在」): a leftover of the model's own thinking
+    latin = sorted({w for w in re.findall(r"[A-Za-z]{3,}", PH_RE.sub("", text))
+                    if w.lower() not in unicodedata.normalize("NFKC", source_text).lower()})
+    if latin:
+        add("latin_word", "high", f"English word(s) not in the source: {', '.join(latin)[:60]}")
+
     canto = sorted({ch for ch in vis if ch in CANTONESE_CHARS} | {w for w in CANTONESE_WORDS if w in vis})
     if canto:
         add("cantonese", "error", f"Cantonese wording {'、'.join(canto)}: use natural Taiwan Mandarin (render dialects "
                                   f"such as Kansai-ben through tone and word choice, not Cantonese)")
     bad = sorted({ch for ch in vis if ch in NON_TW_GLYPHS})
-    drift = [ch for ch in bad if ch not in vis_src]  # not copied from the source: the output slid into Simplified
+    # not copied from the source: the output slid into Simplified; a Japanese form with a Chinese one (竜→龍, 剣→劍)
+    # is wrong even when the source has it — only 円/桜-like forms that a name or currency may keep are excused
+    drift = [ch for ch in bad if ch not in vis_src or ch in ALWAYS_CHINESE]
     if drift:
         add("non_taiwan_glyph", "error", f"simplified/Japanese glyphs {''.join(drift)}: write the whole unit in "
                                          f"Taiwan Traditional Chinese")

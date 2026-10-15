@@ -12,7 +12,7 @@ from .rules import Finding, check_translation, worst
 
 QA_TYPES = ("empty_translation", "placeholder_error", "untranslated", "japanese_residue", "ruby_notation_leak",
             "too_short", "too_long", "quote_mismatch", "number_mismatch", "non_taiwan_glyph", "glossary_mismatch",
-            "possible_added_name", "cantonese", "offensive_term", "name_form_substitution", "second_person_gender")
+            "possible_added_name", "cantonese", "offensive_term", "name_form_substitution", "second_person_gender", "narration_first_person", "latin_word")
 
 
 def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
@@ -22,6 +22,10 @@ def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
     gl = glossary_entries(conn, book_id)
     best = latest_texts(conn, book_id)
     stats = {"checked": 0, "cleared": 0, "newly_flagged": 0, "still_flagged": 0}
+    from ..analysis.narration import first_person_slip, person
+    from ..epub.matter import story_hrefs
+
+    third, story = person(conn, book_id) == "third", story_hrefs(conn, book_id)
     units = {r["id"]: r for r in conn.execute("SELECT * FROM units WHERE book_id=?", (book_id,))}
     ph = ",".join("?" * len(QA_TYPES))
     with Transaction(conn):
@@ -36,6 +40,8 @@ def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
                 (uid,))}
             if (ev := second_person.check(conn, book_id, units[uid], t["text"])):
                 f.append(Finding("second_person_gender", "high", ev, uid))
+            if third and units[uid]["resource_href"] in story and first_person_slip(units[uid]["plain_text"], t["text"]):
+                f.append(Finding("narration_first_person", "high", "third-person narration says 我 outside quotes", uid))
             f = [x for x in f if (x.type, x.evidence) not in settled]
             conn.execute(f"UPDATE qa_findings SET status='superseded' WHERE unit_id=? AND status='open' AND type IN ({ph})",
                          (uid, *QA_TYPES))

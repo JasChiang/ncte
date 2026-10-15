@@ -40,3 +40,12 @@ def test_a_description_is_not_a_name():
         assert _is_description(d), d
     for n in ("オリビア", "シルヴァード", "ユールシア", "安達", "しまむら", "あだっち", "ファレグ", "大司教モルト"):
         assert not _is_description(n), n
+
+
+def test_narration_person_slip():
+    from ncte.analysis.narration import first_person_slip
+
+    assert first_person_slip("　村長の後を追って邸宅内に入る。", "和平常一樣互相鬥嘴幾句後，我跟在村長身後走進了宅邸內。")
+    assert not first_person_slip("　その場に敵味方はない。", "在那種情況下無關敵我。")
+    assert not first_person_slip("「俺がレイドだ」", "「我就是雷德」")
+    assert not first_person_slip("　彼は言った。", "他說：「我會去的。」")

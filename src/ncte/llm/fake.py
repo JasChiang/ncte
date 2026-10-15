@@ -31,7 +31,9 @@ Responder = Callable[[dict[str, Any], LLMRequest], dict[str, Any]]
 
 
 def fake_translate_text(src: str, glossary: list[dict[str, Any]]) -> str:
-    out = RUBY.sub("", src)
+    from ..qa.rules import JA_TO_TW
+
+    out = RUBY.sub("", src).translate({ord(k): v for k, v in JA_TO_TW.items()})
     for g in sorted(glossary, key=lambda g: -len(g.get("ja", ""))):
         if g.get("ja"):
             out = out.replace(g["ja"], g.get("zh", g["ja"]))

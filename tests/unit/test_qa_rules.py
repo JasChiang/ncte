@@ -28,6 +28,10 @@ def test_warnings():
     assert run("　魔《ま》導《どう》車《しや》。", "　魔導車。", ruby=3) == set()  # readings are not counted
     assert ("japanese_residue", "error") in run("「王命が下されていますッ!!」", "「已經下達王命了ッ!!」")  # one is enough
     assert ("japanese_residue", "low") in run("藤木わしろでございます。", "我是藤木わしろ。")  # a name kept whole: a note
+    assert ("untranslated", "low") in run("藤木わしろ", "藤木わしろ")  # an author's signature
+    assert ("latin_word", "high") in run("唯一対等な存在だ", "是唯一對等 peer 的存在")
+    assert run("ＭＭＯのレイドボス", "MMO的團隊副本首領") == set()  # in the source (full width) too
+    assert ("non_taiwan_glyph", "error") in run("武装竜", "武裝竜")
     assert ("quote_mismatch", "medium") in run("「あいうえお、かきくけこ」", "啊咿嗚欸喔，咖嘰咕")
     assert ("quote_mismatch", "low") in run("アルテインという国", "「阿爾汀」這個國家")  # a pair added for emphasis
     assert ("non_taiwan_glyph", "error") in run("これは国です", "这是国家")  # slid into Simplified: retried
