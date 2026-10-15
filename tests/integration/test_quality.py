@@ -161,7 +161,7 @@ def test_context_mode_interleaved_when_read_first_off(conn, cfg, fixtures, seede
     assert s.status == "completed"
     stages = [c.stage for c in fake.calls]
     first_review = stages.index("review")
-    assert stages[first_review - 1] in ("memory_update", "translate")
+    assert stages[first_review - 1] in ("memory_update", "translate", "confirm")  # rule flags are checked first
     assert "scene_analyze" in stages[first_review:]
 
 
