@@ -171,6 +171,20 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
     refresh_profiles(conn, keep["book_id"])
 
 
+def drop_aliases(conn: sqlite3.Connection, character_id: str, forms: list[str]) -> None:
+    """These forms no longer name the character (a merge judged wrong): out of its aliases and name links."""
+    row = conn.execute("SELECT * FROM characters WHERE id=?", (character_id,)).fetchone()
+    if row is None:
+        return
+    gone = set(forms)
+    aliases = [a for a in json.loads(row["aliases_json"] or "[]") if a not in gone]
+    conn.execute("UPDATE characters SET aliases_json=?, updated_at=? WHERE id=?",
+                 (json.dumps(aliases, ensure_ascii=False), utcnow(), character_id))
+    conn.executemany("UPDATE entity_links SET status='rejected' WHERE book_id=? AND term=? AND target_term=?",
+                     [(row["book_id"], f, row["canonical_name"]) for f in gone])
+    refresh_profiles(conn, row["book_id"])
+
+
 def set_gender(conn: sqlite3.Connection, book_id: str, character_id: str, gender: str, *, ordinal: int,
                quote: str | None, origin: str, certainty: str = "explicit") -> str:
     """Record a character's gender. ``explicit``: a word in the text states it (彼女, 少年 …); ``inferred``: speech

@@ -4,7 +4,8 @@ Only what the first pass left in doubt is asked again, with the surrounding text
 the program disagreed on (the model's answer was kept as ``inferred``) or that ended ``unknown`` because adjacent
 narration pointed at someone else, genders known only by inference, and characters merged when a name was
 revealed. The answers never become facts: a speaker stays ``inferred``; a doubtful inferred gender is dropped (the
-translation then uses 你); a doubtful merge becomes a finding for the user — nothing is split automatically.
+translation then uses 你); a merge judged "different" stops counting the merged description as this character
+(its forms leave the aliases) and becomes a finding for the user — lines moved by the merge are not moved back.
 """
 
 from __future__ import annotations
@@ -67,7 +68,12 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
                          (book_id, link["target_term"])).fetchone()
         if c is None:
             continue
-        others = [a for a in json.loads(c["aliases_json"] or "[]") if a]
+        # the new name and its own aliases were linked at the reveal; the rest came from the merged description
+        own = {r[0] for r in conn.execute("SELECT term FROM entity_links WHERE book_id=? AND target_term=? AND "
+                                          "origin='scene_analysis'", (book_id, c["canonical_name"]))}
+        others = [a for a in json.loads(c["aliases_json"] or "[]") if a and a not in own]
+        if not others:
+            continue
         items.append({"ref": f"m:{c['id']}", "kind": "merge", "name": c["canonical_name"], "merged_forms": others,
                       "context": _window(conn, book_id, link["revealed_ordinal"] or c["known_from_ordinal"]),
                       "_ordinal": link["revealed_ordinal"]})
@@ -125,8 +131,13 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             if answer != "same":
                 unit = conn.execute("SELECT id FROM units WHERE book_id=? AND ordinal=?",
                                     (book_id, item.get("_ordinal") or 0)).fetchone()
+                dropped = answer == "different"  # the merged description no longer names this character
+                if dropped:
+                    repo.drop_aliases(conn, key, item["merged_forms"])
+                    stats["merges_undone"] = stats.get("merges_undone", 0) + 1
                 finding(unit[0] if unit else None, "merge_doubted", "high",
-                        f"{item['name']} ← {', '.join(item['merged_forms'])}: {answer} — {a.reason[:200]}")
+                        f"{item['name']} ← {', '.join(item['merged_forms'])}: {answer} — {a.reason[:200]}"
+                        + ("（這些稱呼已不再算作此角色；合併時搬過來的台詞請人工確認）" if dropped else ""))
                 stats["merges_doubted"] += 1
     for sid in scenes:
         reharvest_scene(conn, book_id, sid)

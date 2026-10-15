@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 # Role / kinship / crowd nouns: legitimately registered as "characters" for speaker attribution, but they are
 # ordinary words: never glossary terms, and the "added name" QA heuristic does not apply to them.
 GENERIC_REFERENTS = frozenset(
@@ -15,6 +17,14 @@ GENERIC_REFERENTS = frozenset(
     "姉ちゃん 兄ちゃん ねえちゃん にいちゃん おねえちゃん おにいちゃん おねーちゃん おにーちゃん お姉さん お兄さん "
     "おねえさん おにいさん 姉貴 兄貴 母ちゃん 父ちゃん かあさん とうさん おかあさん おとうさん ママ パパ "
     "おじさん おばさん じいちゃん ばあちゃん 母親 父親 お袋 親父 両親".split())
+
+
+# forms that name several people (「取り巻きの二人」「生徒たち」): never one character's name or alias
+_GROUP = re.compile(r"(?:たち|達|ども|一同|連中|[二三四五六七八九十]人(?:組)?|両名|全員)$")
+
+
+def names_a_group(term: str) -> bool:
+    return bool(_GROUP.search(term.strip()))
 
 
 def acceptable_glossary_term(term: str) -> bool:

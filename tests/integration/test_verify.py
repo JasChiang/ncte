@@ -59,6 +59,10 @@ def test_second_look_changes_speaker_drops_doubtful_gender_and_flags_merge(conn,
     assert (line["canonical_name"], line["status"], line["resolution_source"]) == ("ミナ", "inferred", "verify")
     assert conn.execute("SELECT COUNT(*) FROM character_gender").fetchone()[0] == 0  # doubtful inference dropped
     assert conn.execute("SELECT COUNT(*) FROM qa_findings WHERE type='merge_doubted'").fetchone()[0] == 1
+    merge = next(it for it in seen if it["kind"] == "merge")
+    assert merge["merged_forms"] == ["フードをかぶった少女"]  # only what the merge brought, not the name's own forms
+    lilia = conn.execute("SELECT aliases_json FROM characters WHERE canonical_name='リリア'").fetchone()
+    assert "フードをかぶった少女" not in lilia[0]  # judged different: the description no longer names her
     # verify runs once per run, before naming
     jobs = [r[0] for r in conn.execute("SELECT stage FROM jobs WHERE stage IN ('verify','naming') ORDER BY seq, id")]
     assert jobs[0] == "verify"

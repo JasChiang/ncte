@@ -396,6 +396,11 @@ def test_given_name_decision_reaches_the_full_name(conn, cfg, fixtures):
         ensure_glossary(conn, book.id, ja, zh, category="character", origin="t", first_unit_id=us[0]["id"])
     payload = {"names": [{"ref": "エリーゼ", "ja": "エリーゼ", "zh": "愛麗絲", "category": "character", "count": 9}],
                "address": []}
+    for i, (ja, zh, origin) in enumerate((("エリーゼ様", "愛麗絲大人", "llm"), ("ランメル学院長", "朗梅爾學院長", "llm"),
+                                          ("エリーゼちゃん", "愛麗絲醬", "human"))):
+        conn.execute("INSERT INTO address_terms(book_id, speaker_id, addressee_id, form_ja, form_zh, zh_origin, origin, "
+                     "certainty, first_ordinal, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                     (book.id, f"c_s{i}", cid, ja, zh, origin, "t", "explicit", 1, "t", "t"))
     naming.apply_naming(conn, book.id, payload, NamingOutput.model_validate(
         {"names": [{"ref": "エリーゼ", "zh": "愛麗絲", "reason": "", "alternatives": [{"zh": "艾莉絲", "reason": ""}]}]}))
     pid = next(p["id"] for p in naming.pending(conn, book.id, include_done=True) if p["ref"] == "エリーゼ")
@@ -403,6 +408,17 @@ def test_given_name_decision_reaches_the_full_name(conn, cfg, fixtures):
     assert conn.execute("SELECT display_name_zh FROM characters WHERE id=?", (cid,)).fetchone()[0] == "艾莉潔·朗梅爾"
     assert conn.execute("SELECT target_term FROM glossary WHERE source_term='エリーゼ・ランメル'").fetchone()[0] == "艾莉潔·朗梅爾"
     assert conn.execute("SELECT target_term FROM glossary WHERE source_term='エリーゼ商会'").fetchone()[0] == "艾莉潔商會"
+    addr = dict(conn.execute("SELECT form_ja, form_zh FROM address_terms").fetchall())
+    assert addr == {"エリーゼ様": "艾莉潔大人", "ランメル学院長": "朗梅爾學院長", "エリーゼちゃん": "愛麗絲醬"}  # a person's choice stays
+
+
+def test_family_name_change_reaches_address_forms(conn, cfg, fixtures):
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    conn.execute("INSERT INTO address_terms(book_id, speaker_id, addressee_id, form_ja, form_zh, zh_origin, origin, "
+                 "certainty, first_ordinal, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                 (book.id, "c_a", "c_b", "フリーデン卿", "福里登卿", "llm", "t", "explicit", 1, "t", "t"))
+    naming._sync_address(conn, book.id, "レイド・フリーデン", "雷德·福里登", "雷德·弗里登")
+    assert conn.execute("SELECT form_zh FROM address_terms").fetchone()[0] == "弗里登卿"
 
 
 def test_address_rendering_replaces_a_contradicting_unconfirmed_glossary_entry():

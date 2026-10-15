@@ -335,6 +335,25 @@ def _set_full_names(conn: sqlite3.Connection, book_id: str, term: str, old_zh: s
         new = swap(r["canonical_name"], r["display_name_zh"])
         if new:
             conn.execute("UPDATE characters SET display_name_zh=?, updated_at=? WHERE id=?", (new, utcnow(), r["id"]))
+    _sync_address(conn, book_id, term, old_zh, zh)
+
+
+def _sync_address(conn: sqlite3.Connection, book_id: str, term: str, old_zh: str, zh: str) -> None:
+    """Address renderings built on the old rendering follow it (「レイド・フリーデン様」 雷德·福里登大人 → 雷德·弗里登大人,
+    「フリーデン卿」 福里登卿 → 弗里登卿, 「ファレグの坊主」 法雷格小鬼 → 法雷格小子). A full name also changes the parts
+    that changed (the family name alone). Renderings a person chose are never touched."""
+    pairs = [(term, old_zh, zh)]
+    ja_parts, old_parts, new_parts = (re.split(r"[・･·]", x) for x in (term, old_zh, zh))
+    if len(ja_parts) > 1 and len(ja_parts) == len(old_parts) == len(new_parts):
+        pairs += [(j, o, n) for j, o, n in zip(ja_parts, old_parts, new_parts, strict=True) if o != n]
+    for ja, old, new in pairs:
+        if len(old) < 2 or old == new:  # a one-character rendering is too common to replace inside others
+            continue
+        for r in conn.execute("SELECT id, form_zh FROM address_terms WHERE book_id=? AND instr(form_ja, ?) > 0 AND "
+                              "instr(form_zh, ?) > 0 AND COALESCE(zh_origin, '') != 'human'",
+                              (book_id, ja, old)).fetchall():
+            conn.execute("UPDATE address_terms SET form_zh=?, updated_at=? WHERE id=?",
+                         (r["form_zh"].replace(old, new), utcnow(), r["id"]))
 
 
 def _set_name(conn: sqlite3.Connection, book_id: str, term: str, zh: str, *, human: bool = False) -> None:

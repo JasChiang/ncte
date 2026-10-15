@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..config import Config
-from ..lexicon import GENERIC_REFERENTS, acceptable_glossary_term
+from ..lexicon import GENERIC_REFERENTS, acceptable_glossary_term, names_a_group
 from ..llm.schemas import SceneAnalysisOutput
 from ..memory import repository as repo
 from ..memory import visibility as vis
@@ -165,10 +165,14 @@ def _revealed(conn: sqlite3.Connection, book_id: str, known: list[Any], same_as:
     """The known character a newly named one turns out to be: the model's ``same_as_ref`` (a known character of
     this book), or else a known character whose name is one of the new aliases — only a specific description
     («黒髪の女性», «学院長»), not a generic word (「少女」), held by no one else, introduced shortly before."""
+    def group(c: Any) -> bool:  # 「取り巻き」 known as 「取り巻きの二人」 is several people, whoever says otherwise
+        return any(names_a_group(f) for f in [c["canonical_name"], *json.loads(c["aliases_json"] or "[]")])
+
     mine = {c["id"]: c for c in known if c["book_id"] == book_id}
     if same_as in mine:
-        return same_as
+        return None if group(mine[same_as]) else same_as
     hits = [c for c in mine.values() if c["canonical_name"] in aliases and c["canonical_name"] not in GENERIC_REFERENTS
+            and not group(c)
             and acceptable_glossary_term(c["canonical_name"]) and 0 <= ordinal - c["known_from_ordinal"] <= REVEAL_WINDOW]
     if len(hits) != 1:
         return None
@@ -226,7 +230,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             # (the generic word list stays as a check for the model's omissions)
             common = {k.ja.strip() for k in nc.alias_kinds if k.kind == "common"}
             aliases = [a for a in nc.aliases_ja if a and a != name and len(a) <= MAX_NAME_LEN and a not in PRONOUNS
-                       and a not in GENERIC_REFERENTS and a not in common
+                       and a not in GENERIC_REFERENTS and a not in common and not names_a_group(a)
                        and _standalone(a, scene_text, [name, *existing_alias, *(x.name_ja for x in parsed.new_characters)])]
             gl = conn.execute(f"SELECT target_term FROM glossary WHERE {SERIES_SCOPE} AND source_term=?",
                               (book_id, name)).fetchone()
