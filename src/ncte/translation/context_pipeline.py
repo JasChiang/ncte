@@ -84,27 +84,51 @@ class ContextOrchestrator(Orchestrator):
         with self.lock:
             fresh = not self.conn.execute("SELECT 1 FROM jobs WHERE run_id=?", (self.run_id,)).fetchone()
         if fresh and self.cfg.context.scene_breaks == "llm" and not self.opts.unit_ids:  # a sample (--limit-units) too
-            self.choose_scene_breaks()
+            # a forced re-read of the whole book chooses the scene breaks again (books cut before ADR-036 too)
+            self.choose_scene_breaks(recut=self.opts.force)
         super().ensure_jobs()
 
-    def choose_scene_breaks(self) -> None:
-        """Before anything is read (ADR-036): the model divides long stretches the author left undivided."""
+    def rebreak(self) -> None:
+        """``ncte scenes --rebreak``: the scenes whose range changes are read again by the next run."""
+        stats = self.choose_scene_breaks(recut=True)
+        with self.lock:
+            unread = self.conn.execute("SELECT COUNT(*) FROM scenes WHERE book_id=? AND version=0", (self.book.id,)).fetchone()[0]
+        self.log(f"scene breaks chosen again: {stats}; {unread} scenes to read (the next translate run reads them)")
+
+    def choose_scene_breaks(self, *, recut: bool = False) -> dict[str, int]:
+        """Before anything is read (ADR-036): the model divides long stretches the author left undivided.
+
+        ``recut``: choose again for a book already read or divided; scenes whose range changes lose what reading them
+        left in memory (``segment_book``) and are read again."""
         from ..analysis import scene_breaks as sb
         from ..analysis.scene import segment_book
         from ..llm.schemas import SceneBreaksOutput
 
+        max_chars = self.cfg.translation.scene_max_chars
         with self.lock:
-            if self.conn.execute("SELECT 1 FROM scenes WHERE book_id=? AND version>0 LIMIT 1", (self.book.id,)).fetchone() \
+            if recut:
+                with Transaction(self.conn):
+                    self.conn.execute("DELETE FROM scene_breaks WHERE book_id=?", (self.book.id,))
+                segment_book(self.conn, self.cfg, self.book.id)  # the author's markers and size cuts only
+            elif self.conn.execute("SELECT 1 FROM scenes WHERE book_id=? AND version>0 LIMIT 1", (self.book.id,)).fetchone() \
                     or self.conn.execute("SELECT 1 FROM scene_breaks WHERE book_id=? LIMIT 1", (self.book.id,)).fetchone():
-                return  # already read (scene ids are in use) or already divided
-            todo = sb.stretches(self.conn, self.book.id)
+                return {}  # already read (scene ids are in use) or already divided
+            todo = sb.stretches(self.conn, self.book.id, max_chars)
         if not todo:
-            return
+            return {}
         prompt, size = load_prompt("scenes"), self.cfg.memory.max_scene_units
-        stats = {"stretches": len(todo), "breaks": 0, "kept_program_cuts": 0}
+        stats = {"stretches": len(todo), "breaks": 0, "kept_program_cuts": 0, "asked_again": 0}
         for rows in todo:
+            req = sb.payload(rows, size, max_chars)
             try:
-                parsed = self._llm("scenes", prompt, sb.payload(rows, size), [r["id"] for r in rows])
+                parsed = self._llm("scenes", prompt, req, [r["id"] for r in rows])
+                assert isinstance(parsed, SceneBreaksOutput)
+                if again := sb.runs_on(rows, [b.unit_id for b in parsed.breaks]):
+                    # the paragraph before ends mid-sentence: the model looks once more, and its answer stands
+                    stats["asked_again"] += 1
+                    parsed = self._llm("scenes", prompt, {**req, "reconsider": {
+                        "breaks": again, "why": "這些換場點的前一段沒有結束（以「――」「、」等結尾），句子接到下一段；"
+                                                "請確認是否真的在這裡換場，不是的話改選或拿掉"}}, [r["id"] for r in rows])
             except FatalAPIError:
                 raise
             except LLMError as exc:
@@ -122,6 +146,7 @@ class ContextOrchestrator(Orchestrator):
         with self.lock:
             segment_book(self.conn, self.cfg, self.book.id)
         self.log(f"scene breaks: {stats}")
+        return stats
 
     def create_extra_jobs(self) -> None:
         scene_ids = [r["scene_id"] for r in self.conn.execute(

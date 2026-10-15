@@ -58,6 +58,7 @@ class RunOptions:
     address_only: bool = False  # `ncte names address-check` (ADR-037, read pass already done)
     reader_only: bool = False  # `ncte reader-check` (ADR-038, a book already translated)
     relations_only: bool = False  # `ncte names relations` (ADR-039, a book already read)
+    rebreak_only: bool = False  # `ncte scenes --rebreak`: choose the scene breaks again (ADR-036; books cut before it)
 
 
 @dataclass
@@ -483,6 +484,9 @@ class Orchestrator:
     # ------------------------------------------------------------ main loop
     lock_source = "cli"  # who holds the series lock while this runs (the web page sets "gui")
 
+    def rebreak(self) -> None:
+        raise NCTEError("choosing scene breaks again needs --mode context")
+
     def run(self) -> RunSummary:
         from .run_lock import SeriesLock
 
@@ -510,6 +514,8 @@ class Orchestrator:
                 self.reader_pass(record_job=False)
             elif self.opts.relations_only:
                 self.relations_pass(record_job=False)
+            elif self.opts.rebreak_only:
+                self.rebreak()
             else:
                 self.ensure_jobs()
                 self.execute()

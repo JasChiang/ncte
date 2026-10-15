@@ -16,11 +16,14 @@ from ..memory.db import Transaction, utcnow
 from .dialogue import UnitText, clean, find_quotes
 
 OPENING_CHARS = 50
+ENDING_CHARS = 16  # a paragraph's last words show whether it runs on into the next (「眺めていた時――」)
 MIN_SCENE = 12  # paragraphs: shorter scenes lose the context the analysis needs
+_RUNS_ON = ("―", "—", "、", "，", "─")
 
 
-def stretches(conn: sqlite3.Connection, book_id: str) -> list[list[sqlite3.Row]]:
-    """Runs of scenes joined only by size cuts: one stretch of text the author did not divide."""
+def stretches(conn: sqlite3.Connection, book_id: str, max_chars: int = 0) -> list[list[sqlite3.Row]]:
+    """Runs of scenes joined only by size cuts: one stretch of text the author did not divide. A single scene longer
+    than ``max_chars`` (few but long paragraphs) is one too."""
     scenes = conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq", (book_id,)).fetchall()
     groups: list[list[sqlite3.Row]] = []
     for s in scenes:
@@ -30,20 +33,31 @@ def stretches(conn: sqlite3.Connection, book_id: str) -> list[list[sqlite3.Row]]
             groups.append([s])
     out = []
     for g in groups:
-        if len(g) < 2:
-            continue
-        out.append(conn.execute("SELECT * FROM units WHERE book_id=? AND kind IN ('text','heading') AND spine_index IS "
-                                "NOT NULL AND ordinal BETWEEN ? AND ? ORDER BY ordinal",
-                                (book_id, g[0]["start_ordinal"], g[-1]["end_ordinal"])).fetchall())
+        rows = conn.execute("SELECT * FROM units WHERE book_id=? AND kind IN ('text','heading') AND spine_index IS "
+                            "NOT NULL AND ordinal BETWEEN ? AND ? ORDER BY ordinal",
+                            (book_id, g[0]["start_ordinal"], g[-1]["end_ordinal"])).fetchall()
+        if len(g) >= 2 or (max_chars and len(rows) >= 2 * MIN_SCENE and sum(len(r["plain_text"]) for r in rows) > max_chars):
+            out.append(rows)
     return out
 
 
-def payload(rows: list[sqlite3.Row], max_units: int) -> dict[str, Any]:
+def payload(rows: list[sqlite3.Row], max_units: int, max_chars: int) -> dict[str, Any]:
     paras = []
     for r in rows:
         t = clean(r["plain_text"]).strip(" 　")
-        paras.append({"unit_id": r["id"], "text": t[:OPENING_CHARS], "line": t.startswith(("「", "『"))})
-    return {"task": "scenes", "paragraphs": paras, "scene_size": [MIN_SCENE * 3, max_units], "max_size": max_units * 2}
+        p: dict[str, Any] = {"unit_id": r["id"], "text": t[:OPENING_CHARS], "chars": len(t),
+                             "line": t.startswith(("「", "『"))}
+        if len(t) > OPENING_CHARS:
+            p["end"] = t[-ENDING_CHARS:]
+        paras.append(p)
+    return {"task": "scenes", "paragraphs": paras, "scene_size": [MIN_SCENE * 3, max_units], "max_size": max_units * 2,
+            "max_chars": max_chars}
+
+
+def runs_on(rows: list[sqlite3.Row], breaks: list[str]) -> list[str]:
+    """Breaks right after a paragraph that does not end (「…眺めていた時――」 runs into the next line): asked again."""
+    before = {rows[i]["id"]: clean(rows[i - 1]["plain_text"]).rstrip(" 　") for i in range(1, len(rows))}
+    return [u for u in breaks if before.get(u, "").endswith(_RUNS_ON)]
 
 
 def check(rows: list[sqlite3.Row], proposed: list[str], max_units: int) -> list[str] | None:

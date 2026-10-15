@@ -104,6 +104,8 @@ def segment_book(conn: sqlite3.Connection, cfg: Config, book_id: str) -> list[Sc
     breaks = {r["unit_id"]: r["origin"] for r in conn.execute("SELECT unit_id, origin FROM scene_breaks WHERE book_id=?",
                                                               (book_id,))}
     scenes = segment_units(rows, overrides, cfg.memory.max_scene_units, breaks)
+    from .memory_update import forget_scene
+
     with Transaction(conn):
         existing = {r["id"]: r for r in conn.execute("SELECT * FROM scenes WHERE book_id=?", (book_id,))}
         conn.execute("UPDATE units SET scene_id=NULL WHERE book_id=?", (book_id,))
@@ -114,6 +116,8 @@ def segment_book(conn: sqlite3.Connection, cfg: Config, book_id: str) -> list[Sc
                 conn.execute("UPDATE scenes SET seq=?, break_reason=? WHERE book_id=? AND id=?",
                              (s.seq, s.break_reason, book_id, s.id))
             else:
+                if old is not None and int(old["version"]) > 0:  # what reading the old range left no longer fits
+                    forget_scene(conn, book_id, s.id)
                 conn.execute("DELETE FROM scenes WHERE book_id=? AND id=?", (book_id, s.id))
                 conn.execute(
                     "INSERT INTO scenes(book_id, id, seq, spine_index, start_unit_id, end_unit_id, start_ordinal, "
@@ -124,7 +128,12 @@ def segment_book(conn: sqlite3.Connection, cfg: Config, book_id: str) -> list[Sc
             conn.executemany("UPDATE units SET scene_id=? WHERE id=?", [(s.id, u) for u in s.unit_ids])
         for sid in existing:
             if sid not in keep:
+                if int(existing[sid]["version"]) > 0:
+                    forget_scene(conn, book_id, sid)
                 conn.execute("DELETE FROM scenes WHERE book_id=? AND id=?", (book_id, sid))
+        # lines already read follow their paragraph into its new scene (re-read later with the new scene)
+        conn.execute("UPDATE utterances SET scene_id=(SELECT scene_id FROM units WHERE units.id=utterances.unit_id) "
+                     "WHERE book_id=?", (book_id,))
     return scenes
 
 

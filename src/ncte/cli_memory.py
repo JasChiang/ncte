@@ -28,12 +28,23 @@ def scenes(epub: Annotated[str, typer.Argument(help="EPUB path or book id")],
            split: Annotated[str | None, typer.Option("--split", help="Force a scene break before this unit")] = None,
            merge: Annotated[str | None, typer.Option("--merge", help="Suppress the automatic break at this unit")] = None,
            clear: Annotated[str | None, typer.Option("--clear", help="Remove a manual override")] = None,
+           rebreak: Annotated[bool, typer.Option("--rebreak", help="Let the model choose the scene breaks again "
+                                                 "(books cut before ADR-036); changed scenes are read again")] = False,
+           budget_usd: Annotated[float, typer.Option("--budget-usd")] = 0.5,
+           fake: Annotated[bool, typer.Option("--fake")] = False,
            as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
     """List scenes (deterministic segmentation) and manage manual overrides."""
     from .analysis.scene import segment_book
 
     book = _book(epub)
     conn = state.conn
+    if rebreak:
+        from .cli import _run
+        from .translation.orchestrator import RunOptions
+
+        cfg = state.cfg
+        _run(book, RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
+                              client="fake" if fake else cfg.openrouter.provider, rebreak_only=True), fake=fake, cfg=cfg)
     if split or merge or clear:
         with Transaction(conn):
             if clear:

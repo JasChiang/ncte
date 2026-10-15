@@ -56,6 +56,24 @@ def build_memory_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             "glossary": [g for g in glossary if str(g.get("ja", "")) in text]}
 
 
+def forget_scene(conn: sqlite3.Connection, book_id: str, sid: str, *, summaries: bool = True) -> None:
+    """Drop what reading this scene left in memory: its facts (and the retractions they made), props and, unless the
+    scene is being re-read right now, its summary, reading notes and rejections. Used when a scene is read again and
+    when re-cutting the book removes or changes the scene (``scene.segment_book``)."""
+    old_ids = [r[0] for r in conn.execute("SELECT id FROM facts WHERE book_id=? AND scene_id=?", (book_id, sid))]
+    if old_ids:
+        ph = ",".join("?" * len(old_ids))
+        conn.execute(f"UPDATE facts SET retracted_by=NULL, retracted_at_ordinal=NULL WHERE retracted_by IN ({ph})", old_ids)
+        conn.execute(f"DELETE FROM memory_fts WHERE kind='fact' AND ref_id IN ({ph})", old_ids)
+        conn.execute(f"DELETE FROM facts WHERE id IN ({ph})", old_ids)
+    conn.execute("DELETE FROM prop_states WHERE book_id=? AND scene_id=?", (book_id, sid))
+    conn.execute("DELETE FROM memory_fts WHERE kind='summary' AND ref_id=? AND book_id=?", (sid, book_id))
+    if summaries:
+        conn.execute("DELETE FROM chapter_summaries WHERE book_id=? AND scene_id=?", (book_id, sid))
+        conn.execute("DELETE FROM reader_notes WHERE book_id=? AND scene_id=? AND origin='llm'", (book_id, sid))
+        conn.execute("DELETE FROM memory_rejections WHERE book_id=? AND scene_id=?", (book_id, sid))
+
+
 def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, parsed: MemoryUpdateOutput,
                         *, run_id: str | None = None) -> dict[str, int]:
     sid = scene["id"]
@@ -70,14 +88,7 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         repo.reject(conn, book_id, sid, "memory_update", item, reason)
 
     # re-running a scene's memory update replaces that scene's previous facts/props (no duplicates)
-    old_ids = [r[0] for r in conn.execute("SELECT id FROM facts WHERE book_id=? AND scene_id=?", (book_id, sid))]
-    if old_ids:
-        ph = ",".join("?" * len(old_ids))
-        conn.execute(f"UPDATE facts SET retracted_by=NULL, retracted_at_ordinal=NULL WHERE retracted_by IN ({ph})", old_ids)
-        conn.execute(f"DELETE FROM memory_fts WHERE kind='fact' AND ref_id IN ({ph})", old_ids)
-        conn.execute(f"DELETE FROM facts WHERE id IN ({ph})", old_ids)
-    conn.execute("DELETE FROM prop_states WHERE book_id=? AND scene_id=?", (book_id, sid))
-    conn.execute("DELETE FROM memory_fts WHERE kind='summary' AND ref_id=? AND book_id=?", (sid, book_id))
+    forget_scene(conn, book_id, sid, summaries=False)
 
     for n, f in enumerate(parsed.facts):
         ev = [u for u in f.evidence_unit_ids if u in text_of]

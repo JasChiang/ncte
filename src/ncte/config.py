@@ -54,6 +54,9 @@ class OpenRouterConfig(_Strict):
 class TranslationConfig(_Strict):
     style: str = "natural_traditional_taiwan"
     unit_target_japanese_chars: int = Field(1400, ge=1)
+    # context mode: a whole scene per translation request up to this many Japanese characters (longer scenes are
+    # split at a quiet point, each part seeing the whole scene); 0 = batches of unit_target_japanese_chars
+    scene_max_chars: int = Field(6000, ge=0)
     unit_hard_max_japanese_chars: int = Field(2500, ge=100)
     include_previous_units: int = Field(2, ge=0, le=20)
     include_next_units: int = Field(1, ge=0, le=20)
