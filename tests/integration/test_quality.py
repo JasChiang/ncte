@@ -279,3 +279,12 @@ def test_an_earlier_reviewer_issue_is_cleared_when_another_look_finds_nothing(tm
                  "('r_old', ?, ?, 'review:addition', 'medium', 'added 你', 't')", (book.id, uid))
     assert runner.invoke(app, ["-w", str(ws), "review", epub, "--fake"]).exit_code == 0  # the fake reviewer finds nothing
     assert conn.execute("SELECT status FROM qa_findings WHERE run_id='r_old'").fetchone()[0] == "cleared_by_review"
+
+
+def test_reviewer_sees_paragraphs_around_with_speakers(conn, cfg, fixtures, seeded):
+    cfg.review.automatic_review = "flagged_only"
+    fake = FakeLLM(responders={"translate": defective, "review": lambda p, r: {"issues": []}})
+    run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    p = next(p for p, c in zip(fake.payloads, fake.calls, strict=True) if c.stage == "review")
+    assert len(p["context"]) >= 6 and all("source" in x for x in p["context"])
+    assert any(x.get("speakers") for x in p["context"]) or any(i["speakers"] for i in p["items"])

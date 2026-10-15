@@ -139,7 +139,12 @@ class Runner:
     def progress(self, ws: Any, conn: Any, book_id: str) -> dict[str, Any]:
         from ..translation.orchestrator import run_spent
 
-        row = conn.execute("SELECT * FROM runs WHERE book_id=? ORDER BY started_at DESC LIMIT 1", (book_id,)).fetchone()
+        # the latest run that translates (a review-only or gender-scan pass is not "the translation")
+        row = conn.execute("SELECT r.* FROM runs r WHERE r.book_id=? AND EXISTS (SELECT 1 FROM jobs j WHERE j.run_id=r.id "
+                           "AND j.stage='translate') ORDER BY r.started_at DESC LIMIT 1", (book_id,)).fetchone() or \
+            conn.execute("SELECT * FROM runs WHERE book_id=? ORDER BY started_at DESC LIMIT 1", (book_id,)).fetchone()
+        if self.busy and self.book_id == book_id and self.run_id:  # whatever is running now is what the page shows
+            row = conn.execute("SELECT * FROM runs WHERE id=?", (self.run_id,)).fetchone() or row
         if row is None:
             return {"run": None, "busy": self.busy and self.book_id == book_id, "other_busy": self.busy}
         live = self.busy and self.run_id == row["id"]

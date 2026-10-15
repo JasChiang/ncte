@@ -35,7 +35,8 @@ function invalidate(id) { for (const k of Object.keys(cache)) if (k.startsWith(i
 
 window.addEventListener("hashchange", route);
 async function route() {
-  const [, b, id, tab = "overview"] = location.hash.replace(/^#\/?/, "#/").split("/");
+  const [, b, id, rawTab = "overview"] = location.hash.replace(/^#\/?/, "#/").split("/");
+  const tab = rawTab.split("?")[0];  // 「review?f=flagged」 links to the review page with a filter
   try {
     if (b === "settings") { $("#tabs").hidden = true; $("#posbar").hidden = true; $("#crumb").textContent = "設定"; return await settingsView(); }
     if (b !== "b" || !id) { $("#tabs").hidden = true; $("#posbar").hidden = true; $("#crumb").textContent = ""; return await libraryView(); }

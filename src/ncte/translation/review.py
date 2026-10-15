@@ -92,8 +92,11 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
                 continue
             ctx_batch = _fake_batch(orch, [rows[i["unit_id"]] for i in items])
         ctx = orch.batch_context(ctx_batch)
-        payload = {"task": "review", "items": items,
-                   "context": ctx.get("context_before", []) + ctx.get("context_after", []),
+        with orch.lock:
+            around = _surroundings(conn, orch.book.id, [rows[i["unit_id"]] for i in items])
+            for it in items:
+                it["speakers"] = _speakers(conn, it["unit_id"])
+        payload = {"task": "review", "items": items, "context": around,
                    "characters": ctx.get("characters", []), "scene": ctx.get("scene", {}),
                    "glossary": ctx.get("glossary", [])}
         for key in ("address_terms", "style"):
@@ -141,6 +144,35 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
         _clear_confirmed(orch, [x["unit_id"] for x in items if x["unit_id"] not in flagged_by_reviewer], stats)
         _close_jobs(orch, [x["unit_id"] for x in items], "succeeded")
     return stats
+
+
+REVIEW_CONTEXT = 5  # paragraphs on each side: who is talking to whom is often two or three lines away
+
+
+def _speakers(conn: sqlite3.Connection, unit_id: str) -> list[str]:
+    """Who says each quote of the unit, as the read pass judged it (an inference is marked so)."""
+    return [(r["n"] or "？") + ("" if r["status"] in ("explicit", "human_verified") else "（推測）")
+            for r in conn.execute("SELECT c.canonical_name n, u.status FROM utterances u LEFT JOIN characters c ON "
+                                  "c.id=u.speaker_id_nullable WHERE u.unit_id=? ORDER BY u.quote_index", (unit_id,))]
+
+
+def _surroundings(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    """The paragraphs around the reviewed ones (source, current translation, speakers), within reach of each."""
+    wanted = {r["ordinal"] for r in rows}
+    near = sorted({o for r in rows for o in range(r["ordinal"] - REVIEW_CONTEXT, r["ordinal"] + REVIEW_CONTEXT + 1)}
+                  - wanted)
+    out = []
+    for r in conn.execute(f"SELECT * FROM units WHERE book_id=? AND translatable=1 AND kind IN ('text','heading') AND "
+                          f"ordinal IN ({','.join('?' * len(near))}) ORDER BY ordinal", (book_id, *near)) if near else []:
+        tr = latest_translation(conn, r["id"], r["source_hash"])
+        item: dict[str, Any] = {"source": r["source_text"]}
+        if tr is not None:
+            item["translation"] = tr["text"]
+        sp = _speakers(conn, r["id"])
+        if sp:
+            item["speakers"] = sp
+        out.append(item)
+    return out
 
 
 def _clear_confirmed(orch: Any, unit_ids: list[str], stats: dict[str, int]) -> None:
