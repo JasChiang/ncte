@@ -67,6 +67,7 @@ def forget_scene(conn: sqlite3.Connection, book_id: str, sid: str, *, summaries:
         conn.execute(f"DELETE FROM memory_fts WHERE kind='fact' AND ref_id IN ({ph})", old_ids)
         conn.execute(f"DELETE FROM facts WHERE id IN ({ph})", old_ids)
     conn.execute("DELETE FROM prop_states WHERE book_id=? AND scene_id=?", (book_id, sid))
+    conn.execute("DELETE FROM relation_notes WHERE book_id=? AND scene_id=?", (book_id, sid))
     conn.execute("DELETE FROM memory_fts WHERE kind='summary' AND ref_id=? AND book_id=?", (sid, book_id))
     if summaries:
         conn.execute("DELETE FROM chapter_summaries WHERE book_id=? AND scene_id=?", (book_id, sid))
@@ -102,15 +103,16 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         if f.subject_ref.startswith("c_") and f.subject_ref not in chars:
             rej(f.model_dump(), "unknown character id in subject_ref")
             continue
+        obj_ref = f.object_ref if f.object_ref in chars and f.object_ref != f.subject_ref else None
         first = min(ev, key=lambda u: ordinal[u])
         fid = repo.fact_id_for(book_id, sid, n, f.subject_ref + f.predicate + f.object)
         conn.execute(
             "INSERT OR REPLACE INTO facts(id, book_id, subject, predicate, object, fact_type, certainty, fact_json, "
             "evidence_unit_ids_json, evidence_quote, first_revealed_unit_id, first_revealed_ordinal, source_viewpoint, "
-            "scene_id, run_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "scene_id, run_id, created_at, object_ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (fid, book_id, f.subject_ref, f.predicate[:200], f.object[:400], f.fact_type, f.certainty,
              json.dumps(f.model_dump(), ensure_ascii=False), json.dumps(ev), f.evidence_quote[:400], first,
-             ordinal[first], f.source_viewpoint, sid, run_id, utcnow()))
+             ordinal[first], f.source_viewpoint, sid, run_id, utcnow(), obj_ref))
         subj = chars[f.subject_ref]["canonical_name"] if f.subject_ref in chars else f.subject_ref
         index_memory(conn, book_id, "fact", fid, ordinal[first], f"{subj} {f.predicate} {f.object}")
         stats["facts"] += 1
@@ -230,6 +232,22 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         stats["wordplay"] += 1
 
     stats["genders"] = apply_genders(conn, book_id, sid, text_of, ordinal, parsed.genders, rej)
+    stats["relation_notes"] = 0
+    for rel in parsed.relations:  # relations the text states, noted while reading (ADR-045)
+        ev = [u for u in rel.evidence_unit_ids if u in text_of]
+        if rel.a_ref not in chars or rel.b_ref not in chars or rel.a_ref == rel.b_ref or not rel.relation.strip():
+            rej(rel.model_dump(), "relation between unknown characters")
+            continue
+        if not ev or _norm(rel.evidence_quote) not in _norm("".join(text_of[u] for u in ev)) or len(_norm(rel.evidence_quote)) < 2:
+            rej(rel.model_dump(), "relation evidence_quote not found verbatim in evidence units")
+            continue
+        first = min(ev, key=lambda u: ordinal[u])
+        conn.execute("INSERT INTO relation_notes(book_id, scene_id, a_id, b_id, relation_zh, a_is, b_is, kind, "
+                     "evidence_unit_ids_json, evidence_quote, first_ordinal, run_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (book_id, sid, rel.a_ref, rel.b_ref, rel.relation.strip()[:20], rel.a_is.strip()[:12] or None,
+                      rel.b_is.strip()[:12] or None, rel.kind, json.dumps(ev), rel.evidence_quote[:300], ordinal[first],
+                      run_id, utcnow()))
+        stats["relation_notes"] += 1
 
     for p in parsed.prop_states:
         if p.name_ja not in "".join(clean(t) for t in text_of.values()):

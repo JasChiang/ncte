@@ -289,7 +289,8 @@ class ContextOrchestrator(Orchestrator):
         self.log(f"second look: {stats}")
 
     def relations_pass(self, *, record_job: bool = True) -> int:
-        """Pass 1c (ADR-039): relations between characters, from the facts gathered while reading."""
+        """After reading (ADR-039, ADR-045): each pair of characters with enough material is put to the model, a few
+        pairs per request; pairs that should be related but came back empty are asked once more."""
         from ..analysis import relations
         from ..llm.schemas import RelationsOutput
 
@@ -297,23 +298,32 @@ class ContextOrchestrator(Orchestrator):
         if record_job and (job is None or job["status"] not in ("pending", "running")):
             return 0
         with self.lock:
-            req, lookup = relations.payload(self.conn, self.book.id)
-        n = 0
-        if req["facts"]:
-            try:
-                parsed = self._llm("relations", load_prompt("relations"), req, [])
-            except FatalAPIError:
-                raise
-            except LLMError as exc:  # the graph falls back to scenes shared
-                self._finding(None, "relations_failed", "low", str(exc)[:300])
-                parsed = None
-            if parsed is not None:
+            pairs, chars = relations.candidate_pairs(self.conn, self.book.id)
+        prompt = load_prompt("relations")
+        results: list[tuple[RelationsOutput, dict[str, Any]]] = []
+
+        def ask(groups: list[tuple[dict[str, Any], dict[str, Any]]]) -> None:
+            for req, lookup in groups:
+                try:
+                    parsed = self._llm("relations", prompt, req, [])
+                except FatalAPIError:
+                    raise
+                except LLMError as exc:  # those pairs keep no relation this time
+                    self._finding(None, "relations_failed", "low", str(exc)[:300])
+                    continue
                 assert isinstance(parsed, RelationsOutput)
-                with self.lock:
-                    n = relations.apply(self.conn, self.book.id, parsed, lookup)
+                results.append((parsed, lookup))
+
+        ask(relations.requests(pairs, chars))
+        if again := relations.unanswered(pairs, results):
+            ask(relations.requests(again, chars, recheck=True))
+        n = 0
+        if results:
+            with self.lock:
+                n = relations.apply(self.conn, self.book.id, results)
         if record_job:
-            self._set_job("relations", self.book.id, "succeeded", None, {"relations": n})
-        self.log(f"relations: {n}")
+            self._set_job("relations", self.book.id, "succeeded", None, {"relations": n, "pairs": len(pairs)})
+        self.log(f"relations: {n} ({len(pairs)} pairs asked, {len(again)} asked again)")
         return n
 
     def reader_pass(self, *, record_job: bool = True) -> dict[str, int]:

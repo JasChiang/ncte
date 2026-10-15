@@ -81,7 +81,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
         present.append(card)
     # relations among the people of this scene, as the story has shown them so far (ADR-039): how they talk to each other
     ids = {c["character_id"] for c in present}
-    for r in conn.execute("SELECT * FROM relations WHERE book_id=? AND since_ordinal<=?", (book_id, horizon)):
+    for r in conn.execute("SELECT * FROM relations WHERE book_id=? AND since_ordinal<=? AND (until_ordinal IS NULL OR "
+                          "until_ordinal>?)", (book_id, horizon, horizon)):  # begun and not yet replaced
         if r["a_id"] in ids and r["b_id"] in ids:
             for card in present:
                 if card["character_id"] == r["a_id"]:

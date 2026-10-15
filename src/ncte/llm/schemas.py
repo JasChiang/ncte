@@ -100,6 +100,18 @@ class SelfForm(_M):
     zh: str  # its Chinese, kept for the whole book
 
 
+class ImpressionOut(_M):
+    ref: str
+    personality: str  # 個性
+    voice: str  # 說話口吻（翻譯時參考）
+    role: str  # 在故事裡的定位
+    evidence: list[str]  # refs of the lines / facts it rests on
+
+
+class ImpressionsOutput(_M):
+    impressions: list[ImpressionOut]
+
+
 class NarrationOut(_M):
     """Whose voice tells this scene (ADR-040): first person (``narrator_ref`` is the 「私」) or third person following
     ``focal_ref``."""
@@ -128,6 +140,7 @@ class FactOut(_M):
     subject_ref: str
     predicate: str
     object: str
+    object_ref: str | None = None  # the character the fact is about besides the subject (by id, never by name)
     fact_type: Literal["objective", "character_belief", "narrator_claim"]
     certainty: Literal["explicit", "inferred"]
     evidence_unit_ids: list[str]
@@ -179,6 +192,18 @@ class GenderOut(_M):
     evidence_quote: str  # verbatim: the words that show it (彼女, 少女, 娘, 少年 …)
 
 
+class StatedRelation(_M):
+    """A relation the text states or plainly shows in this scene (「お父様」, 婚約者, 先生と生徒), noted while reading."""
+    a_ref: str
+    b_ref: str
+    relation: str
+    a_is: str
+    b_is: str
+    kind: Literal["identity", "feeling"]  # 身分（親屬、婚約、師生、主從、同班）／情感與立場（好友、宿敵、愛慕、敵視）
+    evidence_unit_ids: list[str]
+    evidence_quote: str
+
+
 class MemoryUpdateOutput(_M):
     scene_summary: str
     facts: list[FactOut]
@@ -188,6 +213,7 @@ class MemoryUpdateOutput(_M):
     address_terms: list[AddressTermOut] = Field(default_factory=list)
     wordplay: list[WordplayOut] = Field(default_factory=list)
     genders: list[GenderOut] = Field(default_factory=list)
+    relations: list[StatedRelation] = Field(default_factory=list)
 
 
 # ------------------------------------------------------------------ naming (ADR-023)
@@ -275,8 +301,11 @@ class RelationOut(_M):
     relation: str  # 父女、未婚夫妻、師生、前世宿敵…
     a_is: str  # what a is to b: 父親
     b_is: str  # what b is to a: 女兒
-    facts: list[str]  # fact refs that show it
+    facts: list[str]  # evidence refs that show it (n… notes made while reading, f… facts)
     reason: str
+    kind: Literal["identity", "feeling"] = "identity"
+    certainty: Literal["explicit", "inferred"] = "explicit"
+    replaces: str | None = None  # an earlier relation of the same pair this one takes the place of (宿敵 → 未婚夫妻)
 
 
 class RelationsOutput(_M):
@@ -306,6 +335,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "reader": ReaderOutput,
     "relations": RelationsOutput,
     "confirm": ConfirmOutput,
+    "impressions": ImpressionsOutput,
 }
 
 

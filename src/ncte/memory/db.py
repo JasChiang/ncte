@@ -527,6 +527,43 @@ CREATE TABLE run_events (
 );
 CREATE INDEX idx_run_events_run ON run_events(run_id);
 """),
+    (18, "relations noted while reading, by character id; kinds, ends and origin of relations; narrator placeholders; "
+         "character impressions", """
+ALTER TABLE facts ADD COLUMN object_ref TEXT;
+CREATE TABLE relation_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id TEXT NOT NULL,
+    scene_id TEXT,
+    a_id TEXT NOT NULL,
+    b_id TEXT NOT NULL,
+    relation_zh TEXT NOT NULL,
+    a_is TEXT,
+    b_is TEXT,
+    kind TEXT NOT NULL,
+    evidence_unit_ids_json TEXT NOT NULL,
+    evidence_quote TEXT NOT NULL,
+    first_ordinal INTEGER NOT NULL,
+    run_id TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_relation_notes_book ON relation_notes(book_id, scene_id);
+ALTER TABLE relations ADD COLUMN kind TEXT;
+ALTER TABLE relations ADD COLUMN certainty TEXT;
+ALTER TABLE relations ADD COLUMN origin TEXT NOT NULL DEFAULT 'llm';
+ALTER TABLE relations ADD COLUMN until_ordinal INTEGER;
+ALTER TABLE relations ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE characters ADD COLUMN is_narrator INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE character_impressions (
+    character_id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL,
+    personality TEXT NOT NULL,
+    voice TEXT NOT NULL,
+    role TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    run_id TEXT,
+    updated_at TEXT NOT NULL
+);
+"""),
 ]
 
 

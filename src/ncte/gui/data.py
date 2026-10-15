@@ -269,10 +269,22 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
                         "usage": usage,
                         "uses": a["uses"], "at": a["first_ordinal"] if v == here else -1,
                         "certainty": a["certainty"], "origin": a["zh_origin"]})
-    rels = [{"a": r["a_id"], "b": r["b_id"], "rel": r["relation_zh"], "a_is": r["a_is"], "b_is": r["b_is"],
-             "at": r["since_ordinal"] if r["book_id"] == book.id else -1, "reason": r["reason"]}
-            for r in conn.execute(f"SELECT * FROM relations WHERE {SERIES_SCOPE}", (book.id,))
-            if vols.get(r["book_id"], 1.0) <= here and r["a_id"] in out and r["b_id"] in out]
+    quotes = {}  # evidence shown on the character page: the note or fact quoted from the source
+    for r in conn.execute("SELECT id, evidence_quote, first_ordinal FROM relation_notes WHERE book_id=?", (book.id,)):
+        quotes[("note", r["id"])] = (r["evidence_quote"], r["first_ordinal"])
+    for r in conn.execute("SELECT id, evidence_quote, first_revealed_ordinal FROM facts WHERE book_id=?", (book.id,)):
+        quotes[("fact", r["id"])] = (r["evidence_quote"], r["first_revealed_ordinal"])
+    rels = []
+    for r in conn.execute(f"SELECT * FROM relations WHERE {SERIES_SCOPE}", (book.id,)):
+        if vols.get(r["book_id"], 1.0) > here or r["a_id"] not in out or r["b_id"] not in out:
+            continue
+        this = r["book_id"] == book.id
+        ev = [quotes[(e["kind"], e["id"])] for e in json.loads(r["evidence_json"] or "[]") if (e["kind"], e["id"]) in quotes]
+        rels.append({"a": r["a_id"], "b": r["b_id"], "rel": r["relation_zh"], "a_is": r["a_is"], "b_is": r["b_is"],
+                     "at": r["since_ordinal"] if this else -1,
+                     "until": (r["until_ordinal"] if this else -1) if r["until_ordinal"] is not None else None,
+                     "kind": r["kind"] or "identity", "certainty": r["certainty"] or "explicit", "origin": r["origin"],
+                     "reason": r["reason"], "evidence": [{"quote": q, "at": o if this else -1} for q, o in ev[:3]]})
     return {"characters": out, "address": address, "relations": rels, "scenes": st["scenes"], "chapters": st["chapters"]}
 
 
