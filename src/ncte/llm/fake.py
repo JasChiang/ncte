@@ -94,6 +94,12 @@ def default_relations(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     return {"relations": []}
 
 
+def default_confirm(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+    """Agrees with every rule (the flags go on to review, as they did before this check)."""
+    return {"checks": [{"unit_id": i["unit_id"], "rule": i["rule"], "real": True, "reason": "fake"}
+                       for i in payload.get("items", [])]}
+
+
 DEFAULTS: dict[str, Responder] = {
     "translate": default_translate,
     "scene_analyze": default_scene_analyze,
@@ -104,6 +110,7 @@ DEFAULTS: dict[str, Responder] = {
     "scenes": default_scenes,
     "reader": default_reader,
     "relations": default_relations,
+    "confirm": default_confirm,
 }
 
 

@@ -252,3 +252,35 @@ def test_context_mode_translates_a_scene_per_request(conn, cfg, fixtures):
             assert len(sids) == 1
             per_scene[next(iter(sids))] = per_scene.get(next(iter(sids)), 0) + 1
     assert per_scene and all(n == 1 for n in per_scene.values()), per_scene
+
+
+def test_rule_flags_are_checked_with_context_before_review(conn, cfg, fixtures, monkeypatch):
+    """A slur rule that hits a name (「阿三」) or an idiom is dismissed by the model's second look; real ones go on."""
+    import ncte.qa.rules as rules
+
+    seen = []
+
+    def confirm(payload, req):
+        seen.append(payload)
+        return {"checks": [{"unit_id": i["unit_id"], "rule": i["rule"], "real": False, "reason": "人名音譯"}
+                           for i in payload["items"]]}
+
+    orig = rules.check_translation
+
+    def flag_first(**kw):
+        out = orig(**kw)
+        if not seen and kw["kind"] == "text":
+            out.append(rules.Finding("offensive_term", "high", "「阿三」 is a slur", kw["unit_id"]))
+        return out
+
+    monkeypatch.setattr(rules, "check_translation", flag_first)
+    import ncte.translation.translator as tr
+    monkeypatch.setattr(tr, "check_translation", flag_first)
+    reviewed = []
+    fake = FakeLLM(responders={"confirm": confirm, "review": lambda p, r: reviewed.append(p) or {"issues": []}})
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    assert s.status == "completed" and seen and seen[0]["items"][0]["source"] and "around" in seen[0]["items"][0]
+    st = conn.execute("SELECT status, evidence FROM qa_findings WHERE run_id=? AND type='offensive_term'", (rid,)).fetchall()
+    assert st and all(r["status"] == "dismissed_by_check" and "人名音譯" in r["evidence"] for r in st)
+    assert not any(p for p in reviewed if any(u.get("unit_id") in {x["unit_id"] for x in seen[0]["items"]}
+                                              for u in p.get("units", [])))

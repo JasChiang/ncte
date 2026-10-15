@@ -36,6 +36,11 @@ from .translator import call_structured
 VERIFY_BATCH = 25  # items per second-look request
 
 
+# rules that read words, not meaning: what they find is checked with context before it goes to review
+CONFIRM_RULES = ("offensive_term", "narration_first_person", "narrator_self_form", "latin_word", "possible_added_name",
+                 "second_person_gender")
+
+
 class ContextOrchestrator(Orchestrator):
     def prepare(self) -> None:
         super().prepare()
@@ -488,7 +493,65 @@ class ContextOrchestrator(Orchestrator):
             self.after_scene(sid)
 
     def after_scene(self, sid: str) -> None:
-        self.review(self.translated_unit_ids(sid))
+        ids = self.translated_unit_ids(sid)
+        self.confirm_flags(ids)
+        self.review(ids)
+
+    def confirm_flags(self, unit_ids: list[str]) -> dict[str, int]:
+        """What simple rules found (a slur, 「我」 in third-person narration…) is checked once more by the model with
+        the source and the lines around it; only the real problems go on to review (「阿三」 a maid's name, 「棒子」 a
+        stick, 「你一言我一語」 an idiom are left alone). One small request per scene with flags."""
+        from ..analysis import reader
+        from ..llm.schemas import ConfirmOutput
+        from .review import _speakers, _surroundings
+
+        if not unit_ids:
+            return {}
+        ph = ",".join("?" * len(unit_ids))
+        with self.lock:
+            found = self.conn.execute(
+                f"SELECT f.unit_id, f.type, f.evidence FROM qa_findings f WHERE f.run_id=? AND f.status='open' AND "
+                f"f.severity IN ('high','error') AND f.type IN ({','.join('?' * len(CONFIRM_RULES))}) AND f.unit_id IN ({ph})",
+                (self.run_id, *CONFIRM_RULES, *unit_ids)).fetchall()
+            if not found:
+                return {}
+            items = []
+            for f in found:
+                row = self.conn.execute("SELECT * FROM units WHERE id=?", (f["unit_id"],)).fetchone()
+                tr = self.conn.execute("SELECT text FROM translations WHERE unit_id=? AND run_id=? ORDER BY id DESC LIMIT 1",
+                                       (f["unit_id"], self.run_id)).fetchone()
+                items.append({"unit_id": f["unit_id"], "rule": f["type"], "evidence": (f["evidence"] or "")[:300],
+                              "source": row["source_text"], "translation": tr["text"] if tr else "",
+                              "speakers": _speakers(self.conn, row["id"]),
+                              "around": _surroundings(self.conn, self.book.id, [row])})
+            cast = reader.characters(self.conn, self.book.id)
+        stats = {"checked": len(items), "dismissed": 0}
+        try:
+            parsed = self._llm("confirm", load_prompt("confirm"), {"task": "confirm", "items": items, "characters": cast},
+                               sorted({i["unit_id"] for i in items}))
+        except FatalAPIError:
+            raise
+        except LLMError as exc:  # the flags stay and go to review as before
+            self._finding(None, "confirm_failed", "low", str(exc)[:300])
+            return stats
+        assert isinstance(parsed, ConfirmOutput)
+        flagged = {(f["unit_id"], f["type"]) for f in found}
+        with self.lock, Transaction(self.conn):
+            for c in parsed.checks:
+                if c.real or (c.unit_id, c.rule) not in flagged:
+                    continue
+                stats["dismissed"] += 1
+                self.conn.execute("UPDATE qa_findings SET status='dismissed_by_check', evidence=evidence || ? WHERE "
+                                  "run_id=? AND unit_id=? AND type=? AND status='open'",
+                                  (f" | check: {c.reason[:200]}", self.run_id, c.unit_id, c.rule))
+                if not self.conn.execute("SELECT 1 FROM qa_findings WHERE run_id=? AND unit_id=? AND status='open' AND "
+                                         "severity IN ('high','error')", (self.run_id, c.unit_id)).fetchone():
+                    self.conn.execute("UPDATE translations SET status='succeeded' WHERE id=(SELECT id FROM translations "
+                                      "WHERE unit_id=? AND run_id=? ORDER BY id DESC LIMIT 1) AND status='needs_review'",
+                                      (c.unit_id, self.run_id))
+        if stats["dismissed"]:
+            self.log(f"  rule flags checked: {stats}")
+        return stats
 
     def _llm(self, stage: str, prompt: Any, payload: dict[str, Any], unit_ids: list[str]) -> Any:
         assert self.translator is not None and self.pricing is not None

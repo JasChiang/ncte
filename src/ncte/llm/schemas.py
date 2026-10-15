@@ -283,6 +283,18 @@ class RelationsOutput(_M):
     relations: list[RelationOut]
 
 
+# ------------------------------------------------------------ a second look at what simple rules found
+class FlagCheck(_M):
+    unit_id: str
+    rule: str
+    real: bool  # the rule found a real problem here (it goes to review); false = the text is fine as it is
+    reason: str
+
+
+class ConfirmOutput(_M):
+    checks: list[FlagCheck]
+
+
 SCHEMAS: dict[str, type[BaseModel]] = {
     "translate": TranslationBatchOutput,
     "scene_analyze": SceneAnalysisOutput,
@@ -293,6 +305,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "scenes": SceneBreaksOutput,
     "reader": ReaderOutput,
     "relations": RelationsOutput,
+    "confirm": ConfirmOutput,
 }
 
 
