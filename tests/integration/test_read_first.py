@@ -472,3 +472,25 @@ def test_retranslate_takes_a_reasoning_effort(tmp_path, fixtures):
     assert r.invoke(app, [*base, "--reasoning-effort", "default"]).exit_code == 0
     bad = r.invoke(app, [*base, "--reasoning-effort", "xhigh"])  # the fake model offers low/medium/high
     assert "not supported" in bad.output or bad.exit_code != 0
+
+
+def test_scene_the_filter_refuses_is_read_in_parts(conn, cfg, fixtures):
+    """A content filter that refuses one passage must not cost the whole scene its reading (安達 vol 2 regression)."""
+    from ncte.errors import ContentBlockedError
+
+    class ReadFilter(FakeLLM):
+        def complete(self, req):
+            if req.stage in ("scene_analyze", "memory_update") and "頭をかいた" in req.messages[-1]["content"]:
+                raise ContentBlockedError("HTTP 403 content filter: fake PROHIBITED_CONTENT")
+            return super().complete(req)
+
+    fake = ReadFilter(responders=RESPONDERS)
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    assert s.status == "completed"
+    assert not conn.execute("SELECT 1 FROM jobs WHERE run_id=? AND status='failed'", (rid,)).fetchall()
+    blocked = [r[0] for r in conn.execute("SELECT u.plain_text FROM qa_findings f JOIN units u ON u.id=f.unit_id "
+                                          "WHERE f.run_id=? AND f.type='read_blocked'", (rid,))]
+    assert blocked and len(blocked) <= 2 * 4  # the passage and a few neighbours, for both read steps
+    assert any("頭をかいた" in t for t in blocked)
+    read = [p for p in fake.payloads if p.get("task") == "scene_analyze"]
+    assert any(len(p["units"]) < max(len(q["units"]) for q in read) for p in read)  # it was read in parts

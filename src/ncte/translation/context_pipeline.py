@@ -23,7 +23,8 @@ from typing import Any
 from ..analysis.memory_update import apply_memory_update, build_memory_payload
 from ..analysis.naming import apply_naming, auto_settle, build_naming_payload, model_view, pending
 from ..analysis.scene import apply_scene_analysis, build_analysis_payload, get_scene
-from ..errors import FatalAPIError, LLMError, ModelOutputError
+from ..analysis.split_read import MIN_PART, merge_outputs, subset_payload
+from ..errors import ContentBlockedError, FatalAPIError, LLMError, ModelOutputError
 from ..llm.prompt_loader import load_prompt
 from ..llm.schemas import MemoryUpdateOutput, NamingOutput, SceneAnalysisOutput, VerifyOutput
 from ..memory.db import Transaction, utcnow
@@ -476,6 +477,34 @@ class ContextOrchestrator(Orchestrator):
                 correction = str(exc)
         raise AssertionError("unreachable")
 
+    def _read(self, stage: str, prompt: Any, payload: dict[str, Any], sid: str) -> Any:
+        """A read request; when the content filter refuses the scene, read it in halves (``split_read``).
+
+        Units no part could read are reported one by one; None when nothing could be read.
+        """
+        blocked: list[str] = []
+        parsed = self._read_parts(stage, prompt, payload, blocked)
+        for uid in blocked:
+            self._finding(uid, "read_blocked", "medium",
+                          f"{sid} {stage}: the content filter refused this passage; it was not read "
+                          "(speakers and memory here come from the program only)")
+        if blocked and parsed is not None:
+            self.log(f"  {stage}: content filter; read in parts, {len(blocked)} units not read")
+        return parsed
+
+    def _read_parts(self, stage: str, prompt: Any, payload: dict[str, Any], blocked: list[str]) -> Any:
+        ids = [u["unit_id"] for u in payload["units"]]
+        try:
+            return self._llm(stage, prompt, payload, ids)
+        except ContentBlockedError:
+            if len(ids) <= MIN_PART:
+                blocked.extend(ids)
+                return None
+        half = len(ids) // 2
+        parts = [p for keep in (ids[:half], ids[half:])
+                 if (p := self._read_parts(stage, prompt, subset_payload(payload, keep), blocked)) is not None]
+        return merge_outputs(parts) if parts else None
+
     def stage_scene_analyze(self, sid: str) -> None:
         job = self._job("scene_analyze", sid)
         if job is None or job["status"] not in ("pending", "running"):
@@ -488,8 +517,9 @@ class ContextOrchestrator(Orchestrator):
                 payload = build_analysis_payload(self.conn, self.book.id, scene,
                                                  [{"ja": g["source_term"], "zh": g["target_term"]} for g in self.glossary])
             try:
-                parsed = self._llm("scene_analyze", self.analyze_prompt, payload,
-                                   [u["unit_id"] for u in payload["units"]])
+                parsed = self._read("scene_analyze", self.analyze_prompt, payload, sid)
+                if parsed is None:
+                    raise ContentBlockedError("content filter refused every part of the scene")
             except FatalAPIError:
                 raise
             except LLMError as exc:
@@ -511,8 +541,9 @@ class ContextOrchestrator(Orchestrator):
             payload = build_memory_payload(self.conn, self.book.id, scene,
                                            [{"ja": g["source_term"], "zh": g["target_term"]} for g in self.glossary])
         try:
-            parsed = self._llm("memory_update", self.memory_prompt, payload,
-                               [u["unit_id"] for u in payload["units"]])
+            parsed = self._read("memory_update", self.memory_prompt, payload, sid)
+            if parsed is None:
+                raise ContentBlockedError("content filter refused every part of the scene")
         except FatalAPIError:
             raise
         except LLMError as exc:

@@ -1,0 +1,39 @@
+from ncte.analysis.split_read import merge_outputs, subset_payload
+from ncte.llm.schemas import MemoryUpdateOutput, SceneAnalysisOutput
+
+
+def _scene(chars, utts, narration=None, pov=None):
+    return SceneAnalysisOutput.model_validate({
+        "pov": pov, "location": None, "time": None, "participants": [], "actions": [], "props": [],
+        "uncertainties": [], "narration": narration,
+        "new_characters": [{"temp_id": t, "name_ja": n, "aliases_ja": [], "proposed_name_zh": n,
+                            "evidence_unit_ids": [e]} for t, n, e in chars],
+        "utterances": utts})
+
+
+def test_parts_merge_and_new_characters_stay_distinct():
+    utt = lambda u, ref: {"unit_id": u, "quote_index": 0, "speaker_ref": ref,  # noqa: E731
+                          "resolution_status": "explicit", "speaker_candidates": [], "contradictions": []}
+    a = _scene([("n1", "ヤシロ", "u1")], [utt("u1", "n1")], pov="島村")
+    b = _scene([("n1", "姉", "u5"), ("n2", "ヤシロ", "u6")], [utt("u5", "n1"), utt("u6", "n2")],
+               narration={"person": "first", "narrator_ref": None, "focal_ref": None})
+    m = merge_outputs([a, b])
+    assert [c.name_ja for c in m.new_characters] == ["ヤシロ", "姉"]
+    assert m.new_characters[0].evidence_unit_ids == ["u1", "u6"]
+    assert [u.speaker_ref for u in m.utterances] == ["n1", "n1~1", "n1"]  # 姉 renamed, second ヤシロ → first
+    assert m.pov == "島村" and m.narration and m.narration.person == "first"
+
+
+def test_memory_parts_join_summaries_and_facts():
+    def mem(summary):
+        return MemoryUpdateOutput.model_validate({"scene_summary": summary, "facts": [], "glossary_candidates": [],
+                                                  "prop_states": []})
+    assert merge_outputs([mem("前半"), mem("後半")]).scene_summary == "前半\n後半"
+
+
+def test_subset_keeps_only_those_units_quotes_and_utterances():
+    p = {"units": [{"unit_id": "a"}, {"unit_id": "b"}], "quotes": [{"unit_id": "b", "quote_index": 0}],
+         "scene": {"utterances": [{"unit_id": "a"}], "pov": "x"}, "glossary": [1]}
+    s = subset_payload(p, ["b"])
+    assert s["units"] == [{"unit_id": "b"}] and s["quotes"] == p["quotes"]
+    assert s["scene"] == {"utterances": [], "pov": "x"} and s["glossary"] == [1]
