@@ -219,3 +219,21 @@ def test_retranslating_distant_units_never_batches_them_together(conn, cfg, fixt
     groups = [[u["unit_id"] for u in p["units"]] for p in fake2.payloads]
     assert groups == [[ids[1]], [ids[4], ids[5]]]
     assert ids[3] in [c["unit_id"] for c in fake2.payloads[1]["context_before"]]  # the connecting text is context
+
+
+def test_each_step_can_reason_differently(conn, cfg, fixtures):
+    from ncte.config import reasoning_param, reasoning_setting
+    from ncte.translation.orchestrator import reasoning_label
+
+    cfg.openrouter.reasoning_effort = "medium"
+    cfg.openrouter.stage_reasoning = {"memory_update": "low", "translate": "max:3000", "scene_analyze": "default"}
+    assert reasoning_setting(cfg, "translate:retry") == "max:3000" and reasoning_setting(cfg, "verify") == "medium"
+    assert reasoning_param("max:3000") == {"max_tokens": 3000} and reasoning_setting(cfg, "scene_analyze") is None
+    fake = FakeLLM()
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    sent = {c.stage.split(":")[0]: c.extra.get("reasoning") for c in fake.calls}
+    assert sent["memory_update"] == {"effort": "low"} and sent["translate"] == {"max_tokens": 3000}
+    assert sent["scene_analyze"] is None
+    recorded = dict(conn.execute("SELECT stage, reasoning_effort FROM llm_requests WHERE run_id=? GROUP BY stage", (rid,)))
+    assert recorded["translate"] == "max:3000" and recorded["memory_update"] == "low"
+    assert reasoning_label({"effort": "low"}) == "low"

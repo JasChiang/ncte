@@ -7,7 +7,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..config import Config
+from ..config import Config, reasoning_param, reasoning_setting
 from ..epub.units import match_text
 from ..library import Book
 from ..llm.base import LLMClient
@@ -108,7 +108,10 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
             stage_chars["scene_analyze"] = scene_chars
         if cfg.context.memory_update:
             stage_chars["memory_update"] = scene_chars
-    calib = calibrate(history or [conn], opts.model, cfg.openrouter.reasoning_effort, provider=cfg.openrouter.provider)
+    from .orchestrator import reasoning_label
+
+    calib = calibrate(history or [conn], opts.model, cfg.openrouter.reasoning_effort, provider=cfg.openrouter.provider,
+                      per_stage={st: reasoning_label(reasoning_param(reasoning_setting(cfg, st))) for st in stage_chars})
     calibrated = None
     if all(s in calib for s in stage_chars):
         calibrated = round(sum(calib[s]["usd_per_char"] * n for s, n in stage_chars.items()), 4)
@@ -135,23 +138,28 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
 
 
 def calibrate(conns: list[sqlite3.Connection], model: str, effort: str | None, *, min_requests: int = 3,
-              min_chars: int = 500, provider: str = "openrouter") -> dict[str, dict[str, Any]]:
+              min_chars: int = 500, provider: str = "openrouter",
+              per_stage: dict[str, str | None] | None = None) -> dict[str, dict[str, Any]]:
     """Actual cost per source character, per stage, from earlier requests with the same model and
-    reasoning effort (any book, any series). Only stages with enough samples are returned."""
+    reasoning setting (any book, any series; ``per_stage`` when steps use their own). Only stages with enough
+    samples are returned."""
     agg: dict[str, list[float]] = {}  # stage → [requests, cost, chars]
     for conn in conns:
-        _calibrate_one(conn, model, effort, agg, provider)
+        _calibrate_one(conn, model, effort, agg, provider, per_stage or {})
     return _calibration_result(agg, min_requests, min_chars)
 
 
-def _calibrate_one(conn: sqlite3.Connection, model: str, effort: str | None, agg: dict[str, list[float]], provider: str) -> None:
+def _calibrate_one(conn: sqlite3.Connection, model: str, effort: str | None, agg: dict[str, list[float]], provider: str,
+                   per_stage: dict[str, str | None]) -> None:
     rows = conn.execute(
-        "SELECT stage, cost_usd, unit_ids_json FROM llm_requests WHERE model=? AND reasoning_effort IS ? AND "
+        "SELECT stage, cost_usd, unit_ids_json, reasoning_effort FROM llm_requests WHERE model=? AND "
         "status='succeeded' AND cost_status IN ('reported','reported_generation') AND cost_usd IS NOT NULL "
         "AND run_id IN (SELECT id FROM runs WHERE "
         "COALESCE(json_extract(config_json, '$.openrouter.provider'), 'openrouter') = ?)",
-        (model, effort, provider)).fetchall()
+        (model, provider)).fetchall()
     for r in rows:
+        if r["reasoning_effort"] != per_stage.get(r["stage"].split(":")[0], effort):
+            continue
         ids = json.loads(r["unit_ids_json"])
         if not ids:
             continue

@@ -11,7 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field
@@ -47,6 +47,9 @@ class OpenRouterConfig(_Strict):
     # OpenRouter `reasoning.effort` (e.g. low | medium | high); None = model default. Reasoning tokens are
     # billed as output tokens. Validated against the model's `reasoning.supported_efforts` from /models.
     reasoning_effort: str | None = None
+    # per step (scenes, scene_analyze, memory_update, verify, naming, relations, translate, review, reader…):
+    # "low" | "medium" | "high" | "default" (the model's own) | "max:N" (at most N reasoning tokens)
+    stage_reasoning: dict[str, str] = Field(default_factory=dict)
     max_output_tokens: int | None = None
     app_title: str = "NCTE"
 
@@ -185,3 +188,18 @@ def redact(text: str, key: str | None = None) -> str:
         if secret:
             text = text.replace(secret, "***")
     return re.sub(r"sk-or-[A-Za-z0-9_\-]{8,}", "sk-or-***", text)
+
+
+def reasoning_setting(cfg: Config, stage: str) -> str | None:
+    """The reasoning setting a step's requests use: its own (``stage_reasoning``) or the run's (``reasoning_effort``).
+    None = send nothing (the model's default)."""
+    value = cfg.openrouter.stage_reasoning.get(stage.split(":")[0], cfg.openrouter.reasoning_effort)
+    return None if value in (None, "", "default") else value
+
+
+def reasoning_param(setting: str | None) -> dict[str, Any] | None:
+    if setting is None:
+        return None
+    if setting.startswith("max:"):
+        return {"max_tokens": int(setting[4:])}
+    return {"effort": setting}

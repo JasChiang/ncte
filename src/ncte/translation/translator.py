@@ -17,7 +17,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 
-from ..config import Config
+from ..config import Config, reasoning_param, reasoning_setting
 from ..epub.units import InlineSpec
 from ..errors import ContentBlockedError, ModelOutputError, RequestRejectedError
 from ..llm.base import LLMClient, LLMRequest, LLMResponse, StructuredMode
@@ -160,8 +160,8 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
                          json_schema=strict_json_schema(schema_model) if current == "json_schema" else None,
                          structured_mode=current, temperature=cfg.openrouter.temperature,
                          max_tokens=max_tokens, prompt_version=prompt.version_id,
-                         extra={"reasoning": {"effort": cfg.openrouter.reasoning_effort}}
-                         if cfg.openrouter.reasoning_effort else {}, id_codes=ids.to_long)
+                         extra={"reasoning": rp} if (rp := reasoning_param(reasoning_setting(cfg, stage))) else {},
+                         id_codes=ids.to_long)
         rid = recorder.start(req, unit_ids, est_cost)
         try:
             resp = client.complete(req)

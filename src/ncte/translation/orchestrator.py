@@ -96,11 +96,25 @@ def resolve_pricing(conn: sqlite3.Connection, client: LLMClient, model: str, *, 
     return Pricing.from_model_json(m), source
 
 
+def reasoning_label(param: dict[str, Any] | None) -> str | None:
+    """How a request's reasoning setting is recorded (and matched when estimates are calibrated)."""
+    if not param:
+        return None
+    return str(param["effort"]) if "effort" in param else f"max:{param.get('max_tokens')}"
+
+
 def check_reasoning_effort(cfg: Config, pricing: Pricing) -> None:
-    eff = cfg.openrouter.reasoning_effort
-    if eff and pricing.reasoning_efforts and eff not in pricing.reasoning_efforts:
-        raise NCTEError(f"reasoning_effort '{eff}' not supported by {pricing.model} "
-                        f"(supported: {', '.join(pricing.reasoning_efforts)})")
+    settings = {"(run)": cfg.openrouter.reasoning_effort, **cfg.openrouter.stage_reasoning}
+    for where, eff in settings.items():
+        if not eff or eff == "default":
+            continue
+        if eff.startswith("max:"):
+            if not eff[4:].isdigit():
+                raise NCTEError(f"reasoning setting for {where} must be max:<tokens>, got '{eff}'")
+            continue
+        if pricing.reasoning_efforts and eff not in pricing.reasoning_efforts:
+            raise NCTEError(f"reasoning_effort '{eff}' ({where}) not supported by {pricing.model} "
+                            f"(supported: {', '.join(pricing.reasoning_efforts)})")
     if eff and "reasoning" not in pricing.supported_parameters:
         raise NCTEError(f"{pricing.model} does not accept the reasoning parameter")
 
@@ -161,7 +175,7 @@ class DbRecorder:
                 "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (self.run_id, self.book_id, req.stage, req.request_hash(), req.model, req.prompt_version,
                  req.structured_mode, json.dumps(unit_ids), est_cost, "sent", "pending", utcnow(),
-                 (req.extra.get("reasoning") or {}).get("effort")))
+                 reasoning_label(req.extra.get("reasoning"))))
             return int(cur.lastrowid or 0)
 
     def success(self, rid: int, resp: LLMResponse, parse_status: str) -> None:
