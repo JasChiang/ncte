@@ -41,13 +41,14 @@ def test_nameless_character_merged_and_group_members_recorded(conn, cfg, fixture
     u = _first_unit(conn, book.id)
     named = conn.execute("SELECT id FROM characters WHERE book_id=? AND canonical_name IN (SELECT source_term FROM glossary "
                          "WHERE category='character') LIMIT 2", (book.id,)).fetchall()
+    last = conn.execute("SELECT max(ordinal) FROM units WHERE book_id=?", (book.id,)).fetchone()[0]  # noted elsewhere too
     sis, _ = upsert_character(conn, book.id, "姉ちゃん", name_zh="姊姊", aliases=[], unit_id=u["id"], ordinal=u["ordinal"], origin="t")
     grp, _ = upsert_character(conn, book.id, "取り巻きの二人", name_zh="跟班兩人", aliases=[], unit_id=u["id"], ordinal=u["ordinal"],
                               origin="t")
     for c in (sis, grp):
         conn.execute("INSERT INTO relation_notes(book_id, scene_id, a_id, b_id, relation_zh, a_is, b_is, kind, "
                      "evidence_unit_ids_json, evidence_quote, first_ordinal, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                     (book.id, "s", named[0]["id"], c, "主從", "主子", "跟班", "identity", "[]", "q", u["ordinal"], utcnow()))
+                     (book.id, "s", named[0]["id"], c, "主從", "主子", "跟班", "identity", "[]", "q", last, utcnow()))
     asked = []
 
     def verify(payload, req):
@@ -147,3 +148,29 @@ def test_plural_you_follows_the_people_the_line_is_said_to(conn, cfg, fixtures):
     conn.execute("DELETE FROM character_gender WHERE character_id=?", (b,))
     set_gender(conn, book.id, b, "male", ordinal=unit["ordinal"], quote="彼", origin="llm", certainty="explicit")
     assert "你們" in (second_person.check(conn, book.id, unit, "「妳們，走吧」") or "")
+
+
+def test_rereading_a_scene_drops_cards_only_its_last_reading_made(conn, cfg, fixtures):
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    u = _first_unit(conn, book.id)
+    stale, _ = upsert_character(conn, book.id, "姉ちゃん", name_zh="姊姊", aliases=[], unit_id=u["id"], ordinal=u["ordinal"],
+                                origin="llm")
+    kept, _ = upsert_character(conn, book.id, "母", name_zh="母親", aliases=[], unit_id=u["id"], ordinal=u["ordinal"],
+                               origin="llm")
+    from ncte.memory.repository import set_gender
+    set_gender(conn, book.id, kept, "female", ordinal=u["ordinal"], quote=None, origin="human")  # a person decided
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context", force=True)
+    assert conn.execute("SELECT 1 FROM characters WHERE id=?", (stale,)).fetchone() is None
+    assert conn.execute("SELECT 1 FROM characters WHERE id=?", (kept,)).fetchone() is not None
+    named = conn.execute("SELECT count(*) FROM characters WHERE canonical_name IN ('ミナ','カイト','リリア')").fetchone()[0]
+    assert named == 3  # the story's characters are read again as before
+
+
+def test_people_page_shows_group_members(conn, cfg, fixtures):
+    from ncte.gui import data
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    a, b = [r[0] for r in conn.execute("SELECT id FROM characters WHERE book_id=? LIMIT 2", (book.id,))]
+    conn.execute("INSERT INTO group_members(group_id, member_id, book_id, created_at) VALUES (?,?,?,?)", (a, b, book.id, utcnow()))
+    chars = data.characters(conn, book)["characters"]
+    assert chars[a]["members"] == [b] and chars[b]["member_of"] == [a]

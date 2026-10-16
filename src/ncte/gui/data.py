@@ -257,6 +257,10 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
         imp = conn.execute("SELECT * FROM character_impressions WHERE character_id=?", (cid,)).fetchone()
         if imp is not None:
             out[cid]["impression"] = {"personality": imp["personality"], "voice": imp["voice"], "role": imp["role"]}
+        for key, sql in (("members", "SELECT member_id FROM group_members WHERE group_id=?"),
+                         ("member_of", "SELECT group_id FROM group_members WHERE member_id=?")):
+            if ids := [r[0] for r in conn.execute(sql, (cid,)) if r[0] in chars]:
+                out[cid][key] = ids  # a group and who it is made of (ADR-046)
         g = genders.get(cid)
         if g is not None and vols.get(g["book_id"], 1.0) <= here:
             out[cid]["gender"] = {"g": g["gender"], "sure": "human" if g["origin"] == "human" else g["certainty"],

@@ -97,14 +97,11 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
     return items
 
 
-MAX_IDENTITY_ITEMS = 24
-
-
 def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]) -> list[dict[str, Any]]:
     """Is a card the same person as another card (「姉ちゃん」 in the sister's story is a character known by name), and who
     is a group card (「跟班兩人」) made of — or is it the same group as another card? Whether a card's name is a proper
     name or only a description is the model's call (the glossary keeps 「村長」「跟班」 as character names too), so every
-    card with lines or relations can be asked: groups first, then the cards known by the fewest name forms and lines
+    card with lines or relations is asked: groups first, then the cards known by the fewest name forms and lines
     (ADR-046)."""
     from ..lexicon import names_a_group
     from ..series import SERIES_SCOPE
@@ -134,7 +131,7 @@ def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
             item["members"] = [cards[g[0]] for g in conn.execute(
                 "SELECT member_id FROM group_members WHERE group_id=?", (c["id"],)) if g[0] in cards]
         out.append(item)
-    return out[:MAX_IDENTITY_ITEMS]
+    return out  # every card is asked, a batch at a time (about US$0.001 each)
 
 
 def narrator_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]) -> list[dict[str, Any]]:

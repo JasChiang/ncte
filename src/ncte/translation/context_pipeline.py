@@ -22,7 +22,7 @@ from typing import Any
 
 from ..analysis.memory_update import apply_memory_update, build_memory_payload
 from ..analysis.naming import apply_naming, auto_settle, build_naming_payload, model_view, pending
-from ..analysis.scene import apply_scene_analysis, build_analysis_payload, get_scene
+from ..analysis.scene import apply_scene_analysis, build_analysis_payload, forget_scene_cards, get_scene
 from ..analysis.split_read import MIN_PART, call_in_parts, merge_outputs, subset_payload
 from ..errors import ContentBlockedError, FatalAPIError, LLMError, ModelOutputError
 from ..llm.prompt_loader import load_prompt
@@ -693,6 +693,11 @@ class ContextOrchestrator(Orchestrator):
         error = None
         if self.cfg.context.scene_analysis:
             with self.lock:
+                mem = self._job("memory_update", sid)
+                with Transaction(self.conn):  # a re-read starts without the cards only the last reading of it made
+                    if gone := forget_scene_cards(self.conn, self.book.id, scene,
+                                                  memory_too=mem is not None and mem["status"] in ("pending", "running")):
+                        self.log(f"  re-read: {len(gone)} card(s) only the last reading of this scene made were dropped")
                 payload = build_analysis_payload(self.conn, self.book.id, scene,
                                                  [{"ja": g["source_term"], "zh": g["target_term"]} for g in self.glossary])
             try:

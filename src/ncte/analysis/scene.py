@@ -168,6 +168,65 @@ def _unit_texts(rows: list[sqlite3.Row]) -> list[UnitText]:
     return [UnitText(r["id"], clean(r["plain_text"]), r["ordinal"]) for r in rows]
 
 
+def forget_scene_cards(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, *, memory_too: bool) -> list[str]:
+    """Before a scene is read again: the cards its last reading made that nothing else uses are dropped, so the new
+    reading starts as the first one did (a 「姉ちゃん」 card left from it drew the program's action matching away from
+    the character the model named). Kept: cards with anything outside this scene, anything a person decided (a chosen
+    rendering, a gender or a speaker set by hand), and — unless the scene's memory is read again too — anything the
+    memory step wrote (facts, relations noted, forms of address, group members). Returns the dropped ids."""
+    lo, hi = scene["start_ordinal"], scene["end_ordinal"]
+    dropped = []
+    for c in conn.execute("SELECT * FROM characters WHERE book_id=? AND known_from_ordinal BETWEEN ? AND ? AND "
+                          "coalesce(origin,'') NOT IN ('human','user')", (book_id, lo, hi)).fetchall():
+        cid = c["id"]
+
+        def has(sql: str, *args: Any) -> bool:
+            return conn.execute(sql, args).fetchone() is not None
+
+        if has("SELECT 1 FROM utterances u JOIN units x ON x.id=u.unit_id WHERE u.speaker_id_nullable=? AND "
+               "(x.ordinal NOT BETWEEN ? AND ? OR u.status='human_verified')", cid, lo, hi) \
+                or has("SELECT 1 FROM character_gender WHERE character_id=? AND origin='human'", cid) \
+                or has("SELECT 1 FROM naming_proposals WHERE kind='character' AND ref=? AND status='decided'", cid) \
+                or has("SELECT 1 FROM glossary WHERE book_id=? AND category='character' AND source_term=? AND "
+                       "(verified=1 OR origin='user')", book_id, c["canonical_name"]) \
+                or has("SELECT 1 FROM relations WHERE (a_id=? OR b_id=?) AND origin!='llm'", cid, cid):
+            continue
+        memory = [("SELECT 1 FROM facts WHERE (subject=? OR object_ref=?) AND retracted_by IS NULL AND "
+                   "first_revealed_ordinal NOT BETWEEN ? AND ?", (cid, cid, lo, hi)),
+                  ("SELECT 1 FROM relation_notes WHERE (a_id=? OR b_id=?) AND first_ordinal NOT BETWEEN ? AND ?",
+                   (cid, cid, lo, hi)),
+                  ("SELECT 1 FROM address_terms WHERE (speaker_id=? OR addressee_id=?) AND (first_ordinal NOT BETWEEN ? AND ? "
+                   "OR zh_origin='human')", (cid, cid, lo, hi)),
+                  ("SELECT 1 FROM group_members WHERE (group_id=? OR member_id=?) AND coalesce(scene_id,'')!=?",
+                   (cid, cid, scene["id"]))]
+        if any(has(q, *a) for q, a in memory):
+            continue
+        if not memory_too and (has("SELECT 1 FROM facts WHERE subject=? OR object_ref=?", cid, cid)
+                               or has("SELECT 1 FROM relation_notes WHERE a_id=? OR b_id=?", cid, cid)
+                               or has("SELECT 1 FROM address_terms WHERE speaker_id=? OR addressee_id=?", cid, cid)
+                               or has("SELECT 1 FROM group_members WHERE group_id=? OR member_id=?", cid, cid)):
+            continue  # the memory step's notes about this card stay, and so does the card
+        for sql in ("UPDATE utterances SET speaker_id_nullable=NULL WHERE speaker_id_nullable=?",
+                    "DELETE FROM speaker_hypotheses WHERE candidate_character_id=?",
+                    "DELETE FROM speech_examples WHERE character_id=?",
+                    "DELETE FROM character_gender WHERE character_id=?",
+                    "DELETE FROM character_impressions WHERE character_id=?",
+                    "DELETE FROM naming_proposals WHERE kind='character' AND ref=?",
+                    "UPDATE entities SET character_id=NULL WHERE character_id=?"):
+            conn.execute(sql, (cid,))
+        for sql in ("DELETE FROM facts WHERE subject=? OR object_ref=?", "DELETE FROM relation_notes WHERE a_id=? OR b_id=?",
+                    "DELETE FROM address_terms WHERE speaker_id=? OR addressee_id=?",
+                    "DELETE FROM address_usage WHERE speaker_id=? OR addressee_id=?",
+                    "DELETE FROM group_members WHERE group_id=? OR member_id=?",
+                    "DELETE FROM relations WHERE a_id=? OR b_id=?"):
+            conn.execute(sql, (cid, cid))
+        conn.execute("DELETE FROM glossary WHERE book_id=? AND category='character' AND source_term=? AND verified=0 AND "
+                     "coalesce(origin,'')!='user'", (book_id, c["canonical_name"]))
+        conn.execute("DELETE FROM characters WHERE id=?", (cid,))
+        dropped.append(cid)
+    return dropped
+
+
 def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row,
                            glossary: list[dict[str, Any]]) -> dict[str, Any]:
     rows = scene_rows(conn, book_id, scene["id"])

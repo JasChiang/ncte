@@ -434,6 +434,7 @@ async function peopleView(id) {
       ${p.aka.length ? `<div class="muted small">其他稱呼：<span class="ja">${p.aka.map(esc).join("・")}</span></div>` : ""}
       ${(p.first_person || []).length ? `<div class="small" style="margin-top:4px">自稱：${p.first_person.map(([w, n]) => `<span class="form-tag"><span class="ja">${esc(w)}</span><span class="n">×${n}</span></span>`).join(" ")}</div>` : ""}
       ${genderLine(p, upto)}
+      ${groupLine(p, d, nm)}
       ${p.impression ? `<div class="card" style="margin-top:10px;background:var(--accent-soft)"><strong>角色印象</strong> <span class="muted small">讀完全書後整理</span>
         <div class="small" style="margin-top:4px">個性：${esc(p.impression.personality)}</div>
         <div class="small">口吻：${esc(p.impression.voice)}</div>
@@ -458,6 +459,14 @@ async function peopleView(id) {
     catch (e) { toast(e.message); } };
 }
 // relations of one person as known at the slider position (begun, not yet replaced), each with its source quote
+function groupLine(p, d, nm) {
+  // a group card and who it is made of; a member shows the groups it belongs to (people not shown yet are left out)
+  const link = ids => (ids || []).filter(k => d.characters[k]).map(k => `<a href="#" data-k="${esc(k)}">${esc(nm(k))}</a>`).join("・");
+  const members = link(p.members), of = link(p.member_of);
+  return (members ? `<div class="small" style="margin-top:4px">成員：${members}</div>` : "")
+    + (of ? `<div class="small" style="margin-top:4px">屬於：${of}</div>` : "");
+}
+
 function relationList(d, pid, upto, nm) {
   const rs = (d.relations || []).filter(r => (r.a === pid || r.b === pid) && r.at <= upto && (r.until == null || r.until > upto));
   if (!rs.length) return "";
