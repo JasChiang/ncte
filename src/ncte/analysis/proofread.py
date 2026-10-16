@@ -27,9 +27,12 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
     best = latest_texts(conn, book_id)
     names = {r["id"]: r["display_name_zh"] or r["canonical_name"] for r in conn.execute("SELECT * FROM characters")}
     said: dict[str, set[str]] = {}
-    for u in conn.execute("SELECT unit_id, speaker_id_nullable sp FROM utterances WHERE book_id=? AND sp IS NOT NULL",
-                          (book_id,)):
+    guessed: set[tuple[str, str]] = set()  # (unit, speaker) read as theirs, not stated in the text
+    for u in conn.execute("SELECT unit_id, speaker_id_nullable sp, status FROM utterances WHERE book_id=? AND sp IS NOT "
+                          "NULL", (book_id,)):
         said.setdefault(u["unit_id"], set()).add(u["sp"])
+        if u["status"] == "inferred":
+            guessed.add((u["unit_id"], u["sp"]))
     out: list[list[dict[str, Any]]] = []
     cur: list[dict[str, Any]] = []
     href = None
@@ -45,7 +48,7 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
         # the source as written: 《》 may be a reading (漢字《かな》) or the author's own brackets (「…、《亡雄の旅団》」);
         # stripping it would make the translation look like it added words
         item: dict[str, Any] = {"unit_id": r["id"], "ja": r["plain_text"], "zh": PH_RE.sub("", t["text"])}
-        if who := sorted(names.get(x, "?") for x in said.get(r["id"], ())):
+        if who := sorted(names.get(x, "?") + ("（推測）" if (r["id"], x) in guessed else "") for x in said.get(r["id"], ())):
             item["speaker"] = "、".join(who)
             item["_who"] = sorted(said[r["id"]])
         cur.append(item)

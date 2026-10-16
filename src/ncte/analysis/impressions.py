@@ -39,14 +39,15 @@ def requests(conn: sqlite3.Connection, book_id: str) -> list[tuple[dict[str, Any
         group, items = chars[i:i + PER_REQUEST], []
         ev: dict[str, tuple[str, int]] = {}
         for k, c in enumerate(group, 1):
-            said = conn.execute("SELECT x.quote_text, u.ordinal FROM utterances x JOIN units u ON u.id=x.unit_id WHERE "
+            said = conn.execute("SELECT x.quote_text, x.status, u.ordinal FROM utterances x JOIN units u ON u.id=x.unit_id WHERE "
                                 "x.speaker_id_nullable=? ORDER BY u.ordinal", (c["id"],)).fetchall()
             spread = said if len(said) <= LINES else [said[j * (len(said) - 1) // (LINES - 1)] for j in range(LINES)]
             lines = []
             for s in spread:
                 r = f"l{len(ev) + 1}"
                 ev[r] = ("line", s["ordinal"])
-                lines.append({"ref": r, "text": match_text(s["quote_text"])[:120]})
+                lines.append({"ref": r, "text": match_text(s["quote_text"])[:120],
+                              **({"guess": True} if s["status"] == "inferred" else {})})  # a line read as his, not stated
             facts = []
             for f in conn.execute("SELECT * FROM facts WHERE book_id=? AND (subject=? OR object_ref=?) AND retracted_by IS "
                                   "NULL ORDER BY first_revealed_ordinal LIMIT 8", (book_id, c["id"], c["id"])):

@@ -130,7 +130,8 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
                         **({"sample": a["evidence_quote"][:80]} if a["evidence_quote"] else {}),
                         "_context": _quotes(conn, a["id"]) or ([{"at": a["first_ordinal"], "text": a["evidence_quote"][:90]}]
                                                                if a["evidence_quote"] else [])})
-    main = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE} AND is_narrator=0 ORDER BY known_from_ordinal "
+    # the narrator too: often the one most addressed, and their gender decides 你／妳 for every form used to them
+    main = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE} ORDER BY is_narrator DESC, known_from_ordinal "
                         "LIMIT 30", (book_id,)).fetchall()
     to_check = []
     for c in suspects:

@@ -17,10 +17,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..epub.units import match_text
 
 HONORIFICS_ZH = {
-    "natural": "敬稱依語氣與關係自然處理：さん多半省略或視情況用「小姐／先生」，ちゃん可用「小～」或暱稱語感，"
-               "先輩譯「學長／學姊」，不硬套固定譯法。",
-    "explicit": "敬稱盡量譯出並固定對應（さん→「小姐／先生」、ちゃん→「小～」、くん→「同學」、先輩→「學長／學姊」），"
-                "讓角色之間的距離感明確。",
+    # principles only: what a honorific becomes depends on the book's world (a school, a court, an office), and the
+    # house rules (or the person) give the book's own renderings
+    "natural": "敬稱依語氣與關係自然處理：多半省略，需要時用符合這本書場景與兩人關係的中文稱呼，不硬套固定譯法。",
+    "explicit": "敬稱盡量譯出，用符合這本書場景的中文稱呼固定對應（本書的對應見 rules），讓角色之間的距離感明確。",
     "omit": "一般敬稱（さん、くん、ちゃん）原則上省略，只在敬稱本身有意義（關係變化、刻意疏遠或親暱）時譯出。",
 }
 

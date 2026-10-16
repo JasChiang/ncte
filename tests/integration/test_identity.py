@@ -239,3 +239,20 @@ def test_every_task_that_names_people_gets_their_gender_and_narrator(conn, cfg, 
     assert all(c.get("gender") == "female" for c in nm["characters"]), "naming"
     everyone = [c for p in (hs, rd, pr, *imp) for c in people(p)]
     assert any(c.get("narrator") for c in everyone)
+
+
+def test_guessed_speakers_are_marked_and_the_narrator_is_named(conn, cfg, fixtures):
+    """A line read as someone's (inferred) is marked where it shapes a judgment — the impression of a voice, the
+    proofreader's view of who speaks; naming sees the narrator, often the one most addressed."""
+    from ncte.analysis import impressions, naming, proofread
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    u = conn.execute("SELECT * FROM utterances WHERE book_id=? AND speaker_id_nullable IS NOT NULL LIMIT 1",
+                     (book.id,)).fetchone()
+    conn.execute("UPDATE utterances SET status='inferred' WHERE id=?", (u["id"],))
+    conn.execute("UPDATE characters SET is_narrator=1 WHERE id=?", (u["speaker_id_nullable"],))
+    lines = [ln for r, _ in impressions.requests(conn, book.id) for c in r["characters"] for ln in c["lines"]]
+    assert any(ln.get("guess") for ln in lines) and not all(ln.get("guess") for ln in lines)
+    paras = [p for ch in proofread.chunks(conn, book.id) for p in ch]
+    assert any("（推測）" in p.get("speaker", "") for p in paras)
+    assert any(c.get("narrator") for c in naming.build_naming_payload(conn, book.id)["characters"])
