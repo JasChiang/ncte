@@ -32,9 +32,10 @@ class SeriesStyle(BaseModel):
     rules: list[str] = Field(default_factory=list)  # free-form house rules, e.g. 「先輩一律譯學姊」
     voices: dict[str, str] = Field(default_factory=dict)  # character name → how they should sound
     notes: Literal["off", "inline"] = "inline"  # ADR-025: translator's notes in parentheses (on unless turned off)
+    auto: bool = False  # ADR-053: chosen by the model after reading (a person's change makes it theirs)
 
     def is_default(self) -> bool:
-        return self == SeriesStyle()
+        return self.model_copy(update={"auto": False}) == SeriesStyle()
 
 
 def _series_id(conn: sqlite3.Connection, book_id: str) -> str | None:
@@ -68,7 +69,7 @@ def style_payload(style: SeriesStyle, text: str, names: list[str] = ()) -> dict[
     nothing differs from the defaults and notes are off."""
     t = match_text(text)
     out: dict[str, Any] = {}
-    custom = style.model_copy(update={"notes": SeriesStyle().notes}) != SeriesStyle()
+    custom = style.model_copy(update={"notes": SeriesStyle().notes, "auto": False}) != SeriesStyle()
     if custom:
         out["honorifics"] = HONORIFICS_ZH[style.honorifics]
     if style.rules:

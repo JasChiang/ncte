@@ -96,3 +96,13 @@ def test_glossary_match_ignores_placeholders():
     assert not any(t == "glossary_mismatch" for t, _ in
                    run("発行所　株式会社⟦1⟧KADOKAWA⟦/1⟧", "發行所　株式會社⟦1⟧KADOKAWA⟦/1⟧", imap=EM, glossary=g))
 
+
+
+def test_house_punctuation_is_the_same_everywhere():
+    from ncte.qa.typeset import typeset
+
+    assert typeset("「――開戰吧」") == "「——開戰吧」" and typeset("──那個──") == "——那個——"
+    assert typeset("真的嗎!?") == "真的嗎！？" and typeset("好啊,走吧") == "好啊，走吧"
+    assert typeset("等等...我") == "等等……我" and typeset("嗯…") == "嗯……"
+    assert typeset("⟦1⟧「喂!?」⟦/1⟧") == "⟦1⟧「喂！？」⟦/1⟧"  # placeholders kept exactly
+    assert typeset("OK, let's go!") == "OK, let's go!"  # Latin text left alone

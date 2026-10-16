@@ -965,6 +965,22 @@ def _print_style(style: Any) -> None:
     typer.echo(f"notes: {style.notes}" + ("（譯註以括號附在段落後）" if style.notes == "inline" else "（不加譯註）"))
 
 
+@style_app.command("auto")
+def style_auto(epub: Annotated[str, typer.Argument()],
+               budget_usd: Annotated[float, typer.Option("--budget-usd")] = 0.3,
+               fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
+    """Let the model choose the house style for a book already read (ADR-053): honorific policy, the main characters'
+    speech habits, a few rules. A style a person set is kept."""
+    from .cli import _run
+    from .translation.orchestrator import RunOptions
+
+    cfg = state.cfg
+    book = _book(epub)
+    opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
+                      client="fake" if fake else cfg.openrouter.provider, house_style_only=True)
+    _run(book, opts, fake=fake, cfg=cfg)
+
+
 @style_app.command("show")
 def style_show(epub: Annotated[str, typer.Argument()],
                as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
@@ -996,6 +1012,7 @@ def style_set(epub: Annotated[str, typer.Argument()],
     conn = state.conn
     style = load_style(conn, book.id)
     data = style.model_dump()
+    data["auto"] = False  # a person changed it: kept from now on (ADR-053)
     if honorifics:
         data["honorifics"] = honorifics
     if notes:

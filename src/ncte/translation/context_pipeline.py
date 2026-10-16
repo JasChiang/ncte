@@ -197,6 +197,9 @@ class ContextOrchestrator(Orchestrator):
             self.conn.execute(
                 "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
                 (self.book.id, self.run_id, "impressions", self.book.id, len(scene_ids), "pending", utcnow()))
+            self.conn.execute(
+                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (self.book.id, self.run_id, "house_style", self.book.id, len(scene_ids), "pending", utcnow()))
         if self.cfg.context.proofread and not self.opts.unit_ids:
             self.conn.execute(
                 "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
@@ -238,6 +241,8 @@ class ContextOrchestrator(Orchestrator):
                 self.relations_pass()
             if not self._stop_reason:
                 self.impressions_pass()
+            if not self._stop_reason:
+                self.house_style_pass()  # before naming: forms of address follow the honorific policy
             if self._stop_reason or not self.naming_pass():
                 return
             self.translate_pass(scenes)
@@ -357,6 +362,34 @@ class ContextOrchestrator(Orchestrator):
             self._set_job("relations", self.book.id, "succeeded", None, {"relations": n, "pairs": len(pairs)})
         self.log(f"relations: {n} ({len(pairs)} pairs asked, {len(again)} asked again)")
         return n
+
+    def house_style_pass(self, *, record_job: bool = True) -> dict[str, int]:
+        """After the impressions (ADR-053): honorific policy, the main characters' speech habits and house rules."""
+        from ..analysis import house_style
+        from ..llm.schemas import HouseStyleOutput
+
+        job = self._job("house_style", self.book.id)
+        if record_job and (job is None or job["status"] not in ("pending", "running")):
+            return {}
+        with self.lock:
+            req, refs = house_style.request(self.conn, self.book.id)
+        stats: dict[str, int] = {}
+        if req["characters"]:
+            try:
+                parsed = self._llm("house_style", load_prompt("house_style"), req, [])
+            except FatalAPIError:
+                raise
+            except LLMError as exc:
+                self._finding(None, "house_style_failed", "low", str(exc)[:300])
+                parsed = None
+            if parsed is not None:
+                assert isinstance(parsed, HouseStyleOutput)
+                with self.lock, Transaction(self.conn):
+                    stats = house_style.apply(self.conn, self.book.id, parsed, refs)
+        if record_job:
+            self._set_job("house_style", self.book.id, "succeeded", None, stats)
+        self.log(f"house style: {stats}")
+        return stats
 
     def impressions_pass(self, *, record_job: bool = True) -> int:
         """After relations (ADR-045): personality, way of speaking and place in the story of the main characters."""

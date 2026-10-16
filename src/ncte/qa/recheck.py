@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import sqlite3
+from typing import Any
 
 from ..memory.db import Transaction, utcnow
 from ..translation.cache import glossary_entries, latest_texts
 from ..translation.translator import UnitInput
 from . import second_person
 from .rules import Finding, check_translation, worst
+from .typeset import typeset
 
 QA_TYPES = ("empty_translation", "placeholder_error", "untranslated", "japanese_residue", "ruby_notation_leak",
             "too_short", "too_long", "quote_mismatch", "number_mismatch", "non_taiwan_glyph", "glossary_mismatch",
@@ -31,8 +33,13 @@ def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
     units = {r["id"]: r for r in conn.execute("SELECT * FROM units WHERE book_id=?", (book_id,))}
     ph = ",".join("?" * len(QA_TYPES))
     with Transaction(conn):
-        for uid, t in best.items():
+        for uid, row in best.items():
             u = UnitInput.from_row(units[uid])
+            t: dict[str, Any] = dict(row)
+            if t["status"] != "human" and (fixed := typeset(t["text"])) != t["text"]:  # house punctuation (ADR-053)
+                conn.execute("UPDATE translations SET text=? WHERE id=?", (fixed, t["id"]))
+                t["text"] = fixed
+                stats["typeset"] = stats.get("typeset", 0) + 1
             f = check_translation(unit_id=uid, kind=u.kind, source_text=u.source_text, plain_text=u.plain_text,
                                   inline_map=u.inline_map, ruby_count=u.ruby_count, text=t["text"], glossary=gl)
             stats["checked"] += 1

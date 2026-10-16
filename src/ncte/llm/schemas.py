@@ -304,6 +304,21 @@ class ReaderOutput(_M):
     issues: list[ReaderIssue]
 
 
+# ------------------------------------------------------------ house style (ADR-053)
+class SpeechHabit(_M):
+    ref: str  # character ref
+    habit_ja: str
+    render_zh: str
+    note: str = ""
+
+
+class HouseStyleOutput(_M):
+    honorifics: Literal["natural", "explicit", "omit"]
+    honorifics_reason: str = ""
+    habits: list[SpeechHabit] = Field(default_factory=list)
+    rules: list[str] = Field(default_factory=list)
+
+
 # ------------------------------------------------------------ bilingual proofreading (ADR-051)
 class ProofreadIssue(_M):
     unit_id: str
@@ -358,6 +373,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "scenes": SceneBreaksOutput,
     "reader": ReaderOutput,
     "proofread": ProofreadOutput,
+    "house_style": HouseStyleOutput,
     "relations": RelationsOutput,
     "confirm": ConfirmOutput,
     "impressions": ImpressionsOutput,

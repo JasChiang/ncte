@@ -91,6 +91,10 @@ def default_reader(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     return {"issues": []}
 
 
+def default_house_style(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+    return {"honorifics": "natural", "honorifics_reason": "t", "habits": [], "rules": []}
+
+
 def default_proofread(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     """A proofreader who finds nothing wrong."""
     return {"issues": []}
@@ -122,6 +126,7 @@ DEFAULTS: dict[str, Responder] = {
     "scenes": default_scenes,
     "reader": default_reader,
     "proofread": default_proofread,
+    "house_style": default_house_style,
     "relations": default_relations,
     "confirm": default_confirm,
     "impressions": default_impressions,

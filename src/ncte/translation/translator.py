@@ -26,6 +26,7 @@ from ..llm.prompt_loader import Prompt, load_prompt
 from ..llm.schemas import SCHEMAS, TranslationBatchOutput, strict_json_schema
 from ..llm.short_ids import ShortIds
 from ..qa.rules import Finding, check_batch, check_translation
+from ..qa.typeset import typeset
 
 _FENCE = re.compile(r"^```(?:json)?\s*\n(.*)\n```\s*$", re.S)
 
@@ -267,6 +268,7 @@ class Translator:
             pending_ok: dict[str, UnitResult] = {}
             for u in group:
                 t = by_id[u.unit_id]
+                t.translated_text = typeset(t.translated_text)  # house punctuation, like a typesetter (ADR-053)
                 findings = check_translation(unit_id=u.unit_id, kind=u.kind, source_text=u.source_text,
                                              plain_text=u.plain_text, inline_map=u.inline_map,
                                              ruby_count=u.ruby_count, text=t.translated_text,

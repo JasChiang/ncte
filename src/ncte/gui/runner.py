@@ -20,7 +20,7 @@ BUDGET_FACTOR = 2.0  # a guard against runaway cost, not a forecast: normal vari
 MIN_BUDGET_USD = 0.5
 # what the person sees, in pipeline order (context mode reads the whole book before translating)
 STAGES = [("read", "讀", ("scene_analyze", "memory_update")), ("verify", "覆核", ("verify",)),
-          ("cast", "人物關係與印象", ("relations", "impressions")),
+          ("cast", "人物關係與印象", ("relations", "impressions", "house_style")),
           ("naming", "定名", ("naming",)), ("translate", "翻譯", ("translate",)), ("review", "審稿", ("review",)),
           ("proofread", "對照校稿", ("proofread",)),
           ("reader", "讀者檢查", ("reader",))]

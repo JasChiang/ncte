@@ -47,7 +47,8 @@ def test_style_cli(tmp_path, fixtures):
     assert out.exit_code == 0, out.output
     assert r.invoke(app, ["-w", str(ws), "style", "set", epub, "--remove-rule", "1"]).exit_code == 0
     data = json.loads(r.invoke(app, ["-w", str(ws), "style", "show", epub, "--json"]).output)
-    assert data == {"honorifics": "explicit", "rules": ["B"], "voices": {"ミナ": "禮貌"}, "notes": "inline"}
+    assert data == {"honorifics": "explicit", "rules": ["B"], "voices": {"ミナ": "禮貌"}, "notes": "inline",
+                    "auto": False}  # a person set it
     bad = r.invoke(app, ["-w", str(ws), "style", "set", epub, "--honorifics", "polite"])
     assert bad.exit_code != 0 and "invalid style" in str(bad.exception)
 
@@ -204,3 +205,29 @@ def test_gender_ranks(conn, cfg, fixtures):
     assert gender_view(conn, cid, hz) == ("female", "explicit")
     set_gender(conn, book.id, cid, "male", ordinal=u[1], quote="俺", origin="llm", certainty="inferred")
     assert gender_view(conn, cid, hz) == ("female", "explicit")  # an inference never overrides the text
+
+
+def test_the_model_chooses_a_house_style_after_reading_unless_a_person_set_one(conn, cfg, fixtures):
+    from ncte.llm.fake import FakeLLM
+    from ncte.memory.style import SeriesStyle, load_style, save_style
+
+    from ..helpers import run_book
+    from ..scripted import RESPONDERS
+
+    asked = []
+
+    def house(payload, req):
+        asked.append(payload)
+        ref = payload["characters"][0]["ref"]
+        return {"honorifics": "explicit", "honorifics_reason": "t", "rules": ["身分敬稱「様」譯作「大人」"],
+                "habits": [{"ref": ref, "habit_ja": "〜っす", "render_zh": "〜啦", "note": ""}]}
+
+    llm = FakeLLM(responders={**RESPONDERS, "house_style": house})
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], llm, mode="context")
+    assert asked and "address_forms" in asked[0] and asked[0]["characters"][0]["lines"]
+    st = load_style(conn, book.id)
+    assert st.auto and st.honorifics == "explicit" and st.rules == ["身分敬稱「様」譯作「大人」"]
+    assert any("〜っす" in v for v in st.voices.values())
+    save_style(conn, book.id, SeriesStyle(honorifics="omit"))  # a person's choice
+    run_book(conn, cfg, fixtures["basic"], llm, mode="context", force=True)
+    assert load_style(conn, book.id).honorifics == "omit"  # kept

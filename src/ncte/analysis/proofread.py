@@ -55,8 +55,11 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
 
 def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> list[dict[str, str]]:
     """The people who speak in this stretch (and anyone named in it): name, gender, way of speaking."""
+    from ..memory.style import load_style
+
     ids = {x for p in part for x in p.get("_who", [])}
     text = "".join(p["ja"] for p in part)
+    habits = load_style(conn, book_id).voices  # the house style's speech habits (ADR-053), by Japanese name
     out = []
     for c in conn.execute("SELECT c.*, g.gender, i.voice FROM characters c LEFT JOIN character_gender g ON "
                           "g.character_id=c.id LEFT JOIN character_impressions i ON i.character_id=c.id WHERE c.book_id=?",
@@ -69,6 +72,8 @@ def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> 
             item["gender"] = c["gender"]
         if c["voice"]:
             item["voice"] = c["voice"]
+        if habits.get(c["canonical_name"]):
+            item["habits"] = habits[c["canonical_name"]]
         out.append(item)
     return out[:30]
 
