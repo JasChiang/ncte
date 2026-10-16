@@ -694,6 +694,23 @@ def reader_check(epub: Annotated[str, typer.Argument()],
     _run(book, opts, fake=fake, cfg=cfg)
 
 
+@app.command("proofread")
+def proofread_cmd(epub: Annotated[str, typer.Argument()],
+                  budget_usd: Annotated[float, typer.Option("--budget-usd")] = 2.0,
+                  unit_id: Annotated[list[str] | None, typer.Option("--unit-id", help="Only these units")] = None,
+                  fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
+    """Check every paragraph against its source like a proofreader; real errors (meaning, omission, addition, speaker,
+    tone, voice, house style) are retranslated with the source — ADR-051. For a book already translated."""
+    from .cli import _run
+    from .translation.orchestrator import RunOptions
+
+    cfg = state.cfg
+    book = _book(epub)
+    opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
+                      client="fake" if fake else cfg.openrouter.provider, proofread_only=True, unit_ids=unit_id or None)
+    _run(book, opts, fake=fake, cfg=cfg)
+
+
 @names_app.command("verify")
 def names_verify(epub: Annotated[str, typer.Argument()],
                  budget_usd: Annotated[float, typer.Option("--budget-usd")] = 0.3,

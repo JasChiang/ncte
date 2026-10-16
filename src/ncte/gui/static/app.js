@@ -168,7 +168,7 @@ function findingLine(f) {
   return `<div class="issue" title="${esc(f.type)}：${esc(f.evidence)}">⚑ <b>${esc(findingLabel(f.type))}</b>　${esc(say)}</div>`;
 }
 // what the reviewer and the reader's look call an issue (ReviewIssue / ReaderIssue types), in Chinese
-const ISSUE = {mistranslation: "意思譯錯", omission: "漏譯", addition: "加了原文沒有的內容", speaker_error: "說話者弄錯",
+const ISSUE = {meaning: "意思譯錯", tone: "語氣不對", speaker: "說話者或對象弄錯", mistranslation: "意思譯錯", omission: "漏譯", addition: "加了原文沒有的內容", speaker_error: "說話者弄錯",
   name_inconsistency: "譯名前後不一致", subject_object_error: "主詞或受詞弄錯", spoiler: "提前劇透", placeholder: "排版標記",
   style: "用語或文風", other: "其他", unclear: "讀不懂", wordplay: "文字遊戲（可能要譯註）", translationese: "翻譯腔", voice: "口吻不像這個角色",
   contradiction: "前後矛盾"};
@@ -176,6 +176,7 @@ function findingLabel(t) {
   if (FINDING[t]) return FINDING[t];
   if (t.startsWith("after_review:")) return "審稿後仍有：" + findingLabel(t.slice(13));
   if (t.startsWith("review:reader_")) return "讀者檢查：" + (ISSUE[t.slice(14)] || t.slice(14));
+  if (t.startsWith("review:proofread_")) return "對照校稿：" + (ISSUE[t.slice(17)] || t.slice(17));
   if (t.startsWith("review:")) return "審稿：" + (ISSUE[t.slice(7)] || t.slice(7));
   return t;
 }
@@ -204,11 +205,11 @@ async function runCard(id, o) {
     return `<div class="small" style="margin-top:6px">${esc(s.label)}　${s.done} / ${s.total}${s.failed ? `　<span class="issue">失敗 ${s.failed}</span>` : ""}<div class="bar"><i style="width:${pc}%"></i></div></div>`; }).join("");
   const exportBtns = o.translated ? `<button class="btn ${r && r.status === "completed" ? "primary big" : ""}" id="exp">匯出並下載 EPUB</button> <span id="expres" class="small"></span>` : "";
   // where the run is, in words, and about how long is left (from the share of the work done so far)
-  const WEIGHT = {read: .36, verify: .01, cast: .02, naming: .01, translate: .55, review: .02, reader: .05};
+  const WEIGHT = {read: .32, verify: .01, cast: .03, naming: .01, translate: .48, review: .02, proofread: .09, reader: .04};
   const stages = p.stages || [], cur = stages.find(s => s.done < s.total);
   const SAY = {read: s => `讀全書：第 ${s.done + 1} / ${s.total} 項（先讀完整本，這時還看不到譯文）`, verify: () => "讀完了，正在覆核有疑點的地方",
     cast: () => "整理人物關係與角色印象", naming: () => "決定名字與稱呼的譯法", translate: s => `翻譯：${s.done} / ${s.total} 批`,
-    review: () => "審稿：重看被標出問題的段落", reader: () => "像讀者一樣把譯文讀一遍，修正讀不順的地方"};
+    review: () => "審稿：重看被標出問題的段落", proofread: s => `對照校稿：逐段對照原文找誤譯（${s.done} / ${s.total}）`, reader: () => "像讀者一樣把譯文讀一遍，修正讀不順的地方"};
   const share = stages.reduce((n, s) => n + (WEIGHT[s.key] || 0) * s.done / s.total, 0) / Math.max(.01, stages.reduce((n, s) => n + (WEIGHT[s.key] || 0), 0));
   const elapsed = r && r.started_at ? (Date.now() - Date.parse(r.started_at)) / 60000 : 0;
   const left = share > .03 && elapsed > 1 ? Math.max(1, Math.round(elapsed / share - elapsed)) : null;

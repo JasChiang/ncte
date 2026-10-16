@@ -197,6 +197,10 @@ class ContextOrchestrator(Orchestrator):
             self.conn.execute(
                 "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
                 (self.book.id, self.run_id, "impressions", self.book.id, len(scene_ids), "pending", utcnow()))
+        if self.cfg.context.proofread and not self.opts.unit_ids:
+            self.conn.execute(
+                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
+                (self.book.id, self.run_id, "proofread", self.book.id, len(scene_ids) + 1, "pending", utcnow()))
         if self.cfg.context.reader_pass and not self.opts.unit_ids:
             self.conn.execute(
                 "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
@@ -239,6 +243,8 @@ class ContextOrchestrator(Orchestrator):
             self.translate_pass(scenes)
         else:
             self.interleaved(scenes)
+        if not self._stop_reason:
+            self.proofread_pass()  # against the source first; the reader then reads the corrected Chinese
         if not self._stop_reason:
             self.reader_pass()
         if not self._stop_reason:
@@ -439,6 +445,65 @@ class ContextOrchestrator(Orchestrator):
         if record_job:
             self._set_job("reader", self.book.id, "succeeded", None, stats)
         self.log(f"reader's look: {stats}")
+        return stats
+
+    def proofread_pass(self, *, record_job: bool = True) -> dict[str, int]:
+        """Pass 3b (ADR-051): every paragraph against its source; real errors go back to the translator."""
+        from ..analysis import proofread
+        from ..llm.schemas import ProofreadOutput
+        from .review import _retranslate_with_feedback
+
+        job = self._job("proofread", self.book.id)
+        if record_job and (job is None or job["status"] not in ("pending", "running")):
+            return {}
+        with self.lock:
+            parts = proofread.chunks(self.conn, self.book.id, set(self.opts.unit_ids) if self.opts.unit_ids else None)
+        prompt = load_prompt("proofread")
+        stats = {"checked": 0, "issues": 0, "retranslated": 0, "fixed": 0, "still_flagged": 0}
+        for part in parts:
+            with self.lock:
+                cast = proofread.cast(self.conn, self.book.id, part)
+            visible = [{k: v for k, v in p.items() if not k.startswith("_")} for p in part]
+            blocked: list[str] = []
+            try:  # the content filter may refuse a stretch; it is then checked in halves
+                parsed = call_in_parts(lambda pl: self._llm("proofread", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
+                                       {"task": "proofread", "paragraphs": visible, "characters": cast}, "paragraphs", blocked)
+            except FatalAPIError:
+                raise
+            except LLMError as exc:
+                self._finding(None, "proofread_failed", "low", str(exc)[:300])
+                continue
+            for uid in blocked:
+                self._finding(uid, "proofread_blocked", "low", "the content filter refused this passage in proofreading")
+            if parsed is None:
+                continue
+            assert isinstance(parsed, ProofreadOutput)
+            stats["checked"] += len(part)
+            valid = {p["unit_id"] for p in part}
+            feedback: dict[str, list[dict[str, str]]] = {}
+            for it in parsed.issues:
+                if it.unit_id not in valid or it.severity == "low" or not it.problem.strip():
+                    continue  # a small slip is not worth a retranslation
+                stats["issues"] += 1
+                self._finding(it.unit_id, f"review:proofread_{it.kind}", it.severity,
+                              f"{it.problem[:300]}" + (f" → {it.fix[:160]}" if it.fix.strip() else ""))
+                feedback.setdefault(it.unit_id, []).append(
+                    {"issue_type": f"proofread_{it.kind}", "evidence": f"{it.problem}（譯文：{it.quote}）",
+                     "suggestion": f"{it.fix}\n{proofread.FIX_NOTE}"})
+            if not feedback:
+                continue
+            with self.lock:
+                rows = {r["id"]: r for r in self.conn.execute(
+                    f"SELECT * FROM units WHERE id IN ({','.join('?' * len(feedback))})", list(feedback))}
+            by_scene: dict[str, list[sqlite3.Row]] = {}
+            for uid in feedback:
+                if uid in rows:
+                    by_scene.setdefault(rows[uid]["scene_id"] or "", []).append(rows[uid])
+            for group in by_scene.values():  # one scene at a time: the translation keeps that scene's memory
+                _retranslate_with_feedback(self, group, {r["id"]: feedback[r["id"]] for r in group}, stats)
+        if record_job:
+            self._set_job("proofread", self.book.id, "succeeded", None, stats)
+        self.log(f"proofreading: {stats}")
         return stats
 
     def classify_address(self) -> None:

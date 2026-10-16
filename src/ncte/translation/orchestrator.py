@@ -57,6 +57,7 @@ class RunOptions:
     gender_only: bool = False  # `ncte names gender-scan` (context mode, read pass already done)
     address_only: bool = False  # `ncte names address-check` (ADR-037, read pass already done)
     reader_only: bool = False  # `ncte reader-check` (ADR-038, a book already translated)
+    proofread_only: bool = False  # `ncte proofread` (ADR-051, a book already translated)
     relations_only: bool = False  # `ncte names relations` (ADR-039, a book already read)
     verify_only: bool = False  # `ncte names verify` (ADR-033/046, a book already read)
     impressions_only: bool = False  # `ncte names impressions` (ADR-045, a book already read)
@@ -594,6 +595,8 @@ class Orchestrator:
                 self.classify_address()
             elif self.opts.reader_only:
                 self.reader_pass(record_job=False)
+            elif self.opts.proofread_only:
+                self.proofread_pass(record_job=False)
             elif self.opts.relations_only:
                 self.relations_pass(record_job=False)
             elif self.opts.verify_only:
@@ -667,6 +670,9 @@ class Orchestrator:
 
     def reader_pass(self, *, record_job: bool = True) -> dict[str, int]:
         raise NCTEError("the reader's look needs context mode")
+
+    def proofread_pass(self, *, record_job: bool = True) -> dict[str, int]:
+        raise NCTEError("proofreading needs context mode")
 
     def relations_pass(self, *, record_job: bool = True) -> int:
         raise NCTEError("relations need context mode")

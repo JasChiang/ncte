@@ -90,6 +90,11 @@ def default_reader(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     return {"issues": []}
 
 
+def default_proofread(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+    """A proofreader who finds nothing wrong."""
+    return {"issues": []}
+
+
 def default_relations(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     return {"relations": []}
 
@@ -115,6 +120,7 @@ DEFAULTS: dict[str, Responder] = {
     "verify": default_verify,
     "scenes": default_scenes,
     "reader": default_reader,
+    "proofread": default_proofread,
     "relations": default_relations,
     "confirm": default_confirm,
     "impressions": default_impressions,

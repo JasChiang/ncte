@@ -304,6 +304,20 @@ class ReaderOutput(_M):
     issues: list[ReaderIssue]
 
 
+# ------------------------------------------------------------ bilingual proofreading (ADR-051)
+class ProofreadIssue(_M):
+    unit_id: str
+    kind: Literal["meaning", "omission", "addition", "speaker", "tone", "voice", "style"]
+    severity: Literal["low", "medium", "high"]
+    quote: str
+    problem: str  # what is wrong, quoting the source
+    fix: str
+
+
+class ProofreadOutput(_M):
+    issues: list[ProofreadIssue]
+
+
 # ------------------------------------------------------------ relations (ADR-039)
 class RelationOut(_M):
     a: str  # character ref
@@ -343,6 +357,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "verify": VerifyOutput,
     "scenes": SceneBreaksOutput,
     "reader": ReaderOutput,
+    "proofread": ProofreadOutput,
     "relations": RelationsOutput,
     "confirm": ConfirmOutput,
     "impressions": ImpressionsOutput,
