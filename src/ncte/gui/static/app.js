@@ -23,7 +23,7 @@ const chip = (cls, text) => `<span class="chip ${cls}">${esc(text)}</span>`;
 
 // ------------------------------------------------------------ routing
 const TABS = [["翻譯"], ["overview", "概況"], ["review", "對照審稿"], ["names", "定名"], ["閱讀"],
-              ["story", "故事進度"], ["people", "角色檔案"], ["graph", "人物關係圖"], ["glossary", "名詞與稱呼"]];
+              ["read", "閱讀譯文"], ["story", "故事進度"], ["people", "角色檔案"], ["graph", "人物關係圖"], ["glossary", "名詞與稱呼"]];
 const READING = new Set(["story", "people", "graph"]);
 const cache = {};
 async function loadBook(id, what) {
@@ -47,7 +47,7 @@ async function route() {
     $("#posbar").hidden = !READING.has(tab);
     const ov = await loadBook(id, "overview");
     $("#crumb").textContent = ov.title;
-    await ({overview: overviewView, review: reviewView, names: namesView, story: storyView, people: peopleView,
+    await ({overview: overviewView, read: readView, review: reviewView, names: namesView, story: storyView, people: peopleView,
             graph: graphView, glossary: glossaryView}[tab] || overviewView)(id);
   } catch (e) { view.innerHTML = `<div class="card">讀取失敗：${esc(e.message)}</div>`; }
 }
@@ -153,7 +153,32 @@ const FINDING = {read_blocked: "內容過濾擋下，這段沒有讀到（說話
   quote_mismatch: "引號和原文不對應", untranslated: "沒有翻譯", japanese_residue: "殘留日文", non_taiwan_glyph: "簡體或日文字形",
   placeholder_error: "排版標記不對", number_mismatch: "數字和原文不同", too_short: "譯文比原文短很多", too_long: "譯文比原文長很多",
   empty_translation: "譯文是空的", narrator_name_leak: "譯文寫出了敘述者的記號", cantonese: "粵語用字", ruby_notation_leak: "讀音標記留在譯文裡", name_form_substitution: "稱呼被換成另一種"};
-function findingLabel(t) { return FINDING[t] || (t.startsWith("review:reader_") ? "讀者檢查：" + t.slice(14) : t.startsWith("review:") ? "審稿：" + t.slice(7) : t); }
+// what to look at for each kind of flag, in plain words (the program's own evidence stays in the tooltip)
+const FINDING_HINT = {quote_mismatch: "引號的種類或數量和原文不同，看看是不是漏了或多了引號", too_short: "譯文明顯比原文短，可能漏譯了一部分",
+  too_long: "譯文明顯比原文長，可能加了原文沒有的內容", glossary_mismatch: "名字的寫法和名詞表的譯名不同",
+  second_person_gender: "說話的對象是女性（或男性），看看「你／妳」有沒有用對", narration_first_person: "這段是第三人稱敘述，卻寫了「我」",
+  narrator_self_form: "敘述者稱呼自己的方式和全書不一致", offensive_term: "這個詞可能是貶義或歧視用語，看看原文是不是這個意思",
+  latin_word: "譯文出現原文沒有的英文", possible_added_name: "譯文可能補了原文沒寫的人名", untranslated: "這段沒有翻到",
+  japanese_residue: "譯文裡還留著日文", non_taiwan_glyph: "出現簡體字或日文字形", placeholder_error: "排版標記的位置不對",
+  number_mismatch: "數字和原文不同", empty_translation: "譯文是空的", cantonese: "出現粵語用字",
+  ruby_notation_leak: "讀音標記留在譯文裡", name_form_substitution: "原文的稱呼被換成了另一種", narrator_name_leak: "譯文寫出了敘述者的內部記號"};
+const hasCJK = s => /[\u3040-\u30ff\u4e00-\u9fff]/.test(s || "");
+function findingLine(f) {
+  const say = hasCJK(f.evidence) && !/^[\x00-\x7f]*$/.test(f.evidence.slice(0, 12)) ? f.evidence : (FINDING_HINT[f.type] || f.evidence);
+  return `<div class="issue" title="${esc(f.type)}：${esc(f.evidence)}">⚑ <b>${esc(findingLabel(f.type))}</b>　${esc(say)}</div>`;
+}
+// what the reviewer and the reader's look call an issue (ReviewIssue / ReaderIssue types), in Chinese
+const ISSUE = {mistranslation: "意思譯錯", omission: "漏譯", addition: "加了原文沒有的內容", speaker_error: "說話者弄錯",
+  name_inconsistency: "譯名前後不一致", subject_object_error: "主詞或受詞弄錯", spoiler: "提前劇透", placeholder: "排版標記",
+  style: "用語或文風", other: "其他", unclear: "讀不懂", wordplay: "文字遊戲（可能要譯註）", translationese: "翻譯腔", voice: "口吻不像這個角色",
+  contradiction: "前後矛盾"};
+function findingLabel(t) {
+  if (FINDING[t]) return FINDING[t];
+  if (t.startsWith("after_review:")) return "審稿後仍有：" + findingLabel(t.slice(13));
+  if (t.startsWith("review:reader_")) return "讀者檢查：" + (ISSUE[t.slice(14)] || t.slice(14));
+  if (t.startsWith("review:")) return "審稿：" + (ISSUE[t.slice(7)] || t.slice(7));
+  return t;
+}
 let poll = null;
 async function overviewView(id) {
   const o = await loadBook(id, "overview");
@@ -292,7 +317,7 @@ function rowHtml(u) {
       ${u.status === "human" ? chip("c-acc", "人工修改") + ` <button class="btn small" data-act="revert">改回機器譯文</button>` : ""}
       ${u.note ? `<div class="note">（註：${esc(u.note)}） <button class="btn small" data-act="drop-note">刪除譯註</button></div>` : ""}
       ${u.wordplay.map(w => `<div class="note">梗「${esc(w.term)}」：${esc(w.explanation)}</div>`).join("")}
-      ${u.findings.map(f => `<div class="issue" title="${esc(f.type)}">⚑ ${esc(findingLabel(f.type))}：${esc(f.evidence)}</div>`).join("")}</div>
+      ${u.findings.map(findingLine).join("")}</div>
     <div>${u.quotes.map(q => { const [c, l] = STATUS[q.status] || ["c-unk", q.status];
       return `<div>${esc(q.speaker || "？")} ${chip(c, l)}${q.disputed ? chip("c-warn", "有爭議") : ""}${q.second ? `<div class="muted small" title="讀完後再確認一次的結果">再確認：${esc(q.second)}</div>` : ""}</div>`; }).join("") || `<span class="muted small">敘述</span>`}</div></div>`;
 }
@@ -332,6 +357,31 @@ function bindRow(id, el, u) {
     try { await api(`book/${id}/units/${u.id}/${b.dataset.act}`, {}); invalidate(id); toast("已更新"); reviewView(id); }
     catch (err) { toast(err.message); }
   });
+}
+
+// ------------------------------------------------------------ reading the translation
+// the translation as a book: one chapter at a time, Chinese only or with the source beside it
+const readState = {chapter: null, both: false};
+async function readView(id) {
+  const chs = (await loadBook(id, "chapters")).filter(c => c.units);
+  if (readState.chapter == null || !chs.some(c => c.index === readState.chapter))
+    readState.chapter = (chs.find(c => c.kind === "story") || chs[0] || {}).index;
+  const i = chs.findIndex(c => c.index === readState.chapter), ch = chs[i];
+  if (!ch) { view.innerHTML = `<p class="muted">還沒有可以讀的內容。</p>`; return; }
+  const data = await api(`book/${id}/units?start=${ch.start}&end=${ch.end}&limit=5000`);  // the whole chapter
+  const nav = `<div class="read-nav"><button class="btn" data-go="-1" ${i > 0 ? "" : "disabled"}>← 上一章</button>
+      <select id="rchap">${chs.map(c => `<option value="${c.index}" ${c.index === ch.index ? "selected" : ""}>${esc(c.title)}</option>`).join("")}</select>
+      <button class="btn" data-go="1" ${i < chs.length - 1 ? "" : "disabled"}>下一章 →</button></div>`;
+  const para = u => u.zh == null ? `<p class="untr ja">${esc(u.ja)}<span class="chip c-unk">還沒翻譯</span></p>`
+    : readState.both ? `<div class="read-pair"><p class="ja">${esc(u.ja)}</p><p>${esc(u.zh)}${u.note ? `<span class="rnote">（${esc(u.note)}）</span>` : ""}</p></div>`
+    : `<p class="${u.kind === "heading" ? "rh" : ""}">${esc(u.zh)}${u.note ? `<span class="rnote">（${esc(u.note)}）</span>` : ""}</p>`;
+  view.innerHTML = `<div class="row" style="align-items:center;margin-bottom:10px;justify-content:space-between">${nav}
+      <div class="seg"><button data-b="0" class="${readState.both ? "" : "on"}">只看中文</button><button data-b="1" class="${readState.both ? "on" : ""}">中日對照</button></div></div>
+    <article class="card reader ${readState.both ? "both" : ""}">${data.units.length && data.units[0].kind === "heading" ? "" : `<h3>${esc(ch.title)}</h3>`}${data.units.map(para).join("")}
+      </article>${nav}`;
+  view.querySelectorAll("[data-go]").forEach(b => b.onclick = () => { readState.chapter = chs[i + +b.dataset.go].index; readView(id); window.scrollTo(0, 0); });
+  view.querySelectorAll("#rchap").forEach(s => s.onchange = () => { readState.chapter = +s.value; readView(id); window.scrollTo(0, 0); });
+  view.querySelectorAll("[data-b]").forEach(b => b.onclick = () => { readState.both = b.dataset.b === "1"; readView(id); });
 }
 
 // ------------------------------------------------------------ naming
@@ -471,17 +521,19 @@ async function peopleView(id) {
       ${(p.first_person || []).length ? `<div class="small" style="margin-top:4px">自稱：${p.first_person.map(([w, n]) => `<span class="form-tag"><span class="ja">${esc(w)}</span><span class="n">×${n}</span></span>`).join(" ")}</div>` : ""}
       ${genderLine(p, upto)}
       ${groupLine(p, d, nm)}
+      <div class="secnav">${[["sec-rel", "人物關係"], ["sec-addr", "稱呼"], ["sec-co", "常一起出場"], ["sec-ex", "說話例句"], ["sec-facts", "已知事實"]]
+        .map(([k, t]) => `<button class="btn small" data-sec="${k}">${t}</button>`).join("")}</div>
       ${p.impression ? `<div class="card" style="margin-top:10px;background:var(--accent-soft)"><strong>角色印象</strong> <span class="muted small">讀完全書後整理</span>
         <div class="small" style="margin-top:4px">個性：${esc(p.impression.personality)}</div>
         <div class="small">口吻：${esc(p.impression.voice)}</div>
         <div class="small">定位：${esc(p.impression.role)}</div></div>` : ""}
-      ${relationList(d, pid, upto, nm)}
-      <div class="row" style="margin-top:12px;gap:24px">
+      <div id="sec-rel">${relationList(d, pid, upto, nm)}</div>
+      <div class="row" id="sec-addr" style="margin-top:12px;gap:24px">
         <div style="flex:1 1 320px"><div class="addr-h"><strong>別人怎麼叫他</strong><span class="muted small">左邊是說話的人</span></div>${byPerson(called, a => a.speaker, k => esc(nm(k))) || '<div class="muted">—</div>'}</div>
         <div style="flex:1 1 320px"><div class="addr-h"><strong>他怎麼叫別人</strong><span class="muted small">左邊是被叫的人</span></div>${byPerson(calls, a => a.to, k => k === pid ? "（提到自己）" : esc(nm(k))) || '<div class="muted">—</div>'}</div></div>
-      <div style="margin-top:12px"><strong>常一起出場</strong><div>${Object.entries(co).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([o, k]) => `<a href="#" data-k="${esc(o)}">${esc(nm(o))}</a> <span class="muted small">${k}</span>`).join("　") || "—"}</div></div>
-      <div style="margin-top:12px"><strong>說話例句</strong> <span class="muted small">原文與該段譯文</span>${EX.map(e => `<div style="margin-top:6px">${bi(e.text, e.zh)}</div>`).join("") || '<div class="muted">—</div>'}</div>
-      <div style="margin-top:12px"><strong>已知事實</strong> <span class="muted small">${F.length} 筆</span><div class="scroll"><table><tr><th>段</th><th>內容</th><th>類型</th><th>原文依據</th></tr>
+      <div id="sec-co" style="margin-top:12px"><strong>常一起出場</strong><div>${Object.entries(co).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([o, k]) => `<a href="#" data-k="${esc(o)}">${esc(nm(o))}</a> <span class="muted small">${k}</span>`).join("　") || "—"}</div></div>
+      <div id="sec-ex" style="margin-top:12px"><strong>說話例句</strong> <span class="muted small">原文與該段譯文</span>${EX.map(e => `<div style="margin-top:6px">${bi(e.text, e.zh)}</div>`).join("") || '<div class="muted">—</div>'}</div>
+      <div id="sec-facts" style="margin-top:12px"><strong>已知事實</strong> <span class="muted small">${F.length} 筆</span><div class="scroll"><table><tr><th>段</th><th>內容</th><th>類型</th><th>原文依據</th></tr>
       ${F.map(f => `<tr><td class="mono small">${f.at}</td><td>${esc(f.predicate)}：${esc(f.object)}</td><td>${chip("c-acc", ftype[f.type] || f.type)}${chip(f.certainty === "explicit" ? "c-ok" : "c-warn", f.certainty === "explicit" ? "明寫" : "推測")}</td><td class="small">${bi(f.quote, f.quote_zh)}</td></tr>`).join("")}</table></div></div>`;
   }
   view.innerHTML = `<div class="row" style="align-items:flex-start"><div class="card plist" style="flex:0 1 210px;max-height:80vh;overflow:auto">
@@ -490,6 +542,7 @@ async function peopleView(id) {
     <details><summary class="muted small">書籍資訊裡的人名 ${groups.info.length} 個</summary>${groups.info.map(btn).join("")}</details></div>
     <div class="card" style="flex:1 1 480px">${card}</div></div>`;
   view.querySelectorAll("[data-k]").forEach(b => b.onclick = e => { e.preventDefault(); peopleState.person = b.dataset.k; peopleView(id); });
+  view.querySelectorAll("[data-sec]").forEach(b => b.onclick = () => { const el = document.getElementById(b.dataset.sec); if (el) el.scrollIntoView({behavior: "smooth", block: "start"}); });
   const gs = $("#genderSet"); if (gs) gs.onchange = async () => {
     try { await api(`book/${id}/characters/${peopleState.person}/gender`, {gender: gs.value}); invalidate(id); toast("性別已更新（之後的翻譯會用）"); peopleView(id); }
     catch (e) { toast(e.message); } };

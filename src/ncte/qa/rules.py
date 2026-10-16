@@ -120,12 +120,17 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
         elif ratio > 2.5:
             add("too_long", "medium", f"length ratio {ratio:.2f} (possible addition)")
 
-    for o, c in (("「", "」"), ("『", "』")):
+    # quotes: Taiwan writing changes the kinds (『』 → 「」, a title in 《》) and may add pairs (「阿爾汀」), which is style;
+    # what may drop a line is a translation with unpaired quotes, or with fewer quotes than the source
+    pairs = (("「", "」"), ("『", "』"), ("《", "》"), ("〈", "〉"))
+    src_q = sum(source_text.count(o) for o, _ in pairs[:2])
+    out_q = sum(text.count(o) for o, _ in pairs)
+    balanced = all(text.count(o) == text.count(c) for o, c in pairs)
+    for o, c in pairs[:2]:
         so, sc, to, tc = source_text.count(o), source_text.count(c), text.count(o), text.count(c)
         if (so, sc) != (to, tc):
-            # brackets added in pairs (「阿爾汀」, 「哼哼」) are a style choice; lost or unbalanced ones may drop a quote
-            added = to == tc and so == sc and to > so
-            add("quote_mismatch", "low" if added else "medium", f"{o}{c}: source {so}/{sc} → {to}/{tc}")
+            style = balanced and out_q >= src_q
+            add("quote_mismatch", "low" if style else "medium", f"{o}{c}: source {so}/{sc} → {to}/{tc}")
             break
 
     nums_src = set(NUM_RE.findall(unicodedata.normalize("NFKC", PH_RE.sub("", plain_text))))

@@ -64,7 +64,7 @@ class App:
             if what == "units":
                 s, e = q.get("start"), q.get("end")
                 return data.units(conn, book, start=int(s) if s else None, end=int(e) if e else None,
-                                  filt=q.get("filter", "all"))
+                                  filt=q.get("filter", "all"), limit=min(int(q.get("limit") or 400), 5000))
             if what == "story":
                 return data.story(conn, book)
             if what == "characters":

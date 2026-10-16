@@ -37,15 +37,16 @@ def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
                                   inline_map=u.inline_map, ruby_count=u.ruby_count, text=t["text"], glossary=gl)
             stats["checked"] += 1
             # a reviewer (or human) already looked at exactly this finding and found no problem: keep that decision
-            settled = {(r[0], r[1]) for r in conn.execute(
-                "SELECT type, evidence FROM qa_findings WHERE unit_id=? AND status IN ('cleared_by_review','accepted')",
-                (uid,))}
+            # (the model's check of a rule flag counts too; it appends its reason to the evidence)
+            settled = [(r[0], r[1] or "") for r in conn.execute(
+                "SELECT type, evidence FROM qa_findings WHERE unit_id=? AND status IN ('cleared_by_review','accepted',"
+                "'dismissed_by_check')", (uid,))]
             if (ev := second_person.check(conn, book_id, units[uid], t["text"])):
                 f.append(Finding("second_person_gender", "high", ev, uid))
             if units[uid]["scene_id"] in third_scenes and units[uid]["resource_href"] in story \
                     and first_person_slip(units[uid]["plain_text"], t["text"]):
                 f.append(Finding("narration_first_person", "high", "third-person narration says 我 outside quotes", uid))
-            f = [x for x in f if (x.type, x.evidence) not in settled]
+            f = [x for x in f if not any(x.type == ty and ev.startswith(x.evidence) for ty, ev in settled)]
             conn.execute(f"UPDATE qa_findings SET status='superseded' WHERE unit_id=? AND status='open' AND type IN ({ph})",
                          (uid, *QA_TYPES))
             for x in f:  # an "error" here is a translation already stored (rules got stricter): keep it visible
@@ -64,4 +65,11 @@ def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
                 stats["newly_flagged"] += 1
             elif high:
                 stats["still_flagged"] += 1
+        # a unit that failed once and has a translation now (retranslated later): the old failure is settled
+        done = [uid for uid in best]
+        for i in range(0, len(done), 500):
+            part = done[i:i + 500]
+            conn.execute(f"UPDATE qa_findings SET status='superseded' WHERE book_id=? AND status='open' AND "
+                         f"type IN ('translation_failed','content_blocked') AND unit_id IN ({','.join('?' * len(part))})",
+                         (book_id, *part))
     return stats
