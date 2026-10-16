@@ -232,7 +232,8 @@ async function download(id, name) {
 // ------------------------------------------------------------ review
 const reviewState = {chapter: null, filter: "flagged"};
 async function reviewView(id) {
-  const m = location.hash.match(/\?f=(\w+)/); if (m) reviewState.filter = m[1];
+  const m = location.hash.match(/[?&]f=(\w+)/); if (m) reviewState.filter = m[1];
+  const mc = location.hash.match(/[?&]ch=(\d+)/); if (mc) reviewState.chapter = +mc[1];  // a link to one chapter
   const chs = await loadBook(id, "chapters");
   if (reviewState.chapter == null) reviewState.chapter = (chs.find(c => c.kind === "story") || chs[0] || {}).index;
   const ch = chs.find(c => c.index === reviewState.chapter);
@@ -366,6 +367,7 @@ async function readingDataFor(id, what) {
   const d = await loadBook(id, what);
   const pos = $("#pos"), story = d.scenes.filter(s => s.story && s.a >= 0);
   pos.max = story.length;
+  const at = location.hash.match(/[?&]at=(\d+)/); if (at && POSIDX == null) POSIDX = +at[1];  // a link to a point in the story
   if (POSIDX == null || POSIDX > story.length) POSIDX = story.length;
   pos.value = POSIDX;
   const upto = POSIDX >= story.length ? Infinity : story[POSIDX].a - 1;
