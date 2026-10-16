@@ -44,6 +44,8 @@ def test_warnings():
 def test_glossary_checks():
     g = [{"source_term": "ミナ", "target_term": "米娜", "verified": True, "category": "character"}]
     assert ("glossary_mismatch", "high") in run("ミナは笑った。", "米奈笑了。", glossary=g)
+    w = [{"source_term": "ＦＵＳＨＩ", "target_term": "ＦＵＳＨＩ", "verified": True, "category": "character"}]
+    assert not [x for x in run("ＦＵＳＨＩ、よろしく", "FUSHI，拜託了", glossary=w) if x[0] == "glossary_mismatch"]
     full = [{"source_term": "カイル・ヴァイス", "target_term": "凱爾·弗里登", "verified": 1,
              "aliases": ["カイル", "英雄", "ヴァイス閣下"]}]
     assert run("剣士と魔女の転生記", "英雄與賢者的轉生婚", glossary=full) == set()  # a title is not the name
@@ -109,4 +111,7 @@ def test_house_punctuation_is_the_same_everywhere():
     assert typeset("好事啊⟦1⟧!?⟦/1⟧」") == "好事啊⟦1⟧！？⟦/1⟧」"  # marks alone inside a styled run read with their neighbours
     assert typeset("啊……⟦1⟧!?⟦/1⟧」") == "啊……⟦1⟧！？⟦/1⟧」" and typeset("「⟦/1⟧⟦2⟧!?⟦/2⟧　是") == "「⟦/1⟧⟦2⟧！？⟦/2⟧　是"
     assert typeset("喂～⟦1⟧!!⟦/1⟧　這") == "喂～⟦1⟧！！⟦/1⟧　這"
+    assert typeset("卡拉ＯＫ和２個人") == "卡拉OK和2個人"  # letters and digits half-width
+    assert typeset("完美了♡ 對吧♡") == "完美了♡　對吧♡" and typeset("耶！？ 搞什麼") == "耶！？　搞什麼"
+    assert typeset("☆ FUSHI，交給妳") == "☆ FUSHI，交給妳" and typeset("我有 3 個") == "我有 3 個"  # beside Latin: kept
     assert typeset("⟦1⟧!?⟦/1⟧") == "⟦1⟧!?⟦/1⟧" and typeset("他說⟦1⟧OK, go!⟦/1⟧") == "他說⟦1⟧OK, go!⟦/1⟧"

@@ -249,3 +249,14 @@ def test_house_style_sees_the_chosen_names_and_the_current_translation(conn, cfg
     assert "あだ名→小名" in req["names"]
     lines = [ln for c in req["characters"] for ln in c["lines"]]
     assert lines and all("ja" in ln for ln in lines) and any(ln.get("zh") for ln in lines)
+
+
+def test_house_style_shows_a_line_for_each_repeated_ending():
+    """A habit is seen whatever lines the spread picks: each repeated ending brings one example line."""
+    from ncte.analysis.house_style import _pick
+
+    said = [(f"「普通の台詞その{i}です」", f"u{i}") for i in range(60)]
+    for i in (5, 6, 7, 8):  # a habit the evenly spread lines miss
+        said[i] = (f"「行くっすよ{i}っす」", f"u{i}")
+    picked = [q for q, _ in _pick(said)]
+    assert any(q.endswith("っす」") for q in picked) and len(picked) <= 12 + 8

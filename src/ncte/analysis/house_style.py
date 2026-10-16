@@ -20,24 +20,40 @@ from ..llm.schemas import HouseStyleOutput
 from ..memory.style import SeriesStyle, load_style, save_style
 from .impressions import main_characters
 
-LINES = 10
+LINES = 12  # spread through the book
+EXAMPLES = 8  # one line for each repeated ending, so a habit is seen whatever the spread picks
 _END = re.compile(r"[」』！？!?…―─。、　 ～ー\s]+$")
 
 
-def endings(lines: list[str]) -> list[str]:
-    """Line endings this character repeats (2–4 characters, at least 4 times): candidates for a habit of speech; the
-    model decides which are habits."""
+def _ending_counts(lines: list[str]) -> list[tuple[str, int]]:
     cnt: Counter[str] = Counter()
     for q in lines:
         q = _END.sub("", match_text(q).strip("「『"))
         for n in (2, 3, 4):
             if len(q) > n + 1:
                 cnt[q[-n:]] += 1
-    out: list[str] = []
+    out: list[tuple[str, int]] = []
     for e, k in cnt.most_common(30):
-        if k >= 4 and not any(e in o or o in e for o in out):
-            out.append(f"〜{e}（{k} 次）")
+        if k >= 4 and not any(e in o or o in e for o, _ in out):
+            out.append((e, k))
     return out[:6]
+
+
+def endings(lines: list[str]) -> list[str]:
+    """Line endings this character repeats (2–4 characters, at least 4 times): candidates for a habit of speech; the
+    model decides which are habits."""
+    return [f"〜{e}（{k} 次）" for e, k in _ending_counts(lines)]
+
+
+def _pick(said: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """Lines spread through the book, then one line for each repeated ending not among them, in book order."""
+    idx = set(range(len(said))) if len(said) <= LINES else {j * (len(said) - 1) // (LINES - 1) for j in range(LINES)}
+    for e, _ in _ending_counts([q for q, _ in said])[:EXAMPLES]:
+        shown = [i for i in idx if _END.sub("", match_text(said[i][0])).endswith(e)]
+        if not shown and (hit := next((i for i, (q, _) in enumerate(said)
+                                       if _END.sub("", match_text(q).strip("「『")).endswith(e)), None)) is not None:
+            idx.add(hit)
+    return [said[i] for i in sorted(idx)]
 
 
 def request(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, Any], dict[str, str]]:
@@ -52,9 +68,8 @@ def request(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, Any], dic
     for k, c in enumerate(chars, 1):
         said = [(r[0], r[1]) for r in conn.execute("SELECT quote_text, unit_id FROM utterances WHERE "
                                                    "speaker_id_nullable=? AND book_id=? ORDER BY id", (c["id"], book_id))]
-        spread = said if len(said) <= LINES else [said[j * (len(said) - 1) // (LINES - 1)] for j in range(LINES)]
         lines: list[dict[str, str]] = []
-        for q, uid in spread:
+        for q, uid in _pick(said):
             line = {"ja": match_text(q)[:80]}
             if (t := best.get(uid)) is not None:
                 line["zh"] = PH_RE.sub("", t["text"]).strip()[:120]  # the paragraph as translated now

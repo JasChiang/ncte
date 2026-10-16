@@ -16,6 +16,7 @@ from typing import Any
 
 from ..epub.units import PH_RE, InlineSpec, match_text, validate_placeholders
 from ..lexicon import GENERIC_REFERENTS
+from .typeset import halfwidth
 
 # Hiragana + katakana letters only. Excludes ゠ (U+30A0), ・ (U+30FB), ー (U+30FC) and halfwidth ｰ (U+FF70):
 # they are punctuation that is also normal in Chinese text (間隔號、長音).
@@ -186,7 +187,7 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
         return any(len(p) >= 2 and p in flat for p in re.split(r"[・･·]", zh))
 
     for g in gl:
-        ja, zh = g.get("source_term") or g.get("ja"), g.get("target_term") or g.get("zh")
+        ja, zh = g.get("source_term") or g.get("ja"), halfwidth(g.get("target_term") or g.get("zh") or "")
         if not ja or not zh:
             continue
         in_src = in_source(g)
@@ -195,7 +196,7 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
             add("glossary_mismatch", sev, f"{ja} → expected 「{zh}」")
             # another name form of the same entity used instead (the official name rendered with the nickname's rendering)
             for other in entities.get(str(g.get("entity_id") or ""), []):
-                ozh = other.get("target_term") or ""
+                ozh = halfwidth(other.get("target_term") or "")
                 if other is not g and ozh and ozh != zh and ozh not in zh and zh not in ozh and ozh in flat \
                         and not in_source(other):
                     add("name_form_substitution", "high",
@@ -204,7 +205,7 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
               and ja not in GENERIC_REFERENTS):
             # justified if any other entry whose rendering contains this name is present in the source
             # (ソラ / ソラっち / 天野ソラ → 索拉 …)
-            if any(in_source(o) for o in gl if zh in str(o.get("target_term") or o.get("zh") or "")):
+            if any(in_source(o) for o in gl if zh in halfwidth(str(o.get("target_term") or o.get("zh") or ""))):
                 continue
             add("possible_added_name", "high", f"「{zh}」 appears in translation but {ja} not in source")
     return f
