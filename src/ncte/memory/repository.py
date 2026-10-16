@@ -143,9 +143,12 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
                 "UPDATE OR IGNORE relations SET a_id=? WHERE a_id=?",
                 "UPDATE OR IGNORE relations SET b_id=? WHERE b_id=?",
                 "UPDATE OR IGNORE character_impressions SET character_id=? WHERE character_id=?",
-                "UPDATE entities SET character_id=? WHERE character_id=?"):
+                "UPDATE entities SET character_id=? WHERE character_id=?",
+                "UPDATE OR IGNORE group_members SET group_id=? WHERE group_id=?",
+                "UPDATE OR IGNORE group_members SET member_id=? WHERE member_id=?"):
         conn.execute(sql, (keep_id, drop_id))
     conn.execute("DELETE FROM speech_examples WHERE character_id=?", (drop_id,))
+    conn.execute("DELETE FROM group_members WHERE group_id=? OR member_id=? OR group_id=member_id", (drop_id, drop_id))
     conn.execute("DELETE FROM relations WHERE a_id=? OR b_id=?", (drop_id, drop_id))  # duplicates of kept ones
     conn.execute("DELETE FROM character_impressions WHERE character_id=?", (drop_id,))
     conn.execute("UPDATE characters SET is_narrator=1 WHERE id=? AND ?", (keep_id, int(drop["is_narrator"] or 0)))

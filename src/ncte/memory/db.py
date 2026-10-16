@@ -577,6 +577,10 @@ CREATE TABLE group_members (
     PRIMARY KEY (group_id, member_id)
 );
 """),
+    (21, "group members noted while reading (the scene they were noted in, so reading it again replaces them)", """
+ALTER TABLE group_members ADD COLUMN scene_id TEXT;
+ALTER TABLE group_members ADD COLUMN origin TEXT NOT NULL DEFAULT 'verify';
+"""),
 ]
 
 

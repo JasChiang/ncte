@@ -97,7 +97,7 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
     return items
 
 
-MAX_IDENTITY_ITEMS = 16
+MAX_IDENTITY_ITEMS = 24
 
 
 def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]) -> list[dict[str, Any]]:
@@ -111,7 +111,9 @@ def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
 
     rows = conn.execute(
         "SELECT c.*, (SELECT COUNT(*) FROM utterances u WHERE u.speaker_id_nullable=c.id) n, "
-        "(SELECT COUNT(*) FROM relation_notes r WHERE r.a_id=c.id OR r.b_id=c.id) k FROM characters c "
+        "(SELECT COUNT(*) FROM relation_notes r WHERE r.a_id=c.id OR r.b_id=c.id) "
+        "+ (SELECT COUNT(*) FROM address_terms t WHERE t.speaker_id=c.id OR t.addressee_id=c.id) "
+        "+ (SELECT COUNT(*) FROM group_members g WHERE g.group_id=c.id OR g.member_id=c.id) k FROM characters c "
         "WHERE c.book_id=? AND c.is_narrator=0 ORDER BY c.known_from_ordinal", (book_id,)).fetchall()
     cards = {r[0]: names[r[0]] for r in conn.execute(  # earlier volumes' characters too
         f"SELECT id FROM characters WHERE {SERIES_SCOPE} AND is_narrator=0", (book_id,)) if r[0] in names}
@@ -126,8 +128,12 @@ def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
         called_by = [f"{names.get(a['speaker_id'], '?')}：{a['form_ja']}" for a in conn.execute(
             "SELECT speaker_id, form_ja FROM address_terms WHERE book_id=? AND addressee_id=? LIMIT 5", (book_id, c["id"]))]
         kind = "group" if names_a_group(c["canonical_name"]) else "identity"
-        out.append({"ref": f"{'p' if kind == 'group' else 'i'}:{c['id']}", "kind": kind, "name": cards[c["id"]],
-                    "context": ctx, "called_by": called_by, "candidates": others})
+        item = {"ref": f"{'p' if kind == 'group' else 'i'}:{c['id']}", "kind": kind, "name": cards[c["id"]],
+                "context": ctx, "called_by": called_by, "candidates": others}
+        if kind == "group":  # members noted while reading: the model confirms or adds
+            item["members"] = [cards[g[0]] for g in conn.execute(
+                "SELECT member_id FROM group_members WHERE group_id=?", (c["id"],)) if g[0] in cards]
+        out.append(item)
     return out[:MAX_IDENTITY_ITEMS]
 
 

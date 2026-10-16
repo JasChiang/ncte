@@ -284,6 +284,11 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
         if vols.get(r["book_id"], 1.0) > here or r["a_id"] not in out or r["b_id"] not in out:
             continue
         this = r["book_id"] == book.id
+        for e in json.loads(r["evidence_json"] or "[]"):
+            if e["kind"] == "passage" and ("passage", e["id"]) not in quotes:  # a paragraph cited as it stands
+                u = conn.execute("SELECT plain_text, ordinal FROM units WHERE id=?", (e["id"],)).fetchone()
+                if u:
+                    quotes[("passage", e["id"])] = (RUBY.sub("", plain(u[0]))[:200], u[1])
         ev = [quotes[(e["kind"], e["id"])] for e in json.loads(r["evidence_json"] or "[]") if (e["kind"], e["id"]) in quotes]
         rels.append({"a": r["a_id"], "b": r["b_id"], "rel": r["relation_zh"], "a_is": r["a_is"], "b_is": r["b_is"],
                      "at": r["since_ordinal"] if this else -1,

@@ -80,3 +80,48 @@ def test_verify_command(tmp_path, fixtures):
     assert r.invoke(app, ["-w", str(ws), "translate", epub, "--fake", "--mode", "context"]).exit_code == 0
     out = r.invoke(app, ["-w", str(ws), "names", "verify", epub, "--fake"])
     assert out.exit_code == 0 and "second look:" in out.output, out.output
+
+
+def test_reading_notes_group_members_and_rereading_replaces_them(conn, cfg, fixtures):
+    groups = []
+
+    def memory(payload, req):
+        out = RESPONDERS["memory_update"](payload, req)
+        ks = payload["known_characters"]
+        groups.append([k for k in ks if k.get("members")])
+        if len(ks) >= 3 and payload["units"]:
+            u = payload["units"][0]
+            out["groups"] = [{"group_ref": ks[0]["character_id"], "member_refs": [ks[1]["character_id"], ks[2]["character_id"]],
+                              "evidence_unit_ids": [u["unit_id"]], "evidence_quote": u["source"][:4]},
+                             {"group_ref": ks[0]["character_id"], "member_refs": [ks[1]["character_id"]],
+                              "evidence_unit_ids": [u["unit_id"]], "evidence_quote": "原文にない言葉"}]  # not in the text
+        return out
+
+    llm = FakeLLM(responders={**RESPONDERS, "memory_update": memory})
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], llm, mode="context")
+    rows = conn.execute("SELECT group_id, member_id, origin FROM group_members").fetchall()
+    assert rows and all(r["origin"] == "read" for r in rows)
+    run_book(conn, cfg, fixtures["basic"], llm, mode="context", force=True)
+    assert len(conn.execute("SELECT * FROM group_members").fetchall()) == len(rows)  # replaced, not doubled
+    assert any(groups)  # a group card shows its members to the reading
+
+
+def test_group_passages_reach_member_pairs(conn, cfg, fixtures):
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    u = conn.execute("SELECT id, ordinal, plain_text FROM units WHERE book_id=? AND kind='text' AND plain_text LIKE '%ミナ%' "
+                     "ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
+    mina = conn.execute("SELECT id FROM characters WHERE canonical_name='ミナ'").fetchone()[0]
+    kaito = conn.execute("SELECT id FROM characters WHERE canonical_name='カイト'").fetchone()[0]
+    word = next(w for w in ("「", "。", "、") if w in u["plain_text"])  # any text in the paragraph names "the group"
+    grp, _ = upsert_character(conn, book.id, word * 2 if word * 2 in u["plain_text"] else u["plain_text"][:3], name_zh="跟班們",
+                              aliases=[], unit_id=u["id"], ordinal=u["ordinal"], origin="t")
+    conn.execute("INSERT INTO group_members(group_id, member_id, book_id, created_at) VALUES (?,?,?,?)",
+                 (grp, kaito, book.id, utcnow()))
+    conn.execute("INSERT INTO relation_notes(book_id, scene_id, a_id, b_id, relation_zh, a_is, b_is, kind, "
+                 "evidence_unit_ids_json, evidence_quote, first_ordinal, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                 (book.id, "s", mina, grp, "主從", "主子", "跟班", "identity", "[]", "q", u["ordinal"], utcnow()))
+    pairs, chars = relations.candidate_pairs(conn, book.id)
+    p = next(p for p in pairs if {p["a"], p["b"]} == {mina, kaito})
+    assert p["passages"] and p["passages"][0]["id"] == u["id"]
+    req = relations.requests([p], chars)[0][0]
+    assert req["pairs"][0]["passages"][0]["text"].startswith("〔關於群體「跟班們」〕")

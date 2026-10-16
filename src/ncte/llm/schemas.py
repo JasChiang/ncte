@@ -205,6 +205,14 @@ class StatedRelation(_M):
     evidence_quote: str
 
 
+class GroupMembers(_M):
+    """Who a group character (「取り巻きの二人」) is, as this scene shows it (ADR-046)."""
+    group_ref: str
+    member_refs: list[str]
+    evidence_unit_ids: list[str]
+    evidence_quote: str
+
+
 class MemoryUpdateOutput(_M):
     scene_summary: str
     facts: list[FactOut]
@@ -215,6 +223,7 @@ class MemoryUpdateOutput(_M):
     wordplay: list[WordplayOut] = Field(default_factory=list)
     genders: list[GenderOut] = Field(default_factory=list)
     relations: list[StatedRelation] = Field(default_factory=list)
+    groups: list[GroupMembers] = Field(default_factory=list)
 
 
 # ------------------------------------------------------------------ naming (ADR-023)

@@ -24,6 +24,7 @@ from ..series import SERIES_SCOPE
 MAX_PAIRS = 40
 PAIRS_PER_REQUEST = 8
 MAX_EVIDENCE = 10  # per kind and pair
+MAX_PASSAGES = 3  # source paragraphs naming a member's group together with the other person
 
 
 def _names(c: sqlite3.Row, proper: set[str]) -> set[str]:
@@ -47,7 +48,8 @@ def candidate_pairs(conn: sqlite3.Connection, book_id: str) -> tuple[list[dict[s
 
     def pair(a: str, b: str) -> dict[str, Any]:
         k = (a, b) if a < b else (b, a)
-        return pairs.setdefault(k, {"a": k[0], "b": k[1], "notes": [], "facts": [], "address": [], "together": 0, "via": {}})
+        return pairs.setdefault(k, {"a": k[0], "b": k[1], "notes": [], "facts": [], "address": [], "together": 0, "via": {},
+                                    "passages": []})
 
     for n in conn.execute("SELECT * FROM relation_notes WHERE book_id=? ORDER BY first_ordinal", (book_id,)):
         if n["a_id"] in chars and n["b_id"] in chars:
@@ -80,6 +82,7 @@ def candidate_pairs(conn: sqlite3.Connection, book_id: str) -> tuple[list[dict[s
                         if row not in q[kind]:
                             q[kind].append(row)
                             q["via"][(kind, row["id"])] = label
+    _group_passages(conn, book_id, chars, members, pairs, pair)
     speaking: dict[str, set[str]] = {}
     for u in conn.execute("SELECT scene_id, speaker_id_nullable sp FROM utterances WHERE book_id=? AND sp IS NOT NULL",
                           (book_id,)):
@@ -93,12 +96,41 @@ def candidate_pairs(conn: sqlite3.Connection, book_id: str) -> tuple[list[dict[s
     out = []
     for p in pairs.values():
         uses = sum(int(t["uses"] or 0) for t in p["address"])
-        p["weight"] = 5 * len(p["notes"]) + 2 * len(p["facts"]) + min(uses, 5) + p["together"] / 2
+        p["weight"] = 5 * len(p["notes"]) + 2 * len(p["facts"]) + 2 * len(p["passages"]) + min(uses, 5) + p["together"] / 2
         p["should"] = bool(p["notes"]) or (bool(p["address"]) and p["together"] >= 5)
-        if p["notes"] or p["facts"] or (p["address"] and p["together"] >= 3):
+        if p["notes"] or p["facts"] or p["passages"] or (p["address"] and p["together"] >= 3):
             out.append(p)
     out.sort(key=lambda p: -p["weight"])
     return out[:MAX_PAIRS], chars
+
+
+def _forms(c: sqlite3.Row) -> list[str]:
+    return [f for f in {c["canonical_name"], *json.loads(c["aliases_json"] or "[]")} if f and len(f) >= 2]
+
+
+def _group_passages(conn: sqlite3.Connection, book_id: str, chars: dict[str, sqlite3.Row], members: dict[str, list[str]],
+                    pairs: dict[tuple[str, str], dict[str, Any]], pair: Any) -> None:
+    """A group often has no notes of its own (「ファレグは取り巻きたちを連れて」 is neither a fact nor a note): the
+    paragraphs that name the group together with someone a member is paired with go to that member's pair, earliest
+    first, for the model to read (ADR-046). Finding them is plain name matching; what they mean is the model's call."""
+    if not members:
+        return
+    from .dialogue import clean
+
+    units = [(u["id"], u["ordinal"], clean(u["plain_text"])) for u in conn.execute(
+        "SELECT id, ordinal, plain_text FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal", (book_id,))]
+    for grp, ms in members.items():
+        gforms = _forms(chars[grp])
+        others = {x for (a, b) in list(pairs) for x in (a, b) if {a, b} & {grp, *ms}} - {grp, *ms}
+        for other in others:
+            oforms = _forms(chars[other])
+            hits = [u for u in units if any(f in u[2] for f in gforms) and any(f in u[2] for f in oforms)][:MAX_PASSAGES]
+            if not hits:
+                continue
+            label = chars[grp]["display_name_zh"] or chars[grp]["canonical_name"]
+            for m in ms:
+                q = pair(m, other)
+                q["passages"] += [{"id": h[0], "at": h[1], "text": h[2][:200], "via": label} for h in hits]
 
 
 def requests(pairs: list[dict[str, Any]], chars: dict[str, sqlite3.Row], *, recheck: bool = False
@@ -134,7 +166,14 @@ def requests(pairs: list[dict[str, Any]], chars: dict[str, sqlite3.Row], *, rech
                 via = p["via"].get(("facts", f["id"]))
                 facts.append({"ref": r, "at": f["first_revealed_ordinal"], "quote": f["evidence_quote"],
                               "text": (f"〔關於群體「{via}」〕" if via else "") + f"{subj} {f['predicate']} {f['object']}"})
+            passages = []
+            for g in p.get("passages", [])[:MAX_PASSAGES]:
+                r = f"u{len(ev) + 1}"
+                ev[r] = ("passage", g["id"], g["at"])
+                allowed[pid].add(r)
+                passages.append({"ref": r, "at": g["at"], "text": f"〔關於群體「{g['via']}」〕{g['text']}"})
             items.append({"pair": pid, "a": cref[p["a"]], "b": cref[p["b"]], "notes": notes, "facts": facts,
+                          **({"passages": passages} if passages else {}),
                           "address": [{"from": cref[t["speaker_id"]], "to": cref[t["addressee_id"]], "form": t["form_ja"],
                                        "uses": t["uses"]} for t in p["address"][:MAX_EVIDENCE]],
                           "scenes_together": p["together"]})

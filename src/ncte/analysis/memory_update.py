@@ -45,6 +45,9 @@ def build_memory_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     views = {c["id"]: v for c in vis.visible_characters(conn, book_id, scene["end_ordinal"])
              if (v := vis.character_view(conn, book_id, c, scene["end_ordinal"], forms_at))}
     names = {cid: v["name_zh"] or v["name_ja"] for cid, v in views.items()}
+    for g in conn.execute("SELECT group_id, member_id FROM group_members WHERE book_id=?", (book_id,)):
+        if g[0] in views and g[1] in names:  # a group card shows who it is known to be made of
+            views[g[0]].setdefault("members", []).append(names[g[1]])
     utts = [{"unit_id": u["unit_id"], "quote_index": u["quote_index"],
              "speaker": names.get(u["speaker_id_nullable"]) if u["speaker_id_nullable"] else None,
              "status": u["status"]}
@@ -68,6 +71,7 @@ def forget_scene(conn: sqlite3.Connection, book_id: str, sid: str, *, summaries:
         conn.execute(f"DELETE FROM facts WHERE id IN ({ph})", old_ids)
     conn.execute("DELETE FROM prop_states WHERE book_id=? AND scene_id=?", (book_id, sid))
     conn.execute("DELETE FROM relation_notes WHERE book_id=? AND scene_id=?", (book_id, sid))
+    conn.execute("DELETE FROM group_members WHERE book_id=? AND scene_id=? AND origin='read'", (book_id, sid))
     conn.execute("DELETE FROM memory_fts WHERE kind='summary' AND ref_id=? AND book_id=?", (sid, book_id))
     if summaries:
         conn.execute("DELETE FROM chapter_summaries WHERE book_id=? AND scene_id=?", (book_id, sid))
@@ -248,6 +252,21 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
                       rel.b_is.strip()[:12] or None, rel.kind, json.dumps(ev), rel.evidence_quote[:300], ordinal[first],
                       run_id, utcnow()))
         stats["relation_notes"] += 1
+
+    stats["group_members"] = 0
+    for grp in parsed.groups:  # who a group card is made of, as this scene shows (ADR-046)
+        ev = [u for u in grp.evidence_unit_ids if u in text_of]
+        members = [m for m in grp.member_refs if m in chars and m != grp.group_ref]
+        if grp.group_ref not in chars or not members:
+            rej(grp.model_dump(), "group or members not known characters")
+            continue
+        if not ev or len(_norm(grp.evidence_quote)) < 2 or _norm(grp.evidence_quote) not in _norm("".join(text_of[u] for u in ev)):
+            rej(grp.model_dump(), "group evidence_quote not found verbatim in evidence units")
+            continue
+        for m in members:
+            conn.execute("INSERT OR IGNORE INTO group_members(group_id, member_id, book_id, reason, created_at, scene_id, "
+                         "origin) VALUES (?,?,?,?,?,?,?)", (grp.group_ref, m, book_id, grp.evidence_quote[:200], utcnow(), sid, "read"))
+            stats["group_members"] += 1
 
     for p in parsed.prop_states:
         if p.name_ja not in "".join(clean(t) for t in text_of.values()):
