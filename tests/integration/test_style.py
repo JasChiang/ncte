@@ -231,3 +231,21 @@ def test_the_model_chooses_a_house_style_after_reading_unless_a_person_set_one(c
     save_style(conn, book.id, SeriesStyle(honorifics="omit"))  # a person's choice
     run_book(conn, cfg, fixtures["basic"], llm, mode="context", force=True)
     assert load_style(conn, book.id).honorifics == "omit"  # kept
+
+
+def test_house_style_sees_the_chosen_names_and_the_current_translation(conn, cfg, fixtures):
+    """Names are naming's choice and a habit keeps the book's rendering: once a book is translated, the house style
+    request carries the glossary and each line's paragraph as translated now."""
+    from ncte.analysis.house_style import request
+    from ncte.llm.fake import FakeLLM
+
+    from ..helpers import run_book
+    from ..scripted import RESPONDERS
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    conn.execute("INSERT OR REPLACE INTO glossary(book_id, source_term, target_term, updated_at) VALUES (?,?,?,?)",
+                 (book.id, "あだ名", "小名", "2026-10-16"))
+    req, _ = request(conn, book.id)
+    assert "あだ名→小名" in req["names"]
+    lines = [ln for c in req["characters"] for ln in c["lines"]]
+    assert lines and all("ja" in ln for ln in lines) and any(ln.get("zh") for ln in lines)

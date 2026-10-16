@@ -41,20 +41,38 @@ def endings(lines: list[str]) -> list[str]:
 
 
 def request(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, Any], dict[str, str]]:
+    """Characters with lines spread through the book (with the current translation of each line's paragraph when there
+    is one), the forms of address, and the names already chosen: a habit's rendering keeps to what the book already
+    says, and names and nicknames are naming's choice, not the house style's."""
+    from ..epub.units import PH_RE
+    from ..translation.cache import latest_texts
+
+    best = latest_texts(conn, book_id)
     chars, refs, items = main_characters(conn, book_id), {}, []
     for k, c in enumerate(chars, 1):
-        said = [r[0] for r in conn.execute("SELECT quote_text FROM utterances WHERE speaker_id_nullable=? AND book_id=? "
-                                           "ORDER BY id", (c["id"], book_id))]
+        said = [(r[0], r[1]) for r in conn.execute("SELECT quote_text, unit_id FROM utterances WHERE "
+                                                   "speaker_id_nullable=? AND book_id=? ORDER BY id", (c["id"], book_id))]
         spread = said if len(said) <= LINES else [said[j * (len(said) - 1) // (LINES - 1)] for j in range(LINES)]
+        lines: list[dict[str, str]] = []
+        for q, uid in spread:
+            line = {"ja": match_text(q)[:80]}
+            if (t := best.get(uid)) is not None:
+                line["zh"] = PH_RE.sub("", t["text"]).strip()[:120]  # the paragraph as translated now
+            lines.append(line)
         imp = conn.execute("SELECT voice FROM character_impressions WHERE character_id=?", (c["id"],)).fetchone()
         refs[f"c{k}"] = c["id"]
         items.append({"ref": f"c{k}", "name": c["display_name_zh"] or c["canonical_name"], "ja": c["canonical_name"],
-                      **({"voice": imp[0]} if imp and imp[0] else {}), "lines": [match_text(s)[:80] for s in spread],
-                      "repeated_endings": endings(said)})
+                      **({"voice": imp[0]} if imp and imp[0] else {}), "lines": lines,
+                      "repeated_endings": endings([q for q, _ in said])})
     forms = [f"{a['form_ja']}×{a['uses']}" for a in conn.execute(
         "SELECT form_ja, SUM(uses) uses FROM address_terms WHERE book_id=? AND speaker_id!=addressee_id GROUP BY form_ja "
         "ORDER BY uses DESC LIMIT 40", (book_id,))]
-    return {"task": "house_style", "characters": items, "address_forms": forms}, refs
+    names = [f"{g['source_term']}→{g['target_term']}" for g in conn.execute(
+        "SELECT source_term, target_term FROM glossary WHERE book_id=? ORDER BY verified DESC, id LIMIT 80", (book_id,))]
+    req: dict[str, Any] = {"task": "house_style", "characters": items, "address_forms": forms}
+    if names:
+        req["names"] = names
+    return req, refs
 
 
 def apply(conn: sqlite3.Connection, book_id: str, parsed: HouseStyleOutput, refs: dict[str, str]) -> dict[str, int]:
