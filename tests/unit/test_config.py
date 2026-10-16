@@ -43,3 +43,19 @@ def test_api_key_from_dotenv(tmp_path: Path, monkeypatch):
 def test_redact():
     assert "sk-or-v1-secretsecret" not in redact("bad key sk-or-v1-secretsecret here")
     assert redact("x KEY y", "KEY") == "x *** y"
+
+
+def test_relations_and_second_look_think_more_when_the_model_offers_it():
+    from ncte.config import Config, reasoning_setting
+    from ncte.llm.cost import Pricing
+    from ncte.translation.orchestrator import check_reasoning_effort
+
+    cfg = Config()
+    p = Pricing(model="m", prompt=0.0, completion=0.0, reasoning=0.0, cache_read=None, context_length=None,
+                supported_parameters=("reasoning",), reasoning_efforts=("low", "medium", "high"))
+    check_reasoning_effort(cfg, p)
+    assert reasoning_setting(cfg, "relations") == "high" and reasoning_setting(cfg, "verify") == "high"
+    cfg2 = Config()
+    check_reasoning_effort(cfg2, Pricing(model="m", prompt=0.0, completion=0.0, reasoning=0.0, cache_read=None,
+                                         context_length=None, supported_parameters=(), reasoning_efforts=()))
+    assert reasoning_setting(cfg2, "relations") is None  # a model without reasoning gets nothing

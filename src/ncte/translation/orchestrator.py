@@ -105,7 +105,16 @@ def reasoning_label(param: dict[str, Any] | None) -> str | None:
     return str(param["effort"]) if "effort" in param else f"max:{param.get('max_tokens')}"
 
 
+# Steps that judge from material gathered over the whole book (relations, the second look) think more: with "medium"
+# the model often chose not to think at all, and a relation that takes one step of inference was missed. They are a
+# handful of requests per book. Used when the model offers "high" and the step has no setting of its own.
+DEFAULT_STAGE_REASONING = {"relations": "high", "verify": "high"}
+
+
 def check_reasoning_effort(cfg: Config, pricing: Pricing) -> None:
+    if "reasoning" in pricing.supported_parameters and (not pricing.reasoning_efforts or "high" in pricing.reasoning_efforts):
+        for stage, level in DEFAULT_STAGE_REASONING.items():
+            cfg.openrouter.stage_reasoning.setdefault(stage, level)
     settings = {"(run)": cfg.openrouter.reasoning_effort, **cfg.openrouter.stage_reasoning}
     for where, eff in settings.items():
         if not eff or eff == "default":
