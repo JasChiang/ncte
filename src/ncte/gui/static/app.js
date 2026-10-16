@@ -486,7 +486,7 @@ function relationList(d, pid, upto, nm) {
       <td class="mono small">§${r.at}</td><td class="small">${ev ? bi(ev.quote, ev.zh) : ""}</td></tr>`;
   }).join("");
   return `<div style="margin-top:12px"><strong>人物關係</strong> <span class="muted small">對方是他的什麼</span>
-    <div class="scroll"><table><tr><th>對方</th><th>關係</th><th>類型</th><th>從</th><th>原文依據</th></tr>${rows}</table></div></div>`;
+    <div class="scroll"><table class="rel-table"><tr><th>對方</th><th>關係</th><th>類型</th><th>從</th><th>原文依據（附譯文）</th></tr>${rows}</table></div></div>`;
 }
 // one row per person: who on the left, each form they use as a small tag (most used first)
 function byPerson(list, key, label) {

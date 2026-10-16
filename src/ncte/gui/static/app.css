@@ -85,3 +85,4 @@ main.wide{max-width:none}
 
 .edge .rel-label.soft{opacity:0;transition:opacity .15s} .edge:hover .rel-label.soft{opacity:1}
 .legend{display:flex;flex-wrap:wrap;gap:6px 16px;padding:6px 8px;color:var(--muted)} .legend span{display:inline-flex;align-items:center;gap:6px}
+.rel-table td:nth-child(-n+4),.rel-table th:nth-child(-n+4){white-space:nowrap}
