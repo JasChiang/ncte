@@ -687,7 +687,10 @@ async function graphView(id) {
     const pt = (e, h, t) => { const p = P[e.a], q = P[e.b], L = Math.max(1, Math.hypot(q.x - p.x, q.y - p.y)),
       cx = (p.x + q.x) / 2 - (q.y - p.y) / L * h, cy = (p.y + q.y) / 2 + (q.x - p.x) / L * h, u = 1 - t;
       return {x: u * u * p.x + 2 * t * u * cx + t * t * q.x, y: u * u * p.y + 2 * t * u * cy + t * t * q.y, cx, cy}; };
-    edges.forEach(e => {
+    // labels are placed after all lines are known: each tries a few spots along its line (and a little to either
+    // side) and takes the first that covers no person and no label already placed — any label, any book
+    const reqs = [], parts = [];
+    edges.forEach((e, k) => {
       const op = Math.min(dim(e.a), dim(e.b)), pk = [e.a, e.b].sort().join("|"), h = bend(e), mid = pt(e, h, 0.5);
       const dpath = `M${P[e.a].x},${P[e.a].y} Q${mid.cx},${mid.cy} ${P[e.b].x},${P[e.b].y}`;
       const rs = e.rels || [], main = rs[0], more = rs.length - 1;
@@ -698,22 +701,44 @@ async function graphView(id) {
       const alpha = (main && main.certainty === "inferred" ? .5 : 1) * (.3 + .6 * e.w / mx);
       const width = 1 + 6 * e.w / mx;
       const title = `${esc(nm(e.a))}・${esc(nm(e.b))}：${rs.length ? rs.map(r => esc(r.rel)).join("、") : e.w + " 個場景"}`;
-      const soft = crowded && G.mode === "rel" && middle && e.a !== middle && e.b !== middle ? " soft" : "";
-      let labels = "";
+      const soft = crowded && G.mode === "rel" && middle && e.a !== middle && e.b !== middle;
+      const ask = (text, t0, size) => reqs.push({k, e, h, text, t0, size, soft, w: e.w});
       if (main) {
         const tag = change ? "（變）" : fresh ? "（新）" : "";
-        if (same) labels = `<text x="${mid.x}" y="${mid.y - 4}" font-size="14" text-anchor="middle" class="rel-label">＝ 同一人${tag}</text>`;
+        if (same) ask(`＝ 同一人${tag}`, 0.5, 14);
         else if (directed(main)) {  // two different roles (父親／女兒): each written next to its person
-          labels = [[main.a, main.a_is], [main.b, main.b_is]].map(([who, role]) => { const q = pt(e, h, who === e.a ? 0.3 : 0.7);
-            return `<text x="${q.x}" y="${q.y - 5}" font-size="14" text-anchor="middle" class="rel-label${soft}">${esc(role)}</text>`; }).join("")
-            + (more || tag ? `<text x="${mid.x}" y="${mid.y + 14}" font-size="12" text-anchor="middle" class="rel-label${soft}">${more ? "＋" + more : ""}${tag}</text>` : "");
-        } else labels = `<text x="${mid.x}" y="${mid.y - 4}" font-size="14" text-anchor="middle" class="rel-label${soft}">${esc(main.rel)}${more ? " ＋" + more : ""}${tag}</text>`;
+          [[main.a, main.a_is], [main.b, main.b_is]].forEach(([who, role]) => ask(role, who === e.a ? 0.3 : 0.7, 14));
+          if (more || tag) ask(`${more ? "＋" + more : ""}${tag}`, 0.5, 12);
+        } else ask(`${main.rel}${more ? " ＋" + more : ""}${tag}`, 0.5, 14);
       }
       const stroke = same
         ? `<path d="${dpath}" fill="none" stroke="var(--accent)" stroke-width="7" stroke-opacity=".9"/><path d="${dpath}" fill="none" stroke="var(--panel)" stroke-width="3"/>`
         : `<path d="${dpath}" fill="none" stroke="${color}" stroke-opacity="${alpha}" stroke-width="${width}"${dash}/>`;
-      svg += `<g data-pair="${esc(pk)}" class="edge" style="cursor:pointer;opacity:${op}"><path d="${dpath}" fill="none" stroke="transparent" stroke-width="12"/>
-        ${stroke}<title>${title}</title>${labels}</g>`; });
+      parts.push({pk, op, head: `<path d="${dpath}" fill="none" stroke="transparent" stroke-width="12"/>${stroke}<title>${title}</title>`, labels: ""});
+    });
+    const placed = [];
+    const widthOf = (text, size) => [...text].reduce((n, ch) => n + (ch.charCodeAt(0) > 255 ? size : size * .58), 0) + 6;
+    const hits = r => nodes.some(c => { const cx = Math.max(r.x, Math.min(P[c].x, r.x + r.w)), cy = Math.max(r.y, Math.min(P[c].y, r.y + r.h));
+        return Math.hypot(P[c].x - cx, P[c].y - cy) < rad(c) + 2; })
+      || placed.some(q => r.x < q.x + q.w && q.x < r.x + r.w && r.y < q.y + q.h && q.y < r.y + r.h);
+    reqs.sort((a, b) => a.soft - b.soft || b.w - a.w);  // visible labels and busy lines choose first
+    reqs.forEach(q => {
+      const w = widthOf(q.text, q.size), hgt = q.size * 1.3, p = P[q.e.a], o = P[q.e.b];
+      const L = Math.max(1, Math.hypot(o.x - p.x, o.y - p.y)), nx = -(o.y - p.y) / L, ny = (o.x - p.x) / L;
+      let best = null;
+      for (const dt of [0, .07, -.07, .14, -.14, .21, -.21]) {
+        const t = Math.min(.85, Math.max(.15, q.t0 + dt));
+        for (const off of [0, 14, -14, 28, -28]) {
+          const c = pt(q.e, q.h, t), r = {x: c.x + nx * off - w / 2, y: c.y + ny * off - hgt / 2 - 4, w, h: hgt};
+          if (!hits(r)) { best = r; break; }
+        }
+        if (best) break;
+      }
+      if (!best) { const c = pt(q.e, q.h, q.t0); best = {x: c.x - w / 2, y: c.y - hgt / 2 - 4, w, h: hgt}; }
+      placed.push(best);
+      parts[q.k].labels += `<text x="${best.x + w / 2}" y="${best.y + hgt * .75}" font-size="${q.size}" text-anchor="middle" class="rel-label${q.soft ? " soft" : ""}">${esc(q.text)}</text>`;
+    });
+    parts.forEach(g => { svg += `<g data-pair="${esc(g.pk)}" class="edge" style="cursor:pointer;opacity:${g.op}">${g.head}${g.labels}</g>`; });
   }
   nodes.forEach(c => { const r = rad(c);
     svg += `<g data-k="${esc(c)}" style="cursor:pointer;opacity:${dim(c)}"><circle cx="${P[c].x}" cy="${P[c].y}" r="${r}" fill="${G.focus === c ? "var(--accent-soft)" : "var(--panel)"}" stroke="var(--accent)" stroke-width="${G.focus === c ? 3 : 1.6}"/>

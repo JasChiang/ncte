@@ -213,8 +213,8 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
         if key:
             for o in sorted(range(at - 3, at + 80), key=lambda o: abs(o - at)):
                 t = texts.get(o)
-                if t and key in t[0]:
-                    return t[1]
+                if t and key in t[0] and t[1]:
+                    return _excerpt(t[0], t[0].find(key), len(quote or ""), t[1])
         return (texts.get(at) or (None, None))[1]
     rendering = {g["source_term"]: g["target_term"] for g in conn.execute(
         f"SELECT source_term, target_term FROM glossary WHERE {SERIES_SCOPE}", (book.id,))}
@@ -322,6 +322,32 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
                      "reason": r["reason"], "evidence": [{"quote": q, "zh": zh_of(q, o) if this else None, "at": o if this else -1}
                                                           for q, o in ev[:3]]})
     return {"characters": out, "address": address, "relations": rels, "scenes": st["scenes"], "chapters": st["chapters"]}
+
+
+def _excerpt(ja: str, at: int, n: int, zh: str, limit: int = 120) -> str:
+    """A long translated paragraph cut to the sentences at the same place as the quote in the source (display only:
+    the quote is a part of the paragraph, so the translation shown is the matching part, with … where cut)."""
+    if len(zh) <= limit:
+        return zh
+    import re as _re
+
+    sentences = [x for x in _re.split(r"(?<=[。！？!?」』])", zh) if x]
+    mid = (at + n / 2) / max(1, len(ja)) * len(zh)
+    pos, pick = 0, 0
+    for i, x in enumerate(sentences):
+        if pos + len(x) >= mid:
+            pick = i
+            break
+        pos += len(x)
+    lo = hi = pick
+    want = max(40, int(n * 1.3))
+    while sum(len(x) for x in sentences[lo:hi + 1]) < want and (lo > 0 or hi < len(sentences) - 1):
+        if hi < len(sentences) - 1:
+            hi += 1
+        if sum(len(x) for x in sentences[lo:hi + 1]) < want and lo > 0:
+            lo -= 1
+    text = "".join(sentences[lo:hi + 1]).strip()[:limit]
+    return ("…" if lo > 0 else "") + text + ("…" if hi < len(sentences) - 1 else "")
 
 
 def glossary(conn: sqlite3.Connection, book: Book) -> list[dict[str, Any]]:
