@@ -85,19 +85,31 @@ def merge_outputs[M: BaseModel](parts: list[M]) -> M:
     return cls.model_validate(out)
 
 
-def call_in_parts(call: Callable[[dict[str, Any]], Any], payload: dict[str, Any], key: str, blocked: list[str],
-                  *, min_part: int = MIN_PART) -> Any:
-    """``call(payload)``; when the content filter refuses it, the list under ``key`` (items carrying ``unit_id``) is
-    halved until each part goes through or is small enough to give up on (its unit ids go to ``blocked``). The parts'
-    answers are merged. None when nothing went through. Used by the reader's look, review and the rule-flag check."""
-    items = payload[key]
+def _label(item: Any) -> str:
+    if not isinstance(item, dict):
+        return str(item)
+    return str(next((item[k] for k in ("unit_id", "ref", "pair", "name", "ja") if item.get(k)), "?"))
+
+
+def call_in_parts(call: Callable[[dict[str, Any]], Any], payload: dict[str, Any], key: str | tuple[str, ...],
+                  blocked: list[str], *, min_part: int = MIN_PART) -> Any:
+    """``call(payload)``; when the content filter refuses it, the list under ``key`` is halved until each part goes
+    through or is small enough to give up on (its items — unit ids, refs, pairs — go to ``blocked``). The parts'
+    answers are merged. None when nothing went through. Several keys (``("names", "address")``): the longest list is
+    halved and the other lists go with the first half only, so nothing is asked twice."""
+    keys = (key,) if isinstance(key, str) else key
+    split = max(keys, key=lambda k: len(payload.get(k) or []))
+    items = payload.get(split) or []
     try:
         return call(payload)
     except ContentBlockedError:
         if len(items) <= min_part:
-            blocked.extend(str(i.get("unit_id")) for i in items if isinstance(i, dict))
+            blocked.extend(_label(i) for k in keys for i in payload.get(k) or [])
             return None
-    half = len(items) // 2
-    parts = [p for chunk in (items[:half], items[half:])
-             if (p := call_in_parts(call, {**payload, key: chunk}, key, blocked, min_part=min_part)) is not None]
+    half = max(1, len(items) // 2)
+    first = {**payload, split: items[:half]}
+    second = {**payload, split: items[half:], **{k: [] for k in keys if k != split}}
+    parts = [p for chunk in (first, second)
+             if any(chunk.get(k) for k in keys)
+             and (p := call_in_parts(call, chunk, key, blocked, min_part=min_part)) is not None]
     return merge_outputs(parts) if parts else None

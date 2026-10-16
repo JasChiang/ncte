@@ -129,7 +129,12 @@ class ContextOrchestrator(Orchestrator):
         for rows in todo:
             req = sb.payload(rows, size, max_chars)
             try:
-                parsed = self._llm("scenes", prompt, req, [r["id"] for r in rows])
+                blocked: list[str] = []  # a refused stretch is looked at in halves (breaks stay inside each half)
+                parsed = call_in_parts(lambda pl: self._llm("scenes", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
+                                       req, "paragraphs", blocked, min_part=8)
+                if parsed is None:
+                    stats["kept_program_cuts"] += 1
+                    continue
                 assert isinstance(parsed, SceneBreaksOutput)
                 if again := sb.runs_on(rows, [b.unit_id for b in parsed.breaks]):
                     # the paragraph before ends mid-sentence: the model looks once more, and its answer stands
@@ -282,8 +287,13 @@ class ContextOrchestrator(Orchestrator):
         for i in range(0, len(items), VERIFY_BATCH):
             chunk = items[i:i + VERIFY_BATCH]
             try:
-                parsed = self._llm("verify", prompt, {"task": "verify", "items": [
-                    {k: v for k, v in it.items() if not k.startswith("_")} for it in chunk]}, [])
+                blocked: list[str] = []  # the content filter may refuse an item's passages: the rest are asked in halves
+                parsed = call_in_parts(lambda pl: self._llm("verify", prompt, pl, []), {"task": "verify", "items": [
+                    {k: v for k, v in it.items() if not k.startswith("_")} for it in chunk]}, "items", blocked, min_part=1)
+                for ref in blocked:
+                    self._finding(None, "verify_blocked", "low", f"the content filter refused the second look at {ref}")
+                if parsed is None:
+                    continue
             except FatalAPIError:
                 raise
             except LLMError as exc:  # the read pass's answers stand
@@ -314,7 +324,14 @@ class ContextOrchestrator(Orchestrator):
         def ask(groups: list[tuple[dict[str, Any], dict[str, Any]]]) -> None:
             for req, lookup in groups:
                 try:
-                    parsed = self._llm("relations", prompt, req, [])
+                    blocked: list[str] = []
+                    parsed = call_in_parts(lambda pl: self._llm("relations", prompt, pl, []), req, "pairs", blocked,
+                                           min_part=1)
+                    if blocked:
+                        self._finding(None, "relations_blocked", "low",
+                                      f"the content filter refused the material of {len(blocked)} pair(s)")
+                    if parsed is None:
+                        continue
                 except FatalAPIError:
                     raise
                 except LLMError as exc:  # those pairs keep no relation this time
@@ -348,7 +365,11 @@ class ContextOrchestrator(Orchestrator):
         prompt, results = load_prompt("impressions"), []
         for req, lookup in groups:
             try:
-                parsed = self._llm("impressions", prompt, req, [])
+                blocked: list[str] = []
+                parsed = call_in_parts(lambda pl: self._llm("impressions", prompt, pl, []), req, "characters", blocked,
+                                       min_part=1)
+                if parsed is None:
+                    continue
             except FatalAPIError:
                 raise
             except LLMError as exc:
@@ -474,7 +495,11 @@ class ContextOrchestrator(Orchestrator):
             stats = {"names": 0, "address": 0, "pending": 0, "rejected": 0}
         else:
             try:
-                parsed = self._llm("naming", self.naming_prompt, model_view(payload), [])
+                blocked: list[str] = []  # renderings of a refused part stay as the read pass proposed them
+                parsed = call_in_parts(lambda pl: self._llm("naming", self.naming_prompt, pl, []), model_view(payload),
+                                       ("names", "address", "characters_to_check"), blocked, min_part=1)
+                if parsed is None:
+                    raise ContentBlockedError("the content filter refused every part of the naming request")
             except FatalAPIError:
                 raise
             except LLMError as exc:  # renderings then stay as proposed by the read pass

@@ -125,3 +125,25 @@ def test_group_passages_reach_member_pairs(conn, cfg, fixtures):
     assert p["passages"] and p["passages"][0]["id"] == u["id"]
     req = relations.requests([p], chars)[0][0]
     assert req["pairs"][0]["passages"][0]["text"].startswith("〔關於群體「跟班們」〕")
+
+
+def test_plural_you_follows_the_people_the_line_is_said_to(conn, cfg, fixtures):
+    import json
+
+    from ncte.memory.repository import set_gender
+    from ncte.qa import second_person
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    utt = conn.execute("SELECT * FROM utterances WHERE book_id=? LIMIT 1", (book.id,)).fetchone()
+    unit = conn.execute("SELECT * FROM units WHERE id=?", (utt["unit_id"],)).fetchone()
+    a, b = [r[0] for r in conn.execute("SELECT id FROM characters WHERE book_id=? LIMIT 2", (book.id,))]
+    conn.execute("DELETE FROM utterances WHERE unit_id=? AND id!=?", (unit["id"], utt["id"]))
+    conn.execute("UPDATE utterances SET addressee_ids_json=? WHERE id=?", (json.dumps([a, b]), utt["id"]))
+    for x in (a, b):
+        conn.execute("DELETE FROM character_gender WHERE character_id=?", (x,))
+        set_gender(conn, book.id, x, "female", ordinal=unit["ordinal"], quote="彼女", origin="llm", certainty="explicit")
+    assert "妳們" in (second_person.check(conn, book.id, unit, "「你們，走吧」") or "")
+    assert second_person.check(conn, book.id, unit, "「妳們，走吧」") is None
+    conn.execute("DELETE FROM character_gender WHERE character_id=?", (b,))
+    set_gender(conn, book.id, b, "male", ordinal=unit["ordinal"], quote="彼", origin="llm", certainty="explicit")
+    assert "你們" in (second_person.check(conn, book.id, unit, "「妳們，走吧」") or "")

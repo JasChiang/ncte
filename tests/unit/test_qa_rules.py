@@ -93,3 +93,4 @@ def test_glossary_match_ignores_placeholders():
     g = [{"source_term": "株式会社KADOKAWA", "target_term": "株式會社KADOKAWA", "verified": False}]
     assert not any(t == "glossary_mismatch" for t, _ in
                    run("発行所　株式会社⟦1⟧KADOKAWA⟦/1⟧", "發行所　株式會社⟦1⟧KADOKAWA⟦/1⟧", imap=EM, glossary=g))
+

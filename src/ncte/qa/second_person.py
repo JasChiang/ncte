@@ -23,6 +23,8 @@ def check(conn: sqlite3.Connection, book_id: str, unit: sqlite3.Row, text: str) 
     """Evidence for a finding, or None."""
     if ev := _by_addressee(conn, book_id, unit, text):
         return ev
+    if ev := _plural(conn, book_id, unit, text):
+        return ev
     singular = text.replace("你們", "")  # 「米莉絲、威澤爾，你們…」 speaks to a group: 你們 is right
     if "你" not in singular or "妳" in text:
         return None
@@ -39,6 +41,33 @@ def check(conn: sqlite3.Connection, book_id: str, unit: sqlite3.Row, text: str) 
             called = q.startswith(form) and len(q) > len(form) and q[len(form)] in _VOCATIVE_END
             if called and gender_at(conn, forms[form], hz) == "female":
                 return f"「{form}、…」 calls her by name, but the translation uses 你 (she is female): 妳"
+    return None
+
+
+def _plural(conn: sqlite3.Connection, book_id: str, unit: sqlite3.Row, text: str) -> str | None:
+    """Lines the reading says are said to several people, all with a gender written in the source: 妳們 only when
+    every one is a woman. A plural said to one person (her army, her country) is the translator's call and is left
+    alone, as is a unit whose lines go to different groups."""
+    import json
+
+    from ..memory.repository import gender_view
+
+    if "你們" not in text and "妳們" not in text:
+        return None
+    groups = {frozenset(json.loads(u[0] or "[]")) for u in conn.execute(
+        "SELECT addressee_ids_json FROM utterances WHERE unit_id=?", (unit["id"],))}
+    groups = {g for g in groups if len(g) >= 2}
+    if len(groups) != 1:
+        return None
+    hz = pos(conn, book_id, unit["ordinal"])
+    genders = [gender_view(conn, c, hz) for c in next(iter(groups))]
+    if any(not g or g[1] != "explicit" for g in genders):
+        return None
+    women = all(g and g[0] == "female" for g in genders)
+    if women and "你們" in text and "妳們" not in text:
+        return "the line is said to several people, all female: 你們 should be 妳們"
+    if not women and "妳們" in text and "你們" not in text:
+        return "the line is said to several people, not all female: 妳們 should be 你們"
     return None
 
 

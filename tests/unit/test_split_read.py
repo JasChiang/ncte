@@ -37,3 +37,25 @@ def test_subset_keeps_only_those_units_quotes_and_utterances():
     s = subset_payload(p, ["b"])
     assert s["units"] == [{"unit_id": "b"}] and s["quotes"] == p["quotes"]
     assert s["scene"] == {"utterances": [], "pov": "x"} and s["glossary"] == [1]
+
+
+def test_several_lists_are_split_without_asking_anything_twice():
+    from ncte.analysis.split_read import call_in_parts
+    from ncte.errors import ContentBlockedError
+    from ncte.llm.schemas import NamingOutput
+
+    asked: list[list[str]] = []
+
+    def call(pl):
+        refs = [x["ref"] for k in ("names", "address") for x in pl[k]]
+        if "bad" in refs and len(refs) > 1 or refs == ["bad"]:
+            raise ContentBlockedError("refused")
+        asked.append(refs)
+        return NamingOutput(names=[{"ref": r, "zh": r, "reason": ""} for r in refs])
+
+    blocked: list[str] = []
+    out = call_in_parts(call, {"names": [{"ref": "n1"}, {"ref": "bad"}, {"ref": "n3"}, {"ref": "n4"}],
+                               "address": [{"ref": "a1"}]}, ("names", "address"), blocked, min_part=1)
+    flat = [r for a in asked for r in a]
+    assert sorted(flat) == ["a1", "n1", "n3", "n4"] and len(flat) == len(set(flat))  # each asked once
+    assert blocked == ["bad"] and len(out.names) == 4

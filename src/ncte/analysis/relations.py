@@ -97,7 +97,9 @@ def candidate_pairs(conn: sqlite3.Connection, book_id: str) -> tuple[list[dict[s
     for p in pairs.values():
         uses = sum(int(t["uses"] or 0) for t in p["address"])
         p["weight"] = 5 * len(p["notes"]) + 2 * len(p["facts"]) + 2 * len(p["passages"]) + min(uses, 5) + p["together"] / 2
-        p["should"] = bool(p["notes"]) or (bool(p["address"]) and p["together"] >= 5)
+        # asked once more when it came back empty: notes, or how they address each other plus anything else about the
+        # two (「義父さん」 and one fact came back empty in two runs of three)
+        p["should"] = bool(p["notes"]) or (bool(p["address"]) and (p["together"] >= 3 or bool(p["facts"]) or bool(p["passages"])))
         if p["notes"] or p["facts"] or p["passages"] or (p["address"] and p["together"] >= 3):
             out.append(p)
     out.sort(key=lambda p: -p["weight"])
