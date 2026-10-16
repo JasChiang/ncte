@@ -98,18 +98,19 @@ def resolve(program_ev: list[TagEvidence], llm: LlmClaim | None, head: Resolutio
     act = next(iter(action)) if action else None
 
     if llm_ref and act and llm_ref != act:
-        if llm_strong:
-            return Resolution(None, "unknown", "program+llm", cands,
-                              notes + [f"conflict: action evidence → {act}, LLM strong evidence → {llm_ref}"])
-        return Resolution(act, "inferred", "program", cands,
-                          notes + [f"weak (style) evidence for {llm_ref} overridden by action evidence for {act}"])
+        # the model decides speakers: narration next to a line is evidence, and it may describe someone else (「神は彼を
+        # あざ笑い、彼は声をあげた」); the second look reads the exchange again
+        return Resolution(llm_ref, "inferred", "llm", cands, notes + [
+            f"action evidence for {act} against the LLM's {'strong' if llm_strong else 'weak'} evidence for {llm_ref} "
+            "(LLM kept)"])
     if llm_ref and (llm is None or llm.status != "unknown"):
         src = "program+llm" if act == llm_ref else "llm"
         if not llm_strong and act != llm_ref:
             notes.append("only weak (style) evidence")
         return Resolution(llm_ref, "inferred", src, cands, notes)
     if act:
-        return Resolution(act, "inferred", "program", cands, notes + ["adjacent action narration only"])
+        # the model gave no speaker: the program's match is a lead for the second look, not an answer
+        return Resolution(None, "unknown", "program", cands, notes + [f"adjacent action narration only → {act} (to look at)"])
     return Resolution(None, "unknown", "none", cands, notes)
 
 

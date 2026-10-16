@@ -210,3 +210,32 @@ def test_impression_says_how_much_of_the_book_was_read(conn, cfg, fixtures):
                  (book.id,))
     imps = [c["impression"] for c in data.characters(conn, book)["characters"].values() if c.get("impression")]
     assert imps and not imps[0]["read_all"] and imps[0]["read_to"]
+
+
+def test_every_task_that_names_people_gets_their_gender_and_narrator(conn, cfg, fixtures):
+    """One set of basics (gender, narrator) goes with the name to every task after reading: a self-reference chosen
+    for the house style, a kana name or a 你／妳 chosen in naming, a relation label all depend on it."""
+    from ncte.analysis import house_style, impressions, naming, proofread, reader
+    from ncte.memory.db import utcnow
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    ids = [r[0] for r in conn.execute("SELECT id FROM characters WHERE book_id=?", (book.id,))]
+    for cid in ids:
+        conn.execute("INSERT OR REPLACE INTO character_gender(character_id, gender, book_id, ordinal, origin, updated_at, "
+                     "certainty) VALUES (?,?,?,?,?,?,?)", (cid, "female", book.id, 0, "human", utcnow(), "explicit"))
+    conn.execute("UPDATE characters SET is_narrator=1 WHERE id=?", (ids[0],))
+
+    def people(payload):
+        return [c for c in payload["characters"]]
+
+    hs, _ = house_style.request(conn, book.id)
+    imp = [r for r, _ in impressions.requests(conn, book.id)]
+    nm = naming.build_naming_payload(conn, book.id)
+    rd = {"characters": reader.characters(conn, book.id)}
+    part = [p for ch in proofread.chunks(conn, book.id) for p in ch]
+    pr = {"characters": proofread.cast(conn, book.id, part)}
+    for name, payload in [("house_style", hs), *[("impressions", r) for r in imp], ("reader", rd), ("proofread", pr)]:
+        assert people(payload) and all(c.get("gender") == "female" for c in people(payload)), name
+    assert all(c.get("gender") == "female" for c in nm["characters"]), "naming"
+    everyone = [c for p in (hs, rd, pr, *imp) for c in people(p)]
+    assert any(c.get("narrator") for c in everyone)

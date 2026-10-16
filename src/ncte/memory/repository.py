@@ -247,6 +247,36 @@ def gender_view(conn: sqlite3.Connection, character_id: str, hz: tuple[float, in
     return str(row["gender"]), str(row["certainty"])
 
 
+def character_basics(conn: sqlite3.Connection, character_id: str, hz: tuple[float, int] | None = None) -> dict[str, Any]:
+    """The facts about a character every task gets with the name (one place, so no task leaves them out): gender
+    (「female (inferred)」 when only inferred), whether this is the first-person narrator, the other name forms.
+    ``hz``: what is known by that point; None after the book is read."""
+    c = conn.execute("SELECT * FROM characters WHERE id=?", (character_id,)).fetchone()
+    if c is None:
+        return {}
+    out: dict[str, Any] = {}
+    if g := gender_view(conn, character_id, hz or (float("inf"), 1 << 62)):
+        out["gender"] = g[0] if g[1] == "explicit" else f"{g[0]} (inferred)"
+    if c["is_narrator"]:
+        out["narrator"] = True
+    if aliases := json.loads(c["aliases_json"] or "[]")[:6]:
+        out["aliases_ja"] = aliases
+    return out
+
+
+def pair_relations(conn: sqlite3.Connection, book_id: str, a: str, b: str, names: dict[str, str]) -> list[str]:
+    """How two people are related, as read (「席爾法德是艾恩的祖父」), for tasks that render how one addresses the other."""
+    out = []
+    for r in conn.execute("SELECT * FROM relations WHERE book_id=? AND ((a_id=? AND b_id=?) OR (a_id=? AND b_id=?)) "
+                          "AND until_ordinal IS NULL", (book_id, a, b, b, a)):
+        for x, y, role in ((r["a_id"], r["b_id"], r["a_is"]), (r["b_id"], r["a_id"], r["b_is"])):
+            if role:
+                out.append(f"{names.get(x, '?')}是{names.get(y, '?')}的{role}")
+        if not (r["a_is"] or r["b_is"]):
+            out.append(f"{names.get(r['a_id'], '?')}與{names.get(r['b_id'], '?')}：{r['relation_zh']}")
+    return list(dict.fromkeys(out))[:4]
+
+
 def _merge_address(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> None:
     """Address terms of a merged character: moved, or folded into the same speaker/addressee/form row."""
     for col in ("speaker_id", "addressee_id"):

@@ -111,17 +111,18 @@ def test_resolution_weak_only_is_inferred_not_explicit():
     assert r.status == "inferred" and "only weak (style) evidence" in r.notes
 
 
-def test_resolution_imitation_style_overridden_by_action():
+def test_resolution_model_kept_against_action_narration():
     _, _, ev = ev_for(["「俺様に任せろ！」", "　ミナはカイトの口調を真似て、胸を張った。"])
     r = res(ev[("u0", 0)], LlmClaim("c_kaito", "inferred", [Candidate("c_kaito", {"first_person", "verbal_tic"}, ["u0"], "llm")]))
-    assert (r.speaker_id, r.status) == ("c_mina", "inferred")
-    assert any("overridden by action evidence" in n for n in r.notes)
+    # the model decides; the narration (ミナ imitating カイト) is a lead the second look reads with the exchange
+    assert (r.speaker_id, r.status, r.source) == ("c_kaito", "inferred", "llm")
+    assert any("action evidence for c_mina" in n and "(LLM kept)" in n for n in r.notes)
 
 
-def test_resolution_conflicting_strong_evidence_is_unknown():
+def test_resolution_conflict_goes_to_the_second_look():
     _, _, ev = ev_for(["「やめろ」", "　カイトは剣を抜いた。"])
     r = res(ev[("u0", 0)], LlmClaim("c_mina", "inferred", [Candidate("c_mina", {"address"}, ["u0"], "llm")]))
-    assert (r.speaker_id, r.status) == (None, "unknown")
+    assert (r.speaker_id, r.status) == ("c_mina", "inferred") and any("(LLM kept)" in n for n in r.notes)
 
 
 def test_resolution_continuation_inherits_head():
@@ -156,3 +157,11 @@ def test_a_paragraph_that_is_one_double_bracket_is_a_voice():
     assert got["u1"] == "『お前は何故、俺を恐れない？』" and got["u2"] == "『帰ったか』" and got["u5"].startswith("『この")
     assert "u3" not in got  # emphasis inside narration
     assert got["u4"].startswith("「") and len([q for q in find_quotes(us) if q.unit_id == "u4"]) == 1
+
+
+def test_resolution_action_alone_is_a_lead_not_an_answer():
+    """「台無しじゃねえかッ！」 then 「神は彼をあざ笑い、彼は声をあげた」: the narration names one person but may be about
+    another; with no answer from the model the line stays unknown and goes to the second look."""
+    _, _, ev = ev_for(["「やめろ」", "　カイトは剣を抜いた。"])
+    r = res(ev[("u0", 0)], LlmClaim(None, "unknown", []))
+    assert (r.speaker_id, r.status) == (None, "unknown") and any("(to look at)" in n for n in r.notes)

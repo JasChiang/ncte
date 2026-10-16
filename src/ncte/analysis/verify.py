@@ -47,7 +47,7 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
     for u in conn.execute(
             "SELECT ut.*, un.ordinal FROM utterances ut JOIN units un ON un.id=ut.unit_id WHERE ut.book_id=? AND "
             "ut.status IN ('inferred','unknown') AND (ut.notes_json LIKE '%(LLM kept)%' OR ut.notes_json LIKE "
-            "'%conflict: action evidence%') ORDER BY un.ordinal", (book_id,)):
+            "'%conflict: action evidence%' OR ut.notes_json LIKE '%(to look at)%') ORDER BY un.ordinal", (book_id,)):
         cands = sorted({h["candidate_character_id"] for h in conn.execute(
             "SELECT candidate_character_id FROM speaker_hypotheses WHERE utterance_id=?", (u["id"],))} & names.keys())
         items.append({"ref": f"q:{u['id']}", "kind": "speaker", "quote": match_text(u["quote_text"])[:120],

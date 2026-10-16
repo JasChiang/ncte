@@ -42,8 +42,9 @@ def test_second_look_changes_speaker_drops_doubtful_gender_and_flags_merge(conn,
         out = []
         for it in payload["items"]:
             if it["kind"] == "speaker":
-                mina = next(k for k, v in it["candidates"].items() if v.startswith("ミナ"))
-                out.append({"ref": it["ref"], "answer": mina, "reason": "「ミナは腕を組んで言った」"})
+                mina = next((k for k, v in it["candidates"].items() if v.startswith("ミナ")), None)
+                if mina and "遅いですよ" in it["quote"]:
+                    out.append({"ref": it["ref"], "answer": mina, "reason": "「ミナは腕を組んで言った」"})
             elif it["kind"] == "gender":
                 out.append({"ref": it["ref"], "answer": "unknown", "reason": "no word says so"})
             elif it["kind"] == "merge":

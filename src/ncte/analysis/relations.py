@@ -205,7 +205,8 @@ def _around(t: str, forms: dict[str, list[str]], n: int) -> str:
     return ("…" if start else "") + t[start:start + n] + ("…" if start + n < len(t) else "")
 
 
-def requests(pairs: list[dict[str, Any]], chars: dict[str, sqlite3.Row], *, recheck: bool = False
+def requests(pairs: list[dict[str, Any]], chars: dict[str, sqlite3.Row], *, recheck: bool = False,
+             basics: dict[str, dict[str, Any]] | None = None
              ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """(request, lookup) per group of pairs; the lookup maps refs back (characters, evidence → (kind, id, ordinal))."""
     out = []
@@ -251,8 +252,8 @@ def requests(pairs: list[dict[str, Any]], chars: dict[str, sqlite3.Row], *, rech
                                        "uses": t["uses"]} for t in p["address"][:MAX_EVIDENCE]],
                           "scenes_together": p["together"]})
         req: dict[str, Any] = {"task": "relations",
-                               "characters": [{"ref": r, "name": chars[c]["display_name_zh"] or chars[c]["canonical_name"]}
-                                              for c, r in cref.items()], "pairs": items}
+                               "characters": [{"ref": r, "name": chars[c]["display_name_zh"] or chars[c]["canonical_name"],
+                                               **(basics or {}).get(c, {})} for c, r in cref.items()], "pairs": items}
         if recheck:
             req["recheck"] = True
         out.append((req, {"_chars": {r: c for c, r in cref.items()}, "_ev": ev, "_allowed": allowed,

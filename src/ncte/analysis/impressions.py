@@ -15,6 +15,7 @@ from typing import Any
 from ..epub.units import match_text
 from ..llm.schemas import ImpressionsOutput
 from ..memory.db import Transaction, utcnow
+from ..memory.repository import character_basics
 from ..series import SERIES_SCOPE
 
 MAIN = 12
@@ -58,7 +59,8 @@ def requests(conn: sqlite3.Connection, book_id: str) -> list[tuple[dict[str, Any
             rels = [f"{r['a_is'] if r['a_id'] == c['id'] else r['b_is']}（對{names.get(r['b_id'] if r['a_id'] == c['id'] else r['a_id'], '?')}）"
                     for r in conn.execute("SELECT * FROM relations WHERE book_id=? AND (a_id=? OR b_id=?) LIMIT 6",
                                           (book_id, c["id"], c["id"]))]
-            items.append({"ref": f"c{k}", "name": names[c["id"]], "narrator": bool(c["is_narrator"]), "lines": lines,
+            items.append({"ref": f"c{k}", "name": names[c["id"]], "narrator": bool(c["is_narrator"]),
+                          **{k2: v for k2, v in character_basics(conn, c["id"]).items() if k2 != "narrator"}, "lines": lines,
                           "facts": facts, "calls_others": calls, "relations": rels})
         out.append(({"task": "impressions", "characters": items},
                     {"_chars": {f"c{k}": c["id"] for k, c in enumerate(group, 1)}, "_ev": ev}))

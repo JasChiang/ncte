@@ -358,9 +358,12 @@ class ContextOrchestrator(Orchestrator):
                 assert isinstance(parsed, RelationsOutput)
                 results.append((parsed, lookup))
 
-        ask(relations.requests(pairs, chars))
+        from ..memory.repository import character_basics
+
+        basics = {cid: character_basics(self.conn, cid) for cid in chars}
+        ask(relations.requests(pairs, chars, basics=basics))
         if again := relations.unanswered(pairs, results):
-            ask(relations.requests(again, chars, recheck=True))
+            ask(relations.requests(again, chars, recheck=True, basics=basics))
         n = 0
         if results:
             with self.lock:

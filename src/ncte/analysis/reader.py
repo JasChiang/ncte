@@ -15,6 +15,7 @@ import sqlite3
 from typing import Any
 
 from ..epub.units import PH_RE
+from ..memory.repository import character_basics
 from ..translation.cache import latest_texts
 
 CHUNK_UNITS = 120  # paragraphs per request (one stretch of reading)
@@ -62,9 +63,8 @@ def characters(conn: sqlite3.Connection, book_id: str) -> list[dict[str, str]]:
     out = []
     for c in conn.execute(f"SELECT c.*, g.gender FROM characters c LEFT JOIN character_gender g ON g.character_id=c.id "
                           f"WHERE c.{SERIES_SCOPE} ORDER BY c.known_from_ordinal LIMIT 40", (book_id,)):
-        item = {"name": c["display_name_zh"] or c["canonical_name"]}
-        if c["gender"] in ("female", "male"):
-            item["gender"] = c["gender"]
+        item = {"name": c["display_name_zh"] or c["canonical_name"],
+                **{k: v for k, v in character_basics(conn, c["id"]).items() if k != "aliases_ja"}}
         out.append(item)
     return out
 

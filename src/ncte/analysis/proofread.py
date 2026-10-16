@@ -16,6 +16,7 @@ import sqlite3
 from typing import Any
 
 from ..epub.units import PH_RE
+from ..memory.repository import character_basics
 from ..translation.cache import latest_texts
 
 CHUNK_UNITS = 60  # paragraphs per request: source and translation side by side
@@ -67,9 +68,8 @@ def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> 
         forms = [c["canonical_name"], *json.loads(c["aliases_json"] or "[]")]
         if c["id"] not in ids and not any(f and len(f) >= 2 and f in text for f in forms):
             continue
-        item = {"name": c["display_name_zh"] or c["canonical_name"], "ja": c["canonical_name"]}
-        if c["gender"] in ("female", "male"):
-            item["gender"] = c["gender"]
+        item = {"name": c["display_name_zh"] or c["canonical_name"], "ja": c["canonical_name"],
+                **{k: v for k, v in character_basics(conn, c["id"]).items() if k != "aliases_ja"}}
         if c["voice"]:
             item["voice"] = c["voice"]
         if habits.get(c["canonical_name"]):

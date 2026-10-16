@@ -17,6 +17,7 @@ from typing import Any
 
 from ..epub.units import match_text
 from ..llm.schemas import HouseStyleOutput
+from ..memory.repository import character_basics
 from ..memory.style import SeriesStyle, load_style, save_style
 from .impressions import main_characters
 
@@ -77,7 +78,7 @@ def request(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, Any], dic
         imp = conn.execute("SELECT voice FROM character_impressions WHERE character_id=?", (c["id"],)).fetchone()
         refs[f"c{k}"] = c["id"]
         items.append({"ref": f"c{k}", "name": c["display_name_zh"] or c["canonical_name"], "ja": c["canonical_name"],
-                      **({"voice": imp[0]} if imp and imp[0] else {}), "lines": lines,
+                      **character_basics(conn, c["id"]), **({"voice": imp[0]} if imp and imp[0] else {}), "lines": lines,
                       "repeated_endings": endings([q for q, _ in said])})
     forms = [f"{a['form_ja']}×{a['uses']}" for a in conn.execute(
         "SELECT form_ja, SUM(uses) uses FROM address_terms WHERE book_id=? AND speaker_id!=addressee_id GROUP BY form_ja "

@@ -24,9 +24,9 @@ def test_speaker_states(conn, cfg, fixtures):
     book = setup(conn, cfg, fixtures)
     cases = {
         "カイト、遅いですよ": ("ミナ", "explicit"),       # explicit tag
-        "悪い悪い": ("カイト", "inferred"),              # adjacent action only
+        "悪い悪い": ("カイト", "inferred"),              # adjacent action agrees with the model
         "本当だろうな": ("カイト", "inferred"),          # LLM claimed explicit with weak evidence → downgraded
-        "俺様に任せろ": ("ミナ", "inferred"),            # imitation: style → カイト, action → ミナ
+        "俺様に任せろ": ("カイト", "inferred"),          # the model's answer stands; the action (ミナ) goes to the second look
         "待って": (None, "unknown"),                    # unknown kept; invalid id rejected
         "似てますよ": (None, "unknown"),
         "それに、もう一つ": (None, "unknown"),           # continuation inherits
@@ -35,6 +35,8 @@ def test_speaker_states(conn, cfg, fixtures):
     for text, (speaker, status) in cases.items():
         u = utt(conn, book, text)
         assert (u["speaker"], u["status"]) == (speaker, status), text
+    src = conn.execute("SELECT resolution_source FROM utterances WHERE quote_text LIKE '%悪い悪い%'").fetchone()[0]
+    assert src != "program"  # the model decided (reading or the second look), not the narration match
     cont = utt(conn, book, "それに、もう一つ")
     assert cont["continuation_of"] == utt(conn, book, "似てますよ")["id"]
 
@@ -77,4 +79,4 @@ def test_translation_request_carries_speaker_status(conn, cfg, fixtures):
              if c.stage == "translate" and any("待って" in u["source"] for u in p["units"]))
     st = {x["quote"]: (x["speaker"], x["status"]) for x in p["scene"]["utterances"]}
     assert st["「待って」"] == (None, "unknown")
-    assert st["「ふふん、俺様に任せろってんだ！」"] == ("米娜", "inferred")
+    assert st["「ふふん、俺様に任せろってんだ！」"] == ("海斗", "inferred")  # the model's (the scripted one's) answer

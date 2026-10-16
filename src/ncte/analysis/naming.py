@@ -16,6 +16,7 @@ from typing import Any
 from ..epub.units import match_text
 from ..llm.schemas import NamingOutput
 from ..memory.db import utcnow
+from ..memory.repository import character_basics, pair_relations
 from ..series import SERIES_SCOPE, scope_clause
 
 NAME_CATEGORIES = ("character", "place", "organization", "item", "skill")
@@ -124,6 +125,8 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
                         **({"same_nickname_decided": rel} if (rel := decided_variants(
                             conn, a["speaker_id"], a["addressee_id"], a["form_ja"])) else {}),
                         **({"note": a["note"]} if a["note"] else {}),
+                        **({"relation": rel_} if (rel_ := pair_relations(conn, book_id, a["speaker_id"], a["addressee_id"],
+                                                                        who)) else {}),
                         **({"sample": a["evidence_quote"][:80]} if a["evidence_quote"] else {}),
                         "_context": _quotes(conn, a["id"]) or ([{"at": a["first_ordinal"], "text": a["evidence_quote"][:90]}]
                                                                if a["evidence_quote"] else [])})
@@ -143,7 +146,8 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
     payload: dict[str, Any] = {
         "task": "naming",
         "characters": [{"name_ja": c["canonical_name"], "name_zh": c["display_name_zh"],
-                        "aliases_ja": json.loads(c["aliases_json"] or "[]")} for c in main],
+                        "aliases_ja": json.loads(c["aliases_json"] or "[]"),
+                        **{k: v for k, v in character_basics(conn, c["id"]).items() if k != "aliases_ja"}} for c in main],
         "names": names[:MAX_NAMES], "address": address[:MAX_ADDRESS]}
     if to_check:
         payload["characters_to_check"] = to_check
