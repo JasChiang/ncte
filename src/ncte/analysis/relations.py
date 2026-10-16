@@ -25,6 +25,7 @@ MAX_PAIRS = 40
 PAIRS_PER_REQUEST = 8
 MAX_EVIDENCE = 10  # per kind and pair
 MAX_PASSAGES = 3  # source paragraphs naming a member's group together with the other person
+PAIR_PASSAGES = 6  # source passages where the two appear together (talked about or named together first)
 
 
 def _names(c: sqlite3.Row, proper: set[str]) -> set[str]:
@@ -83,6 +84,7 @@ def candidate_pairs(conn: sqlite3.Connection, book_id: str) -> tuple[list[dict[s
                             q[kind].append(row)
                             q["via"][(kind, row["id"])] = label
     _group_passages(conn, book_id, chars, members, pairs, pair)
+    _pair_passages(conn, book_id, chars, pairs)
     speaking: dict[str, set[str]] = {}
     for u in conn.execute("SELECT scene_id, speaker_id_nullable sp FROM utterances WHERE book_id=? AND sp IS NOT NULL",
                           (book_id,)):
@@ -96,7 +98,7 @@ def candidate_pairs(conn: sqlite3.Connection, book_id: str) -> tuple[list[dict[s
     out = []
     for p in pairs.values():
         uses = sum(int(t["uses"] or 0) for t in p["address"])
-        p["weight"] = 5 * len(p["notes"]) + 2 * len(p["facts"]) + 2 * len(p["passages"]) + min(uses, 5) + p["together"] / 2
+        p["weight"] = 5 * len(p["notes"]) + 2 * len(p["facts"]) + min(len(p["passages"]), 4) + min(uses, 5) + p["together"] / 2
         # asked once more when it came back empty: notes, or how they address each other plus anything else about the
         # two (「義父さん」 and one fact came back empty in two runs of three)
         p["should"] = bool(p["notes"]) or (bool(p["address"]) and (p["together"] >= 3 or bool(p["facts"]) or bool(p["passages"])))
@@ -135,6 +137,74 @@ def _group_passages(conn: sqlite3.Connection, book_id: str, chars: dict[str, sql
                 q["passages"] += [{"id": h[0], "at": h[1], "text": h[2][:200], "via": label} for h in hits]
 
 
+def _pair_passages(conn: sqlite3.Connection, book_id: str, chars: dict[str, sqlite3.Row],
+                   pairs: dict[tuple[str, str], dict[str, Any]]) -> None:
+    """Reading notes a relation once, and misses some: a relation that needs a second step (「孫なし確定」 said of a
+    brother and the man he lives with) was noted in one reading of seven. So each pair also gets the source passages
+    where the two appear together — one named in a paragraph, the other named or speaking within a paragraph of it —
+    with who says each line. Passages where one is talked about in a conversation the other takes part in, or both are
+    named in one paragraph, come first, spread over the book. Finding them is name matching; what they show is the
+    model's call (ADR-048)."""
+    from .dialogue import clean
+
+    rows = conn.execute("SELECT id, ordinal, plain_text FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal",
+                        (book_id,)).fetchall()
+    speakers: dict[str, set[str]] = {}
+    for u in conn.execute("SELECT unit_id, speaker_id_nullable FROM utterances WHERE book_id=? AND speaker_id_nullable "
+                          "IS NOT NULL", (book_id,)):
+        speakers.setdefault(u[0], set()).add(u[1])
+    forms = {cid: _forms(c) for cid, c in chars.items()}
+    text = [clean(r["plain_text"]) for r in rows]
+    named = [{cid for cid, fs in forms.items() if any(f in t for f in fs)} for t in text]
+    present = [named[i] | speakers.get(r["id"], set()) for i, r in enumerate(rows)]
+    hits: dict[tuple[str, str], dict[int, int]] = {}  # pair → paragraph → strength
+    for i in range(len(rows)):
+        window = range(max(0, i - 1), min(len(rows), i + 2))
+        near = set().union(*(present[j] for j in window))
+        talking = set().union(*(speakers.get(rows[j]["id"], set()) for j in window))
+        for a in named[i]:
+            for b in near - {a}:
+                k = (a, b) if a < b else (b, a)
+                if k not in pairs:
+                    continue
+                strong = b in named[i] or b in talking  # named together, or talked about with the other in it
+                got = hits.setdefault(k, {})
+                if any(abs(i - j) <= 2 for j in got):  # the same stretch once
+                    j = next(j for j in got if abs(i - j) <= 2)
+                    got[j] = max(got[j], 2 if strong else 1)
+                    continue
+                got[i] = 2 if strong else 1
+
+    def label(i: int) -> str:
+        who = speakers.get(rows[i]["id"], set())
+        name = chars[next(iter(who))]["display_name_zh"] or chars[next(iter(who))]["canonical_name"] if len(who) == 1 else ""
+        return (f"{name}：" if name else "") + _around(text[i], forms, 140)
+
+    def spread(idx: list[int]) -> list[int]:  # first, last, second, second last …: the whole book, not one end
+        out, lo, hi = [], 0, len(idx) - 1
+        while lo <= hi:
+            out.append(idx[lo])
+            if hi != lo:
+                out.append(idx[hi])
+            lo, hi = lo + 1, hi - 1
+        return out
+
+    for k, got in hits.items():
+        order = spread(sorted(i for i, s in got.items() if s == 2)) + spread(sorted(i for i, s in got.items() if s == 1))
+        for i in sorted(order[:PAIR_PASSAGES]):
+            window = " / ".join(label(j) for j in range(max(0, i - 1), min(len(rows), i + 2)))
+            pairs[k]["passages"].append({"id": rows[i]["id"], "at": rows[i]["ordinal"], "text": window, "via": None})
+
+
+def _around(t: str, forms: dict[str, list[str]], n: int) -> str:
+    """A long paragraph cut to ``n`` characters around the first name in it (the part the passage is there for)."""
+    if len(t) <= n:
+        return t
+    at = min((t.find(f) for fs in forms.values() for f in fs if f in t), default=0)
+    start = max(0, min(at - n // 3, len(t) - n))
+    return ("…" if start else "") + t[start:start + n] + ("…" if start + n < len(t) else "")
+
+
 def requests(pairs: list[dict[str, Any]], chars: dict[str, sqlite3.Row], *, recheck: bool = False
              ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """(request, lookup) per group of pairs; the lookup maps refs back (characters, evidence → (kind, id, ordinal))."""
@@ -169,11 +239,12 @@ def requests(pairs: list[dict[str, Any]], chars: dict[str, sqlite3.Row], *, rech
                 facts.append({"ref": r, "at": f["first_revealed_ordinal"], "quote": f["evidence_quote"],
                               "text": (f"〔關於群體「{via}」〕" if via else "") + f"{subj} {f['predicate']} {f['object']}"})
             passages = []
-            for g in p.get("passages", [])[:MAX_PASSAGES]:
+            for g in p.get("passages", [])[:MAX_PASSAGES + PAIR_PASSAGES]:  # the group's first, then the pair's
                 r = f"u{len(ev) + 1}"
                 ev[r] = ("passage", g["id"], g["at"])
                 allowed[pid].add(r)
-                passages.append({"ref": r, "at": g["at"], "text": f"〔關於群體「{g['via']}」〕{g['text']}"})
+                passages.append({"ref": r, "at": g["at"],
+                                 "text": (f"〔關於群體「{g['via']}」〕" if g["via"] else "") + g["text"]})
             items.append({"pair": pid, "a": cref[p["a"]], "b": cref[p["b"]], "notes": notes, "facts": facts,
                           **({"passages": passages} if passages else {}),
                           "address": [{"from": cref[t["speaker_id"]], "to": cref[t["addressee_id"]], "form": t["form_ja"],

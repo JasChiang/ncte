@@ -174,3 +174,16 @@ def test_people_page_shows_group_members(conn, cfg, fixtures):
     conn.execute("INSERT INTO group_members(group_id, member_id, book_id, created_at) VALUES (?,?,?,?)", (a, b, book.id, utcnow()))
     chars = data.characters(conn, book)["characters"]
     assert chars[a]["members"] == [b] and chars[b]["member_of"] == [a]
+
+
+def test_pairs_get_passages_where_the_two_appear_together(conn, cfg, fixtures):
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    pairs, chars = relations.candidate_pairs(conn, book.id)
+    with_text = [p for p in pairs if any(g["via"] is None for g in p["passages"])]
+    assert with_text  # the two people of the sample story are named and speak in the same stretches
+    p = with_text[0]
+    names = {chars[p["a"]]["canonical_name"], chars[p["b"]]["canonical_name"]}
+    g = next(g for g in p["passages"] if g["via"] is None)
+    assert any(n in g["text"] for n in names) and len(p["passages"]) <= relations.MAX_PASSAGES + relations.PAIR_PASSAGES
+    req = relations.requests([p], chars)[0][0]
+    assert req["pairs"][0]["passages"] and not req["pairs"][0]["passages"][0]["text"].startswith("〔")
