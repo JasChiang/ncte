@@ -626,12 +626,15 @@ async function graphView(id) {
     const best = nodes.slice().sort((a, b) => (deg[b] || 0) - (deg[a] || 0) || cnt[b] - cnt[a])[0];
     if (!G.center || !nodes.includes(G.center) || (deg[best] || 0) >= (deg[G.center] || 0) + 2) G.center = best;
   }
-  const middle = G.mode === "rel" && G.focus && nodes.includes(G.focus) ? G.focus : G.center;
+  // the center chosen at a later point may not be known yet (the slider moved back): no center then
+  const middle = G.mode === "rel" && G.focus && nodes.includes(G.focus) ? G.focus : nodes.includes(G.center) ? G.center : null;
   const W = 900, H = 620, P = G.mode === "rel" && middle ? radial(nodes, linkEdges, middle, rad) : layout(nodes, linkEdges, W, H, rad),
     mx = Math.max(1, ...edges.map(e => e.w));
   const near = new Set(G.focus ? [G.focus, ...edges.filter(e => e.a === G.focus || e.b === G.focus).flatMap(e => [e.a, e.b])] : nodes);
   const dim = c => near.has(c) ? 1 : .15;
-  let svg = `<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="var(--accent)"/></marker></defs>`;
+  if (!nodes.length) P._box = {x: 0, y: 0, w: W, h: H};  // nobody yet at this point of the story
+  let svg = (nodes.length ? "" : `<text x="${W / 2}" y="${H / 2}" font-size="16" text-anchor="middle" fill="var(--muted)">${
+    G.mode === "rel" ? "讀到這裡還沒有人物關係" : "讀到這裡還沒有人物"}</text>`) + `<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="var(--accent)"/></marker></defs>`;
   if (G.mode === "addr") {
     const seen = {};
     addr.forEach(a => { const key = a.speaker + a.to; seen[key] = (seen[key] || 0) + 1;
