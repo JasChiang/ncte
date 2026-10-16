@@ -106,3 +106,7 @@ def test_house_punctuation_is_the_same_everywhere():
     assert typeset("等等...我") == "等等……我" and typeset("嗯…") == "嗯……"
     assert typeset("⟦1⟧「喂!?」⟦/1⟧") == "⟦1⟧「喂！？」⟦/1⟧"  # placeholders kept exactly
     assert typeset("OK, let's go!") == "OK, let's go!"  # Latin text left alone
+    assert typeset("好事啊⟦1⟧!?⟦/1⟧」") == "好事啊⟦1⟧！？⟦/1⟧」"  # marks alone inside a styled run read with their neighbours
+    assert typeset("啊……⟦1⟧!?⟦/1⟧」") == "啊……⟦1⟧！？⟦/1⟧」" and typeset("「⟦/1⟧⟦2⟧!?⟦/2⟧　是") == "「⟦/1⟧⟦2⟧！？⟦/2⟧　是"
+    assert typeset("喂～⟦1⟧!!⟦/1⟧　這") == "喂～⟦1⟧！！⟦/1⟧　這"
+    assert typeset("⟦1⟧!?⟦/1⟧") == "⟦1⟧!?⟦/1⟧" and typeset("他說⟦1⟧OK, go!⟦/1⟧") == "他說⟦1⟧OK, go!⟦/1⟧"
