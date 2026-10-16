@@ -781,7 +781,7 @@ class ContextOrchestrator(Orchestrator):
 
 def drop_address_forms(glossary: list[dict[str, Any]], address: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """One source per form of address in a request: a form with a speaker-specific rendering in ``address_terms``
-    (「しまむらちゃん」 → 小島村) does not also go out as an unconfirmed glossary entry (島村醬) that contradicts it.
+    (「たかぎちゃん」 → 小高木) does not also go out as an unconfirmed glossary entry (高木醬) that contradicts it.
     Confirmed glossary entries stay (the human chose them)."""
     forms = {a["ja"] for a in address if a.get("zh")}
     return [g for g in glossary if g.get("verified") or g["ja"] not in forms

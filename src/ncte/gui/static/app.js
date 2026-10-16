@@ -603,7 +603,7 @@ async function graphView(id) {
     const inRel = new Set(rels.flatMap(r => [r.a, r.b]));
     inRel.forEach(c => { cnt[c] = cnt[c] || 1; });
     nodes = [...inRel].sort((a, b) => cnt[b] - cnt[a]);
-    // people with a relation are few: show them all up to 20 (12 cut 盧卡斯, one of two followers)
+    // people with a relation are few: show them all up to 20 (12 cut 馬可, one of two followers)
     if (G.n && nodes.length > Math.max(G.n, 20)) { const keep = new Set(nodes.slice(0, G.n)); nodes = nodes.filter(c => keep.has(c)); }
   }
   const inSet = new Set(nodes);

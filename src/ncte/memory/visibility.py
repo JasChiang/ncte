@@ -10,7 +10,7 @@ volume 1 (even when translated later) never sees what volumes 2+ revealed.
 * a retraction is honoured only if the retracting fact itself was revealed before the horizon
 * a character's names (canonical name, aliases): the form that appeared first, plus every other form once it has
   appeared and its link to the character (an identity reveal) was revealed — matters most when the whole volume
-  was read before translating (ADR-023): 「謎の少女」 must not be shown as 「かぐや」 before the reveal
+  was read before translating (ADR-023): 「謎の少女」 must not be shown as 「サクヤ」 before the reveal
 """
 
 from __future__ import annotations

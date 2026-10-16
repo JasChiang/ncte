@@ -42,7 +42,7 @@ def test_explicit_tags():
 
 
 def test_keep_doing_is_not_a_speech_verb():
-    # 「使い続け」 is "keeps using", not 「…と続けた」 (found in 英雄と賢者の転生婚 §3363)
+    # 「使い続け」 is "keeps using", not 「…と続けた」 (found in 剣士と魔女の転生記 §3363)
     _, qs, ev = ev_for(["　絶え間なくミナが魔法を使い続けることで、その形状を保ち続けている。", "「耐えるに決まってるよな」"])
     assert ("u1", 0) not in ev
     _, qs, ev = ev_for(["「それに」とミナが続けた。"])
@@ -50,7 +50,7 @@ def test_keep_doing_is_not_a_speech_verb():
 
 
 def test_name_spoken_to_is_not_the_speaker():
-    # 「…」と日野に声をかけた: 日野 is addressed (安達としまむら §1301)
+    # 「…」と小林に声をかけた: 小林 is addressed (灯台と少女たち §1301)
     _, qs, ev = ev_for(["「いつもありがとうございます」とミナに声をかけた。"])
     assert ("u0", 0) not in ev
 
@@ -149,7 +149,7 @@ def test_speech_profile_and_style_hints():
 def test_a_paragraph_that_is_one_double_bracket_is_a_voice():
     from ncte.analysis.dialogue import UnitText, find_quotes
 
-    us = [UnitText("u1", "『お前は何故、俺を恐れない？』", 1), UnitText("u2", "『帰ったか』と、アインの脳裏に声が届いた。", 2),
+    us = [UnitText("u1", "『お前は何故、俺を恐れない？』", 1), UnitText("u2", "『帰ったか』と、ルカの脳裏に声が届いた。", 2),
           UnitText("u3", "『私』の世界は、ゆっくりと黒に塗りつぶされた。", 3), UnitText("u4", "「『光在れ』って言ったの」", 4),
           UnitText("u5", "『この苦しみを早く終わらせて』──と。", 5)]
     got = {q.unit_id: q.text for q in find_quotes(us)}

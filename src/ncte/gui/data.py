@@ -329,7 +329,7 @@ def proposals(conn: sqlite3.Connection, book: Book, *, include_done: bool = Fals
             else:
                 c["zh"] = plain(tr["text"]) if tr is not None else ""
         item = {k: v for k, v in r.items() if k not in ("options_json", "context_json")}
-        if r["kind"] == "address":  # other spellings of the same nickname already decided (「あだっつぃー」→ 安達仔～～)
+        if r["kind"] == "address":  # other spellings of the same nickname already decided (「みずのっつぃー」→ 水野仔～～)
             from ..memory.address import decided_variants
 
             a = conn.execute("SELECT * FROM address_terms WHERE id=?", (int(r["ref"]),)).fetchone()

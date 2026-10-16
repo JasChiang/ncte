@@ -1,7 +1,7 @@
 """Address terms: who calls whom what (ADR-022).
 
-Japanese forms of address depend on the speaker: 日野 calls 安達 「あだっち」, 島村's sister calls 島村 「姉ちゃん」, and a
-change of form (「安達さん」 → 「安達」) is often a plot signal. One row per (speaker, addressee, form) with the story
+Japanese forms of address depend on the speaker: 小林 calls 水野 「みずっち」, 高木's sister calls 高木 「姉ちゃん」, and a
+change of form (「水野さん」 → 「水野」) is often a plot signal. One row per (speaker, addressee, form) with the story
 positions where it was first and last used, the number of uses and the rendering to keep. ``addressee == speaker``
 means the speaker refers to themself by that name.
 
@@ -37,8 +37,8 @@ def name_forms(conn: sqlite3.Connection, book_id: str, upto: int | None = None) 
     """(form → character id, ambiguous forms). Forms come from character names/aliases and from every glossary
     form of an entity that belongs to a character. A form claimed by two characters, or listed in
     ``form_senses``, is ambiguous and never attributed automatically. With ``upto`` only characters already known
-    at that story position count: 「安達さん」 first named as someone's mother in volume 2 must not take over
-    volume 1's 「安達さん」 said to a classmate."""
+    at that story position count: 「水野さん」 first named as someone's mother in volume 2 must not take over
+    volume 1's 「水野さん」 said to a classmate."""
     chars = conn.execute(f"SELECT id, book_id, canonical_name, aliases_json, known_from_ordinal FROM characters "
                          f"WHERE {SERIES_SCOPE}", (book_id,)).fetchall()
     if upto is not None:
@@ -175,7 +175,7 @@ def _can_name(conn: sqlite3.Connection, form: str, cid: str) -> bool:
     if form in names or base in names or any(variant_key(n) == variant_key(form) for n in names):
         return True
     if len(base) >= 2 and any(n.startswith(base + "の") or n.startswith(base + "（") for n in names):
-        return True  # a relative named after the family: 「安達さん」 for 安達の母, しまむら（妹）
+        return True  # a relative named after the family: 「水野さん」 for 水野の母, たかぎ（妹）
     return conn.execute(f"SELECT 1 FROM form_senses WHERE {SERIES_SCOPE} AND term IN (?,?)",
                         (c["book_id"], form, base)).fetchone() is not None
 
@@ -183,9 +183,9 @@ def _can_name(conn: sqlite3.Connection, form: str, cid: str) -> bool:
 def reassign_scene(conn: sqlite3.Connection, book_id: str, scene_id: str, speaker: str, form: str,
                    addressee: str) -> int:
     """The memory model read the scene and says ``speaker``'s 「form」 there is for ``addressee``: the program's
-    guess (whoever owns the name — 「安達さん」 → 安達, though it was said to her mother) follows. Only when the
+    guess (whoever owns the name — 「水野さん」 → 水野, though it was said to her mother) follows. Only when the
     form can name ``addressee`` at all (one of their names, or a form recorded as shared): the model sometimes
-    reports the listener instead of the person named (「永藤は？」 asked of 日野). Returns observations moved."""
+    reports the listener instead of the person named (「中川は？」 asked of 小林). Returns observations moved."""
     if not _can_name(conn, form, addressee):
         return 0
     rows = conn.execute(
@@ -216,14 +216,14 @@ _SMALL = str.maketrans("ぁぃぅぇぉゃゅょっゎァィゥェォャュョ�
 
 
 def variant_key(form: str) -> str:
-    """One key for spellings of one nickname and the nickname with an honorific: 「あだっつぃー」「あだっついー」
-    「あだっつぃーくん」 → same; 「安達ちゃん」 and 「あだっちー」 differ."""
+    """One key for spellings of one nickname and the nickname with an honorific: 「みずのっつぃー」「あだっついー」
+    「みずのっつぃーくん」 → same; 「水野ちゃん」 and 「みずっちー」 differ."""
     return _HONORIFIC_END.sub("", form).replace("ー", "").replace("～", "").replace("〜", "").translate(_SMALL)
 
 
 def decided_variants(conn: sqlite3.Connection, speaker: str, addressee: str, form: str) -> list[dict[str, str]]:
     """Renderings already decided (human / naming) for other spellings of the same form by the same speaker for the
-    same person — a new 「あだっつぃーくん」 should build on the chosen 「あだっつぃー」."""
+    same person — a new 「みずのっつぃーくん」 should build on the chosen 「みずのっつぃー」."""
     key = variant_key(form)
     return [{"ja": r["form_ja"], "zh": r["form_zh"]} for r in conn.execute(
         "SELECT form_ja, form_zh FROM address_terms WHERE speaker_id=? AND addressee_id=? AND form_ja!=? AND "

@@ -173,7 +173,7 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
         if ja in src_match:
             return False
         # only another form is in the source. A title or description (「英雄」「学院長」) is rendered as itself, not as
-        # the name: nothing to require. A part of the name (「レイド」, 「フリーデン閣下」): that part of the rendering.
+        # the name: nothing to require. A part of the name (「カイル」, 「ヴァイス閣下」): that part of the rendering.
         parts = [p for p in re.split(r"[・･·]", ja) if len(p) >= 2]
         named = [a for a in g.get("aliases") or [] if a in src_match and (a in ja or any(p in a for p in parts))]
         if not named:

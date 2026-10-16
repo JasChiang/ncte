@@ -1,7 +1,7 @@
 """A line that calls a woman by name, translated with 你 (context mode).
 
 The translation gets each character's gender on its card, and still now and then writes 你 to a woman (英雄賢者
-§716 「エルリア、今の私はあなたに対する皮肉を…」 → 「艾爾莉亞，我剛才是在挖苦你」). The program can see the cheapest case:
+§716 「セレナ、今の私はあなたに対する皮肉を…」 → 「瑟蕾娜，我剛才是在挖苦你」). The program can see the cheapest case:
 the line opens with, or sets off with a comma, the name of a character known as female by then, and the translation
 has 你 but no 妳. Such a unit is flagged for the reviewer, who fixes it with the context; nothing is changed here.
 """
@@ -25,7 +25,7 @@ def check(conn: sqlite3.Connection, book_id: str, unit: sqlite3.Row, text: str) 
         return ev
     if ev := _plural(conn, book_id, unit, text):
         return ev
-    singular = text.replace("你們", "")  # 「米莉絲、威澤爾，你們…」 speaks to a group: 你們 is right
+    singular = text.replace("你們", "")  # 「莉娜、提歐，你們…」 speaks to a group: 你們 is right
     if "你" not in singular or "妳" in text:
         return None
     forms, ambiguous = name_forms(conn, book_id, unit["ordinal"])

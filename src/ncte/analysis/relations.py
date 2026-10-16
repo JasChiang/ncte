@@ -64,7 +64,7 @@ def candidate_pairs(conn: sqlite3.Connection, book_id: str) -> tuple[list[dict[s
     for t in conn.execute("SELECT * FROM address_terms WHERE book_id=? AND speaker_id!=addressee_id", (book_id,)):
         if t["speaker_id"] in chars and t["addressee_id"] in chars:
             pair(t["speaker_id"], t["addressee_id"])["address"].append(t)
-    # a relation stated about a group (法雷格—跟班兩人：主從) is material for each member's own pair too; the model
+    # a relation stated about a group (加爾德—跟班兩人：主從) is material for each member's own pair too; the model
     # decides whether it holds for that person (ADR-046)
     members: dict[str, list[str]] = {}
     for g in conn.execute("SELECT group_id, member_id FROM group_members WHERE book_id=?", (book_id,)):
@@ -112,7 +112,7 @@ def _forms(c: sqlite3.Row) -> list[str]:
 
 def _group_passages(conn: sqlite3.Connection, book_id: str, chars: dict[str, sqlite3.Row], members: dict[str, list[str]],
                     pairs: dict[tuple[str, str], dict[str, Any]], pair: Any) -> None:
-    """A group often has no notes of its own (「ファレグは取り巻きたちを連れて」 is neither a fact nor a note): the
+    """A group often has no notes of its own (「ガルドは取り巻きたちを連れて」 is neither a fact nor a note): the
     paragraphs that name the group together with someone a member is paired with go to that member's pair, earliest
     first, for the model to read (ADR-046). Finding them is plain name matching; what they mean is the model's call."""
     if not members:

@@ -258,7 +258,7 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             set_usage(conn, book_id, row, answer, a.reason)
             stats[f"address_{answer}"] = stats.get(f"address_{answer}", 0) + 1
         elif kind == "i":
-            if answer in item["candidates"] and answer != key:  # 「姉ちゃん」 in the sister's story is 島村
+            if answer in item["candidates"] and answer != key:  # 「姉ちゃん」 in the sister's story is 高木
                 _narrator_is(conn, book_id, key, answer)
                 stats["identities_merged"] = stats.get("identities_merged", 0) + 1
         elif kind == "p":

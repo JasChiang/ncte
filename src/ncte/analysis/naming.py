@@ -52,7 +52,7 @@ _KATA = "\u30a0-\u30ff\u31f0-\u31ff"
 
 def term_pattern(term: str) -> re.Pattern[str]:
     """A short kana-only name must not match inside a longer kana word (「のん」 in 「のんびり」). Longer names are
-    matched as they are: particles are kana too (「ところでしまむらちゃん」「しまむらは」)."""
+    matched as they are: particles are kana too (「ところでたかぎちゃん」「たかぎは」)."""
     if len(term) > 2:
         return re.compile(re.escape(term))
     for cls in (_HIRA, _KATA):
@@ -272,16 +272,16 @@ def _fix_character(conn: sqlite3.Connection, book_id: str, cid: str, option: dic
 
 
 def _variant_key(form: str) -> str:
-    """「あだっち」「あだっちー」 are one nickname; 「安達ちゃん」 and 「あだっちー」 are not."""
+    """「みずっち」「みずっちー」 are one nickname; 「水野ちゃん」 and 「みずっちー」 are not."""
     from ..memory.address import variant_key
 
     return variant_key(form)
 
 
 def flag_collisions(conn: sqlite3.Connection, book_id: str) -> int:
-    """Different forms of address for the same person rendered alike (島村媽媽's 「安達ちゃん」 and 日野's 「あだっちー」
-    both → 「小安達」) lose a distinction the original makes: such proposals become pending, with a note naming the
-    other form. Plain names (「安達」 for 安達) and spelling variants of one nickname are not collisions."""
+    """Different forms of address for the same person rendered alike (高木媽媽's 「水野ちゃん」 and 小林's 「みずっちー」
+    both → 「小水野」) lose a distinction the original makes: such proposals become pending, with a note naming the
+    other form. Plain names (「水野」 for 水野) and spelling variants of one nickname are not collisions."""
     who = char_names(conn, book_id)
     where, ids = scope_clause(conn, book_id)
     rows = conn.execute(f"SELECT * FROM address_terms WHERE {where} AND form_zh IS NOT NULL", ids).fetchall()
@@ -307,14 +307,14 @@ def flag_collisions(conn: sqlite3.Connection, book_id: str) -> int:
 
 
 def _set_full_names(conn: sqlite3.Connection, book_id: str, term: str, old_zh: str, zh: str) -> None:
-    """A given name decided alone (エリーゼ) also changes the full names that contain it (エリーゼ・ランメル
-    愛麗絲·朗梅爾 → 艾莉潔·朗梅爾, ヴェガルタ魔法王国): unconfirmed glossary entries and character display names."""
+    """A given name decided alone (ノエル) also changes the full names that contain it (ノエル・ランメル
+    諾艾兒·朗梅爾 → 艾莉潔·朗梅爾, ノルデン魔法王国): unconfirmed glossary entries and character display names."""
     if not old_zh or old_zh == zh:
         return
 
     def swap(ja: str, cur: str | None) -> str | None:
         if cur and ja != term and ja.startswith(term) and cur.startswith(old_zh) and "・" not in ja:
-            return zh + cur[len(old_zh):]  # ヴェガルタ魔法王国 威加爾達魔法王國 → 維加爾達魔法王國
+            return zh + cur[len(old_zh):]  # ノルデン魔法王国 威加爾達魔法王國 → 維加爾達魔法王國
         ja_parts, zh_parts = re.split(r"[・･·]", ja), re.split(r"[・･·]", cur or "")
         if len(ja_parts) < 2 or term not in ja_parts or len(zh_parts) != len(ja_parts):
             return None
@@ -339,8 +339,8 @@ def _set_full_names(conn: sqlite3.Connection, book_id: str, term: str, old_zh: s
 
 
 def _sync_address(conn: sqlite3.Connection, book_id: str, term: str, old_zh: str, zh: str) -> None:
-    """Address renderings built on the old rendering follow it (「レイド・フリーデン様」 雷德·福里登大人 → 雷德·弗里登大人,
-    「フリーデン卿」 福里登卿 → 弗里登卿, 「ファレグの坊主」 法雷格小鬼 → 法雷格小子). A full name also changes the parts
+    """Address renderings built on the old rendering follow it (「カイル・ヴァイス様」 凱爾·福里登大人 → 凱爾·弗里登大人,
+    「ヴァイス卿」 福里登卿 → 弗里登卿, 「ガルドの坊主」 加爾德小鬼 → 加爾德小子). A full name also changes the parts
     that changed (the family name alone). Renderings a person chose are never touched."""
     pairs = [(term, old_zh, zh)]
     ja_parts, old_parts, new_parts = (re.split(r"[・･·]", x) for x in (term, old_zh, zh))
@@ -435,7 +435,7 @@ def decide(conn: sqlite3.Connection, book_id: str, pid: int, zh: str) -> dict[st
     elif row["kind"] == "name":
         _set_name(conn, book_id, row["ref"], zh, human=True)
         # the same form addressed to the same person follows (unless a person decided that pair differently).
-        # Only that person: 「安達さん」 named as 安達's mother must not rename classmates' 「安達さん」 for 安達.
+        # Only that person: 「水野さん」 named as 水野's mother must not rename classmates' 「水野さん」 for 水野.
         from ..memory.entities import character_for_form
 
         owner = character_for_form(conn, book_id, row["ref"])
@@ -460,7 +460,7 @@ def decide(conn: sqlite3.Connection, book_id: str, pid: int, zh: str) -> dict[st
             plain_name = conn.execute(f"SELECT 1 FROM characters WHERE {SERIES_SCOPE} AND (canonical_name=? OR "
                                       "EXISTS (SELECT 1 FROM json_each(aliases_json) WHERE value=?))",
                                       (book_id, a[0], a[0])).fetchone()
-            # a person's bare name (ファレグ in 「ファレグの坊主」) keeps its own rendering: the glossary is the name
+            # a person's bare name (ガルド in 「ガルドの坊主」) keeps its own rendering: the glossary is the name
             if users == 1 and not plain_name:
                 conn.execute(f"UPDATE glossary SET target_term=?, origin='naming', updated_at=? WHERE {SERIES_SCOPE} AND "
                              "source_term=? AND verified=0 AND origin!='user'", (zh, utcnow(), book_id, a[0]))
@@ -475,7 +475,7 @@ def decide(conn: sqlite3.Connection, book_id: str, pid: int, zh: str) -> dict[st
 
 
 def suspicious_characters(conn: sqlite3.Connection, book_id: str) -> list[dict[str, str]]:
-    """Characters whose name is a form of address (「安達さん」): usually someone named only by how others address
+    """Characters whose name is a form of address (「水野さん」): usually someone named only by how others address
     them, and the same form also addresses another person — such a character takes over the other person's lines."""
     from ..memory.address import _HONORIFIC_END
 

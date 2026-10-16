@@ -75,7 +75,7 @@ def resolve(program_ev: list[TagEvidence], llm: LlmClaim | None, head: Resolutio
     if len(tagged) == 1:
         sid = next(iter(tagged))
         if llm and llm.speaker_ref and llm.speaker_ref != sid and llm.status != "unknown":
-            # a pattern match is evidence, not understanding (「…と日野に声をかけた」, a tag that belongs to the
+            # a pattern match is evidence, not understanding (「…と小林に声をかけた」, a tag that belongs to the
             # previous line): the model, reading the whole exchange, decides — as an inference, not a fact
             where = "the neighbouring paragraph" if all(e.adjacent for e in program_ev if e.kind == "dialogue_tag") \
                 else "the same paragraph"

@@ -271,7 +271,7 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
 
 
 def _relations_so_far(conn: sqlite3.Connection, book_id: str, before: int) -> dict[str, list[str]]:
-    """Relations noted before this scene, by character: 「島村的妹妹」 tells the reader of the sister's own story who
+    """Relations noted before this scene, by character: 「高木的妹妹」 tells the reader of the sister's own story who
     「姉ちゃん」 is (a translator knows who is whose sister)."""
     names = {r["id"]: r["display_name_zh"] or r["canonical_name"] for r in repo.characters(conn, book_id)}
     out: dict[str, list[str]] = {}
@@ -311,7 +311,7 @@ def _revealed(conn: sqlite3.Connection, book_id: str, known: list[Any], same_as:
 
 
 def _is_description(name: str) -> bool:
-    """「黒髪の女性」「艶やかな茶髪の美しい女性」「フードをかぶった少女」: words describing someone, not a name."""
+    """「黒髪の女性」「長い銀髪の美しい女性」「フードをかぶった少女」: words describing someone, not a name."""
     n = name.strip()
     return len(n) >= 4 and (bool(re.search(r"[のなたいる]", n[1:-1])) or any(
         n.endswith(g) and len(n) > len(g) + 1 for g in GENERIC_REFERENTS))
@@ -392,7 +392,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                        and a not in GENERIC_REFERENTS and a not in common and not names_a_group(a)
                        and _standalone(a, scene_text, [name, *existing_alias, *(x.name_ja for x in parsed.new_characters)])]
             proposed_zh = nc.proposed_name_zh.strip()[:MAX_NAME_LEN] or None
-            # described first and named in the same scene (「艶やかな茶髪の美しい女性」 … 「オリビア」): the model marks
+            # described first and named in the same scene (「長い銀髪の美しい女性」 … 「エレナ」): the model marks
             # the name among the aliases; the person is known by the name, the description stays an alias
             real = next((k.ja.strip() for k in nc.alias_kinds if k.kind == "name" and k.ja.strip() in aliases), None)
             if real and _is_description(name) and real not in existing_alias:

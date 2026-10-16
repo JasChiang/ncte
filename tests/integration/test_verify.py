@@ -146,7 +146,7 @@ def test_each_scene_tells_the_translator_whose_voice_it_is(conn, cfg, fixtures):
 def test_program_checks_the_judged_narration():
     from ncte.analysis.narration import judged
 
-    third = [{"kind": "text", "plain_text": "　レイドは村長の後を追った。"}] * 20
+    third = [{"kind": "text", "plain_text": "　カイルは村長の後を追った。"}] * 20
     first = [{"kind": "text", "plain_text": "　私はそう思った。"}] * 20
     assert judged("third", third) is None and judged("first", first) is None
     assert judged("third", first) == "conflict" and judged("first", third) == "conflict"

@@ -30,7 +30,7 @@ def test_warnings():
     assert ("japanese_residue", "low") in run("藤木わしろでございます。", "我是藤木わしろ。")  # a name kept whole: a note
     assert ("untranslated", "low") in run("藤木わしろ", "藤木わしろ")  # an author's signature
     assert ("latin_word", "high") in run("唯一対等な存在だ", "是唯一對等 peer 的存在")
-    assert run("ＭＭＯのレイドボス", "MMO的團隊副本首領") == set()  # in the source (full width) too
+    assert run("ＭＭＯのカイルボス", "MMO的團隊副本首領") == set()  # in the source (full width) too
     assert ("non_taiwan_glyph", "error") in run("武装竜", "武裝竜")
     assert ("quote_mismatch", "medium") in run("「あいうえお、かきくけこ」", "啊咿嗚欸喔，咖嘰咕")
     assert ("quote_mismatch", "low") in run("アルテインという国", "「阿爾汀」這個國家")  # a pair added for emphasis
@@ -42,13 +42,13 @@ def test_warnings():
 def test_glossary_checks():
     g = [{"source_term": "ミナ", "target_term": "米娜", "verified": True, "category": "character"}]
     assert ("glossary_mismatch", "high") in run("ミナは笑った。", "米奈笑了。", glossary=g)
-    full = [{"source_term": "レイド・フリーデン", "target_term": "雷德·弗里登", "verified": 1,
-             "aliases": ["レイド", "英雄", "フリーデン閣下"]}]
-    assert run("英雄と賢者の転生婚", "英雄與賢者的轉生婚", glossary=full) == set()  # a title is not the name
-    assert run("フリーデン閣下に王命が", "向弗里登閣下下達王命", glossary=full) == set()
-    assert run("レイドは頷いた。", "雷德點了點頭。", glossary=full) == set()  # the given name alone is rendered
-    assert ("glossary_mismatch", "high") in run("レイドは頷いた。", "萊德點了點頭。", glossary=full)
-    assert ("glossary_mismatch", "high") in run("レイド・フリーデンです", "我是雷德。", glossary=full)
+    full = [{"source_term": "カイル・ヴァイス", "target_term": "凱爾·弗里登", "verified": 1,
+             "aliases": ["カイル", "英雄", "ヴァイス閣下"]}]
+    assert run("剣士と魔女の転生記", "英雄與賢者的轉生婚", glossary=full) == set()  # a title is not the name
+    assert run("ヴァイス閣下に王命が", "向弗里登閣下下達王命", glossary=full) == set()
+    assert run("カイルは頷いた。", "凱爾點了點頭。", glossary=full) == set()  # the given name alone is rendered
+    assert ("glossary_mismatch", "high") in run("カイルは頷いた。", "萊德點了點頭。", glossary=full)
+    assert ("glossary_mismatch", "high") in run("カイル・ヴァイスです", "我是凱爾。", glossary=full)
     assert run("ミナは笑った。", "米娜笑了。", glossary=g) == set()
     assert ("possible_added_name", "high") in run("彼女は笑った。", "米娜笑了。", glossary=g)
 

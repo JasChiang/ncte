@@ -196,7 +196,7 @@ def test_gender_ranks(conn, cfg, fixtures):
 
     book, _ = import_book(conn, cfg, fixtures["basic"])
     u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
-    cid = upsert_character(conn, book.id, "アルマ", name_zh="阿爾瑪", aliases=[], unit_id=u[0], ordinal=u[1], origin="t")[0]
+    cid = upsert_character(conn, book.id, "ソフィ", name_zh="蘇菲", aliases=[], unit_id=u[0], ordinal=u[1], origin="t")[0]
     hz = (99.0, 10**9)
     set_gender(conn, book.id, cid, "male", ordinal=u[1], quote="俺", origin="llm", certainty="inferred")
     assert gender_view(conn, cid, hz) == ("male", "inferred")

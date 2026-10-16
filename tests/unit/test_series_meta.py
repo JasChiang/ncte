@@ -21,7 +21,7 @@ def test_title_patterns(title, base, vol):
     assert g is not None and g[0] == base and g[1] == vol
 
 
-@pytest.mark.parametrize("title", ["超かぐや姫！", "86―エイティシックス―", "1Q84", "銀の鍵と王女", "Re:ゼロ",
+@pytest.mark.parametrize("title", ["超竹取物語！", "77―セブンティセブン―", "2Q31", "銀の鍵と王女", "Re:スタート",
                                    "銀の鍵と王女 (電撃文庫)"])
 def test_titles_without_volume(title):
     assert guess_from_title(title) is None
@@ -59,16 +59,16 @@ def test_title_and_title_sort(tmp_path):
 def test_clean_title():
     from ncte.epub.series_meta import clean_title
 
-    assert clean_title("安達としまむら (電撃文庫)") == "安達としまむら"
+    assert clean_title("灯台と少女たち (電撃文庫)") == "灯台と少女たち"
     assert clean_title("銀の鍵と王女（上）") == "銀の鍵と王女（上）"  # a volume marker is not a label
-    assert clean_title("【電子版限定特典付き】英雄と賢者の転生婚 1 ～かつての好敵手と婚約して最強夫婦になりました～") == \
-        "英雄と賢者の転生婚 1 ～かつての好敵手と婚約して最強夫婦になりました～"
-    assert guess_from_title("【電子版限定特典付き】英雄と賢者の転生婚 2 ～副題～")[:2] == ("英雄と賢者の転生婚", 2.0)
+    assert clean_title("【電子版限定特典付き】剣士と魔女の転生記 1 ～かつての宿敵と組んで最強の二人になりました～") == \
+        "剣士と魔女の転生記 1 ～かつての宿敵と組んで最強の二人になりました～"
+    assert guess_from_title("【電子版限定特典付き】剣士と魔女の転生記 2 ～副題～")[:2] == ("剣士と魔女の転生記", 2.0)
     assert clean_title("【悲報】ダンジョン") == "【悲報】ダンジョン"  # a bracket that is part of the title stays
 
 
 def test_normalize_title():
-    assert normalize_title("超かぐや姫！") == normalize_title("超かぐや姫")
+    assert normalize_title("超竹取物語！") == normalize_title("超竹取物語")
     assert normalize_title("銀の鍵と王女　") == normalize_title("銀の鍵と王女")
 
 

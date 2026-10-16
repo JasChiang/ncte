@@ -4,13 +4,13 @@ One *entity* (a character, team, place, item …) has several *name forms* in th
 Chinese rendering and type::
 
     entity 黑鐵 (organization)
-        クロガネ      official  → 黑鐵
+        ハガネ      official  → 黑鐵
         黒鬼          nickname  → …      note: the fans' nickname (never the slur 黑鬼 in Chinese)
     entity 索拉 (character)
         ソラ  official → 索拉 · 天野ソラ full → 天野索拉 · ソラっち nickname → 小索拉
 
 Every glossary row is a form; ``glossary.entity_id`` groups forms. Links between forms need evidence:
-* ``pattern``  – the source says so («クロガネ。通称黒鬼»), detected by the program
+* ``pattern``  – the source says so («ハガネ。通称黒鬼»), detected by the program
 * ``llm``      – proposed by the memory-update model; both names must occur verbatim in the scene and the
                  evidence quote must be verbatim (otherwise only a *candidate*)
 * ``human``    – ``ncte names link``

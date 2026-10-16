@@ -14,14 +14,14 @@ def _scene(chars, utts, narration=None, pov=None):
 def test_parts_merge_and_new_characters_stay_distinct():
     utt = lambda u, ref: {"unit_id": u, "quote_index": 0, "speaker_ref": ref,  # noqa: E731
                           "resolution_status": "explicit", "speaker_candidates": [], "contradictions": []}
-    a = _scene([("n1", "ヤシロ", "u1")], [utt("u1", "n1")], pov="島村")
-    b = _scene([("n1", "姉", "u5"), ("n2", "ヤシロ", "u6")], [utt("u5", "n1"), utt("u6", "n2")],
+    a = _scene([("n1", "ミツ", "u1")], [utt("u1", "n1")], pov="高木")
+    b = _scene([("n1", "姉", "u5"), ("n2", "ミツ", "u6")], [utt("u5", "n1"), utt("u6", "n2")],
                narration={"person": "first", "narrator_ref": None, "focal_ref": None})
     m = merge_outputs([a, b])
-    assert [c.name_ja for c in m.new_characters] == ["ヤシロ", "姉"]
+    assert [c.name_ja for c in m.new_characters] == ["ミツ", "姉"]
     assert m.new_characters[0].evidence_unit_ids == ["u1", "u6"]
-    assert [u.speaker_ref for u in m.utterances] == ["n1", "n1~1", "n1"]  # 姉 renamed, second ヤシロ → first
-    assert m.pov == "島村" and m.narration and m.narration.person == "first"
+    assert [u.speaker_ref for u in m.utterances] == ["n1", "n1~1", "n1"]  # 姉 renamed, second ミツ → first
+    assert m.pov == "高木" and m.narration and m.narration.person == "first"
 
 
 def test_memory_parts_join_summaries_and_facts():

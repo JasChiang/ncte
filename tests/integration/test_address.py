@@ -28,11 +28,11 @@ def test_generic_role_with_honorific_is_not_a_name(conn, cfg, fixtures):
 
 
 def test_find_forms_longest_match_and_honorifics():
-    forms = {"島村": "c1", "しまむら": "c1", "しまむらちゃん": "c1", "安達": "c2"}
-    assert find_forms("「島村さん、安達は？」", forms) == [("島村さん", "c1"), ("安達", "c2")]
-    assert find_forms("しまむらちゃん", forms) == [("しまむらちゃん", "c1")]
-    assert find_forms("島《しま》村《むら》くん", forms) == [("島村くん", "c1")]  # ruby readings ignored
-    assert set(find_forms("「ミリス嬢、エルリア」", {"ミリス": "c3", "エルリア": "c4"})) == {("ミリス嬢", "c3"), ("エルリア", "c4")}
+    forms = {"高木": "c1", "たかぎ": "c1", "たかぎちゃん": "c1", "水野": "c2"}
+    assert find_forms("「高木さん、水野は？」", forms) == [("高木さん", "c1"), ("水野", "c2")]
+    assert find_forms("たかぎちゃん", forms) == [("たかぎちゃん", "c1")]
+    assert find_forms("高《たか》木《ぎ》くん", forms) == [("高木くん", "c1")]  # ruby readings ignored
+    assert set(find_forms("「リナ嬢、セレナ」", {"リナ": "c3", "セレナ": "c4"})) == {("リナ嬢", "c3"), ("セレナ", "c4")}
 
 
 def test_program_harvest_from_resolved_quotes(conn, cfg, fixtures):
@@ -175,21 +175,21 @@ def test_nickname_with_honorific_builds_on_the_decided_spelling(conn, cfg, fixtu
     from ncte.memory.address import decided_variants, upsert, variant_key
     from ncte.memory.repository import upsert_character
 
-    assert variant_key("あだっつぃーくん") == variant_key("あだっついー") == variant_key("あだっつぃー")
-    assert variant_key("安達ちゃん") != variant_key("あだっちー")
+    assert variant_key("みずのっつぃーくん") == variant_key("みずのっついー") == variant_key("みずのっつぃー")
+    assert variant_key("水野ちゃん") != variant_key("みずっちー")
     book, _ = import_book(conn, cfg, fixtures["basic"])
     u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
     hino, adachi = (upsert_character(conn, book.id, n, name_zh=n, aliases=[], unit_id=u[0], ordinal=u[1], origin="t")[0]
-                    for n in ("日野", "安達"))
-    upsert(conn, book.id, hino, adachi, "あだっつぃー", ordinal=u[1], unit_id=u[0], origin="human", certainty="human",
-           form_zh="安達仔～～")
-    upsert(conn, book.id, hino, adachi, "あだっつぃーくん", ordinal=u[1], unit_id=u[0], origin="llm", certainty="inferred")
-    assert decided_variants(conn, hino, adachi, "あだっつぃーくん") == [{"ja": "あだっつぃー", "zh": "安達仔～～"}]
+                    for n in ("小林", "水野"))
+    upsert(conn, book.id, hino, adachi, "みずのっつぃー", ordinal=u[1], unit_id=u[0], origin="human", certainty="human",
+           form_zh="水野仔～～")
+    upsert(conn, book.id, hino, adachi, "みずのっつぃーくん", ordinal=u[1], unit_id=u[0], origin="llm", certainty="inferred")
+    assert decided_variants(conn, hino, adachi, "みずのっつぃーくん") == [{"ja": "みずのっつぃー", "zh": "水野仔～～"}]
 
 
 
 def test_listener_reported_as_addressee_does_not_move_a_name(conn, cfg, fixtures):
-    # 「永藤は？」 asked of 日野: the model reported the listener; 永藤 is not a name of 日野, so nothing moves
+    # 「中川は？」 asked of 小林: the model reported the listener; 中川 is not a name of 小林, so nothing moves
     def mem(payload, req):
         out = memory_update(payload, req)
         u, mina, kaito = uid(payload, "カイト、遅いですよ"), known(payload, "ミナ"), known(payload, "カイト")
@@ -215,5 +215,5 @@ def test_family_name_can_name_a_relative(conn, cfg, fixtures):
     book, _ = import_book(conn, cfg, fixtures["basic"])
     u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
     mk = lambda n: upsert_character(conn, book.id, n, name_zh=n, aliases=[], unit_id=u[0], ordinal=u[1], origin="t")[0]  # noqa: E731
-    mom, hino = mk("安達の母"), mk("日野")
-    assert _can_name(conn, "安達さん", mom) and not _can_name(conn, "永藤", hino)
+    mom, hino = mk("水野の母"), mk("小林")
+    assert _can_name(conn, "水野さん", mom) and not _can_name(conn, "中川", hino)

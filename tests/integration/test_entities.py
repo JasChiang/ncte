@@ -21,7 +21,7 @@ from ..scripted import RESPONDERS
 
 def book_with_terms(conn, cfg, fixtures):
     book, _ = import_book(conn, cfg, fixtures["basic"])
-    ensure_glossary(conn, book.id, "クロガネ", "黑鐵", category="organization", origin="memory_update",
+    ensure_glossary(conn, book.id, "ハガネ", "黑鐵", category="organization", origin="memory_update",
                     first_unit_id=None)
     ensure_glossary(conn, book.id, "黒鬼", "黑鬼", category="organization", origin="memory_update", first_unit_id=None)
     return book
@@ -29,44 +29,44 @@ def book_with_terms(conn, cfg, fixtures):
 
 def test_pattern_links_official_name_and_nickname(conn, cfg, fixtures):
     book = book_with_terms(conn, cfg, fixtures)
-    rows = [{"id": "u_x", "ordinal": 5, "plain_text": "　三人組のユニット、クロガネ。通称黒《くろ》鬼《おに》の登場だ。"}]
-    assert detect_links(conn, book.id, rows) == [("黒鬼", "クロガネ", "accepted")]
+    rows = [{"id": "u_x", "ordinal": 5, "plain_text": "　三人組のユニット、ハガネ。通称黒《くろ》鬼《おに》の登場だ。"}]
+    assert detect_links(conn, book.id, rows) == [("黒鬼", "ハガネ", "accepted")]
     forms = {f["ja"]: f["form"] for fs in entity_forms(conn, book.id).values() if len(fs) > 1 for f in fs}
-    assert forms == {"クロガネ": "official", "黒鬼": "nickname"}
+    assert forms == {"ハガネ": "official", "黒鬼": "nickname"}
     ev = conn.execute("SELECT origin, evidence_unit_id, revealed_ordinal FROM entity_links").fetchone()
     assert tuple(ev) == ("pattern", "u_x", 5)
 
 
 def test_unknown_nickname_becomes_candidate(conn, cfg, fixtures):
     book = book_with_terms(conn, cfg, fixtures)
-    rows = [{"id": "u_y", "ordinal": 7, "plain_text": "　クロガネ、略してＫＧは強い。"}]
-    assert detect_links(conn, book.id, rows) == [("ＫＧ", "クロガネ", "candidate")]
+    rows = [{"id": "u_y", "ordinal": 7, "plain_text": "　ハガネ、略してＫＧは強い。"}]
+    assert detect_links(conn, book.id, rows) == [("ＫＧ", "ハガネ", "candidate")]
 
 
 def test_translation_payload_shows_forms_only_after_reveal(conn, cfg, fixtures):
     book = book_with_terms(conn, cfg, fixtures)
-    link(conn, book.id, "黒鬼", "クロガネ", "nickname", origin="pattern", ordinal=100,
+    link(conn, book.id, "黒鬼", "ハガネ", "nickname", origin="pattern", ordinal=100,
          note="the fans' nickname")
     gl = glossary_entries(conn, book.id)
-    before = glossary_payload(gl, "クロガネが来た", upto=(1.0, 50), revealed={"黒鬼": (1.0, 100)})
+    before = glossary_payload(gl, "ハガネが来た", upto=(1.0, 50), revealed={"黒鬼": (1.0, 100)})
     after = glossary_payload(gl, "黒鬼が来た", upto=(1.0, 150), revealed={"黒鬼": (1.0, 100)})
     assert "same_entity_as" not in before[0]  # the nickname is not revealed yet
     assert after[0]["form"] == "nickname" and after[0]["note"] == "the fans' nickname"
-    assert after[0]["same_entity_as"] == [{"ja": "クロガネ", "zh": "黑鐵", "form": "official"}]
+    assert after[0]["same_entity_as"] == [{"ja": "ハガネ", "zh": "黑鐵", "form": "official"}]
     assert "may_refer_to" not in after[0]
 
 
 def test_qa_form_substitution_and_offensive(conn, cfg, fixtures):
     book = book_with_terms(conn, cfg, fixtures)
-    link(conn, book.id, "黒鬼", "クロガネ", "nickname", origin="human")
+    link(conn, book.id, "黒鬼", "ハガネ", "nickname", origin="human")
     gl = glossary_entries(conn, book.id)
 
     def types(src, text):
         return {f.type for f in check_translation(unit_id="u", kind="text", source_text=src, plain_text=src,
                                                   inline_map={}, ruby_count=0, text=text, glossary=gl)}
 
-    assert "name_form_substitution" in types("クロガネのメンバーも。", "就連黑鬼的成員也是。")
-    assert "name_form_substitution" not in types("クロガネのメンバーも。", "就連黑鐵的成員也是。")
+    assert "name_form_substitution" in types("ハガネのメンバーも。", "就連黑鬼的成員也是。")
+    assert "name_form_substitution" not in types("ハガネのメンバーも。", "就連黑鐵的成員也是。")
     assert "offensive_term" in types("黒鬼じゃん！", "是黑鬼耶！")
 
 
@@ -163,53 +163,53 @@ def test_linking_name_forms_merges_characters(conn, cfg, fixtures):
 def test_ambiguous_form_does_not_fuse_two_people(conn, cfg, fixtures):
     """Real book: 「しまちゃん」 was both sisters' nickname; an automatic link must not merge the two entities."""
     book, _ = import_book(conn, cfg, fixtures["basic"])
-    for ja, zh in [("島村", "島村"), ("しまむら", "島村"), ("しまむら妹", "島村妹妹"), ("しょーさん", "小小姐"),
+    for ja, zh in [("高木", "高木"), ("たかぎ", "高木"), ("たかぎ妹", "高木妹妹"), ("たかさん", "小小姐"),
                    ("しまちゃん", "小島")]:
         ensure_glossary(conn, book.id, ja, zh, category="character", origin="memory_update", first_unit_id=None)
-    assert link(conn, book.id, "しまむら", "島村", "nickname", origin="llm") == "accepted"
-    assert link(conn, book.id, "しょーさん", "しまむら妹", "nickname", origin="llm") == "accepted"
-    assert link(conn, book.id, "しまちゃん", "島村", "nickname", origin="llm") == "accepted"
+    assert link(conn, book.id, "たかぎ", "高木", "nickname", origin="llm") == "accepted"
+    assert link(conn, book.id, "たかさん", "たかぎ妹", "nickname", origin="llm") == "accepted"
+    assert link(conn, book.id, "しまちゃん", "高木", "nickname", origin="llm") == "accepted"
     # the same form now claimed for the sister: two established entities → a shared form, not a merge
-    assert link(conn, book.id, "しまちゃん", "しまむら妹", "nickname", origin="llm", ordinal=40) == "shared"
+    assert link(conn, book.id, "しまちゃん", "たかぎ妹", "nickname", origin="llm", ordinal=40) == "shared"
     groups = sorted(sorted(f["ja"] for f in fs) for fs in entity_forms(conn, book.id).values())
-    assert sorted(["しまむら", "しまちゃん", "島村"]) in groups and sorted(["しまむら妹", "しょーさん"]) in groups
+    assert sorted(["たかぎ", "しまちゃん", "高木"]) in groups and sorted(["たかぎ妹", "たかさん"]) in groups
     # the translation is told who it may refer to – once that use has been revealed
     gl = glossary_entries(conn, book.id)
     early = glossary_payload(gl, "しまちゃん", upto=(1.0, 10))
     late = glossary_payload(gl, "しまちゃん", upto=(1.0, 50))
     assert "may_refer_to" not in early[0]
-    assert late[0]["may_refer_to"] == [{"ja": "島村", "zh": "島村"}, {"ja": "しまむら妹", "zh": "島村妹妹"}]
+    assert late[0]["may_refer_to"] == [{"ja": "高木", "zh": "高木"}, {"ja": "たかぎ妹", "zh": "高木妹妹"}]
     # the form is ambiguous for address-term attribution
     from ncte.memory.address import name_forms
 
     fmap, ambiguous = name_forms(conn, book.id)
     assert "しまちゃん" in ambiguous and "しまちゃん" not in fmap
     # a human may still merge; the sense then points into the form's own entity and disappears
-    assert link(conn, book.id, "しまむら妹", "島村", "alias", origin="human") == "accepted"
+    assert link(conn, book.id, "たかぎ妹", "高木", "alias", origin="human") == "accepted"
     assert conn.execute("SELECT count(*) FROM form_senses").fetchone()[0] == 0
 
 
 def test_entity_label_follows_official_form_and_unlink_drops_alias(conn, cfg, fixtures):
     book, _ = import_book(conn, cfg, fixtures["basic"])
-    ensure_glossary(conn, book.id, "しまむら（妹）", "島村（妹妹）", category="term", origin="memory_update",
+    ensure_glossary(conn, book.id, "たかぎ（妹）", "高木（妹妹）", category="term", origin="memory_update",
                     first_unit_id=None)
-    ensure_glossary(conn, book.id, "島村", "島村", category="character", origin="memory_update", first_unit_id=None)
-    link(conn, book.id, "島村", "しまむら（妹）", "official", origin="llm")  # wrong direction, as in the real book
-    eid = conn.execute("SELECT entity_id FROM glossary WHERE source_term='島村'").fetchone()[0]
-    assert tuple(conn.execute("SELECT label_ja, kind FROM entities WHERE id=?", (eid,)).fetchone()) == ("島村", "character")
+    ensure_glossary(conn, book.id, "高木", "高木", category="character", origin="memory_update", first_unit_id=None)
+    link(conn, book.id, "高木", "たかぎ（妹）", "official", origin="llm")  # wrong direction, as in the real book
+    eid = conn.execute("SELECT entity_id FROM glossary WHERE source_term='高木'").fetchone()[0]
+    assert tuple(conn.execute("SELECT label_ja, kind FROM entities WHERE id=?", (eid,)).fetchone()) == ("高木", "character")
     conn.execute("INSERT INTO characters(id, book_id, canonical_name, display_name_zh, aliases_json, "
-                 "known_from_ordinal, origin, created_at, updated_at) VALUES ('c_s', ?, '島村', '島村', ?, 0, 'llm', '', '')",
-                 (book.id, json.dumps(["しまむら（妹）"], ensure_ascii=False)))
+                 "known_from_ordinal, origin, created_at, updated_at) VALUES ('c_s', ?, '高木', '高木', ?, 0, 'llm', '', '')",
+                 (book.id, json.dumps(["たかぎ（妹）"], ensure_ascii=False)))
     conn.execute("INSERT INTO characters(id, book_id, canonical_name, display_name_zh, aliases_json, "
                  "known_from_ordinal, origin, created_at, updated_at) VALUES ('c_m', ?, '妹', '妹妹', ?, 0, 'llm', '', '')",
-                 (book.id, json.dumps(["しまむら（妹）"], ensure_ascii=False)))
+                 (book.id, json.dumps(["たかぎ（妹）"], ensure_ascii=False)))
     from ncte.memory.entities import unlink
 
-    unlink(conn, book.id, "しまむら（妹）")
+    unlink(conn, book.id, "たかぎ（妹）")
     assert json.loads(conn.execute("SELECT aliases_json FROM characters WHERE id='c_s'").fetchone()[0]) == []
-    # the sister's own character (not part of 島村's entity) keeps the alias
-    assert json.loads(conn.execute("SELECT aliases_json FROM characters WHERE id='c_m'").fetchone()[0]) == ["しまむら（妹）"]
-    assert conn.execute("SELECT entity_id FROM glossary WHERE source_term='しまむら（妹）'").fetchone()[0] != eid
+    # the sister's own character (not part of 高木's entity) keeps the alias
+    assert json.loads(conn.execute("SELECT aliases_json FROM characters WHERE id='c_m'").fetchone()[0]) == ["たかぎ（妹）"]
+    assert conn.execute("SELECT entity_id FROM glossary WHERE source_term='たかぎ（妹）'").fetchone()[0] != eid
 
 
 @pytest.mark.parametrize("by_model", [True, False])
@@ -260,7 +260,7 @@ def test_merge_carries_gender_and_address_terms(conn, cfg, fixtures):
     us = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal", (book.id,)).fetchall()
     mk = lambda n: upsert_character(conn, book.id, n, name_zh=n, aliases=[], unit_id=us[0][0], ordinal=us[0][1],  # noqa: E731
                                     origin="t")[0]
-    desc, named, other = mk("黒髪の女性"), mk("アルマ"), mk("レイド")
+    desc, named, other = mk("黒髪の女性"), mk("ソフィ"), mk("カイル")
     set_gender(conn, book.id, desc, "female", ordinal=us[0][1], quote="女性", origin="llm")
     for who in (desc, named):
         upsert(conn, book.id, other, who, "お前", ordinal=us[1][1], unit_id=us[1][0], origin="llm", certainty="inferred")

@@ -170,7 +170,7 @@ class NameLink(_M):
 class AddressTermOut(_M):
     speaker_ref: str  # character_id of the one who says it
     addressee_ref: str  # character_id of the one called / referred to (same as speaker_ref = refers to self)
-    term: str  # the form as written, including honorifics (「島村さん」「あだっち」)
+    term: str  # the form as written, including honorifics (「高木さん」「みずっち」)
     term_zh: str  # the rendering used in this scene's translation
     note: str
     evidence_unit_ids: list[str]
@@ -242,8 +242,8 @@ class NamingItem(_M):
 class NamingCharacter(_M):
     ref: str  # character id from characters_to_check
     verdict: Literal["different", "same", "unsure"]
-    name_ja: str  # descriptive name when different (e.g. 「安達の母」)
-    name_zh: str  # its Chinese label (e.g. 「安達媽媽」)
+    name_ja: str  # descriptive name when different (e.g. 「水野の母」)
+    name_zh: str  # its Chinese label (e.g. 「水野媽媽」)
     reason: str
 
 

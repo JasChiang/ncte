@@ -16,7 +16,7 @@ from typing import Any
 
 OPEN, CLOSE = "「", "」"
 # what may follow a whole-paragraph 『…』 for it to still be a line someone says: nothing, or a speech tag
-# (『帰ったか』と、アインの脳裏に声が届いた / 『この苦しみを…』──と). 『私』の世界は… is emphasis inside narration.
+# (『帰ったか』と、ルカの脳裏に声が届いた / 『この苦しみを…』──と). 『私』の世界は… is emphasis inside narration.
 _VOICE_TAIL = re.compile(r"^[\s　]*(?:$|[──―─]*[\s　]*と)")
 RUBY = re.compile(r"《[^》]*》")
 
@@ -149,7 +149,7 @@ def detect_tags(units: list[UnitText], quotes: list[Quote], aliases: dict[str, s
     if pat is None:
         return ev
     names = pat.pattern
-    # «「…」とミナは言った»: the name must be the subject (「と日野に声をかけた」 — 日野 is spoken to)
+    # «「…」とミナは言った»: the name must be the subject (「と小林に声をかけた」 — 小林 is spoken to)
     after_tag = re.compile(rf"^[、，\s　]*と?[、\s　]*({names})(?:は|が|も|(?=[^にをへとの]))[^。「」]{{0,24}}?(?:{_VERB_ALT})")
     narr_tag = re.compile(rf"^[\s　]*({names})(?:は|が|も)[^。「」]{{0,24}}?(?:{_VERB_ALT})")
     narr_action = re.compile(rf"^[\s　]*({names})(?:は|が)")

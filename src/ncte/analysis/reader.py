@@ -1,7 +1,7 @@
 """A reader's look at the translation (ADR-038).
 
 After a volume is translated, the model reads the Chinese alone, as a reader who knows no Japanese, and points at
-what such a reader would stumble on: a reference left unexplained (安達 §92: 「しまむら」 is also a clothing chain, kept
+what such a reader would stumble on: a reference left unexplained (水野 §92: 「たかぎ」 is also a clothing chain, kept
 in kana with no word of it), a joke on sound or writing that does not come across, heavy translationese, a voice or
 你／妳 that changes, a contradiction. Each point goes back to the translator with the source and the context, which
 decides: render it differently, add a translator's note, or keep it. The program supplies hints (kana kept in the

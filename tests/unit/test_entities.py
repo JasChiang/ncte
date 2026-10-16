@@ -5,7 +5,7 @@ def test_group_forms_are_not_one_person():
 
     for t in ("取り巻きの二人", "生徒たち", "騎士達", "三人組", "兵士ども", "両名"):
         assert names_a_group(t), t
-    for t in ("取り巻き", "ヴァルク", "二人目", "サクラ", "一人娘"):
+    for t in ("取り巻き", "ボルト", "二人目", "サクラ", "一人娘"):
         assert not names_a_group(t), t
 
 
@@ -36,9 +36,9 @@ def test_a_size_cut_waits_for_a_quiet_point():
 def test_a_description_is_not_a_name():
     from ncte.analysis.scene import _is_description
 
-    for d in ("黒髪の女性", "艶やかな茶髪の美しい女性", "フードをかぶった少女", "年配の給仕"):
+    for d in ("黒髪の女性", "長い銀髪の美しい女性", "フードをかぶった少女", "年配の給仕"):
         assert _is_description(d), d
-    for n in ("オリビア", "シルヴァード", "ユールシア", "安達", "しまむら", "あだっち", "ファレグ", "大司教モルト"):
+    for n in ("エレナ", "ヴァルター", "ミレーユ", "水野", "たかぎ", "みずっち", "ガルド", "大司教グレゴ"):
         assert not _is_description(n), n
 
 
@@ -49,7 +49,7 @@ def test_narration_person_slip():
     assert not first_person_slip("　その場に敵味方はない。", "在那種情況下無關敵我。")
     # a character's own thoughts in the narration (free indirect thought) keep 我
     assert not first_person_slip("　けれども涙がいっぱいになりました。そうだ僕は知っていたのだ。", "他眼眶蓄滿淚水。沒錯，我明明是知道的。")
-    assert not first_person_slip("「俺がレイドだ」", "「我就是雷德」")
+    assert not first_person_slip("「俺がカイルだ」", "「我就是凱爾」")
     assert not first_person_slip("　彼は言った。", "他說：「我會去的。」")
 
 

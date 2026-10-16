@@ -16,19 +16,19 @@ def test_character_names_follow_the_reveal(conn, cfg, fixtures):
     book, _ = import_book(conn, cfg, fixtures["basic"])
     us = _units(conn, book.id)
     early, late = us[1], us[5]
-    cid, _ = upsert_character(conn, book.id, "かぐや", name_zh="輝夜", aliases=["謎の少女"], unit_id=early["id"],
+    cid, _ = upsert_character(conn, book.id, "サクヤ", name_zh="咲夜", aliases=["謎の少女"], unit_id=early["id"],
                               ordinal=early["ordinal"], origin="t")
     ensure_glossary(conn, book.id, "謎の少女", "謎之少女", category="character", origin="t", first_unit_id=early["id"])
-    ensure_glossary(conn, book.id, "かぐや", "輝夜", category="character", origin="t", first_unit_id=late["id"])
+    ensure_glossary(conn, book.id, "サクヤ", "咲夜", category="character", origin="t", first_unit_id=late["id"])
     conn.execute("INSERT INTO entity_links(book_id, term, target_term, form_type, origin, status, revealed_ordinal, "
                  "created_at) VALUES (?,?,?,?,?,?,?,?)",
-                 (book.id, "謎の少女", "かぐや", "alias", "llm", "accepted", late["ordinal"], utcnow()))
+                 (book.id, "謎の少女", "サクヤ", "alias", "llm", "accepted", late["ordinal"], utcnow()))
     c = conn.execute("SELECT * FROM characters WHERE id=?", (cid,)).fetchone()
 
     before = vis.character_view(conn, book.id, c, late["ordinal"] - 1)
     assert before == {"name_ja": "謎の少女", "name_zh": "謎之少女", "aliases_ja": []}
     after = vis.character_view(conn, book.id, c, late["ordinal"])
-    assert after == {"name_ja": "かぐや", "name_zh": "輝夜", "aliases_ja": ["謎の少女"]}
+    assert after == {"name_ja": "サクヤ", "name_zh": "咲夜", "aliases_ja": ["謎の少女"]}
     assert vis.character_view(conn, book.id, c, early["ordinal"] - 1) is None
 
 
@@ -186,10 +186,10 @@ def test_address_renderings_proposed_per_speaker(conn, cfg, fixtures, low_thresh
 def test_kana_names_do_not_count_inside_words():
     assert naming.term_pattern("のん").search("このままのんびり") is None
     assert naming.term_pattern("のん").search("イラスト：のん") is not None
-    assert naming.term_pattern("ヤシロ").search("ヤシロが笑う") is not None
-    assert naming.term_pattern("シロ").search("ヤシロが笑う") is None
-    assert naming.term_pattern("しまむらちゃん").search("ところでしまむらちゃん") is not None
-    assert naming.term_pattern("しまむら").search("しまむらは笑う") is not None
+    assert naming.term_pattern("ミツ").search("ミツが笑う") is not None
+    assert naming.term_pattern("シロ").search("ミツが笑う") is None
+    assert naming.term_pattern("たかぎちゃん").search("ところでたかぎちゃん") is not None
+    assert naming.term_pattern("たかぎ").search("たかぎは笑う") is not None
 
 
 def test_address_forms_only_from_characters_known_by_then(conn, cfg, fixtures):
@@ -280,27 +280,27 @@ def test_forms_rendered_alike_are_flagged_and_names_sync_address(conn, cfg, fixt
     us = _units(conn, book.id)
     mk = lambda n, zh: upsert_character(conn, book.id, n, name_zh=zh, aliases=[], unit_id=us[0]["id"],  # noqa: E731
                                         ordinal=us[0]["ordinal"], origin="t")[0]
-    mom, friend, a = mk("ママ", "媽媽"), mk("ヒノ", "日野"), mk("アダチ", "安達")
-    conn.execute("UPDATE characters SET aliases_json='[\"あだっちー\"]' WHERE id=?", (a,))  # the nickname is アダチ's
-    for sp, form in ((mom, "アダチちゃん"), (friend, "あだっちー"), (friend, "あだっち")):
+    mom, friend, a = mk("ママ", "媽媽"), mk("ヒノ", "小林"), mk("アダチ", "水野")
+    conn.execute("UPDATE characters SET aliases_json='[\"みずっちー\"]' WHERE id=?", (a,))  # the nickname is アダチ's
+    for sp, form in ((mom, "アダチちゃん"), (friend, "みずっちー"), (friend, "みずっち")):
         upsert(conn, book.id, sp, a, form, ordinal=us[1]["ordinal"], unit_id=us[1]["id"], origin="llm",
                certainty="inferred")
-    ensure_glossary(conn, book.id, "あだっちー", "安達親", category="character", origin="t", first_unit_id=us[1]["id"])
+    ensure_glossary(conn, book.id, "みずっちー", "水野親", category="character", origin="t", first_unit_id=us[1]["id"])
     payload = naming.build_naming_payload(conn, book.id)
-    payload["names"] = [{"ref": "あだっちー", "ja": "あだっちー", "zh": "安達親", "category": "character", "count": 1}]
+    payload["names"] = [{"ref": "みずっちー", "ja": "みずっちー", "zh": "水野親", "category": "character", "count": 1}]
     out = NamingOutput.model_validate({
-        "names": [{"ref": "あだっちー", "zh": "小安達", "reason": "", "alternatives": []}],
-        "address": [{"ref": x["ref"], "zh": "小安達", "reason": "", "alternatives": []} for x in payload["address"]]})
+        "names": [{"ref": "みずっちー", "zh": "小水野", "reason": "", "alternatives": []}],
+        "address": [{"ref": x["ref"], "zh": "小水野", "reason": "", "alternatives": []} for x in payload["address"]]})
     naming.apply_naming(conn, book.id, payload, out)
     pend = {p["label"]: p["reason"] for p in naming.pending(conn, book.id) if p["kind"] == "address"}
-    assert set(pend) == {"媽媽 → 安達：アダチちゃん", "日野 → 安達：あだっちー", "日野 → 安達：あだっち"}
-    assert "同譯為「小安達」" in pend["媽媽 → 安達：アダチちゃん"]
+    assert set(pend) == {"媽媽 → 水野：アダチちゃん", "小林 → 水野：みずっちー", "小林 → 水野：みずっち"}
+    assert "同譯為「小水野」" in pend["媽媽 → 水野：アダチちゃん"]
     # deciding the nickname as a name also settles the same form in the address table
-    pid = next(p["id"] for p in naming.pending(conn, book.id, include_done=True) if p["ref"] == "あだっちー")
-    naming.decide(conn, book.id, pid, "安達兒")
-    row = conn.execute("SELECT form_zh, zh_origin FROM address_terms WHERE form_ja='あだっちー'").fetchone()
-    assert tuple(row) == ("安達兒", "human")
-    assert "日野 → 安達：あだっちー" not in {p["label"] for p in naming.pending(conn, book.id)}
+    pid = next(p["id"] for p in naming.pending(conn, book.id, include_done=True) if p["ref"] == "みずっちー")
+    naming.decide(conn, book.id, pid, "水野兒")
+    row = conn.execute("SELECT form_zh, zh_origin FROM address_terms WHERE form_ja='みずっちー'").fetchone()
+    assert tuple(row) == ("水野兒", "human")
+    assert "小林 → 水野：みずっちー" not in {p["label"] for p in naming.pending(conn, book.id)}
 
 
 def test_name_decision_only_syncs_address_terms_for_that_person(conn, cfg, fixtures):
@@ -311,20 +311,20 @@ def test_name_decision_only_syncs_address_terms_for_that_person(conn, cfg, fixtu
     us = _units(conn, book.id)
     mk = lambda n, zh: upsert_character(conn, book.id, n, name_zh=zh, aliases=[], unit_id=us[0]["id"],  # noqa: E731
                                         ordinal=us[0]["ordinal"], origin="t")[0]
-    friend, a, mom = mk("ヒノ", "日野"), mk("アダチ", "安達"), mk("アダチさん", "安達媽媽")
-    ensure_glossary(conn, book.id, "アダチさん", "安達媽媽", category="character", origin="t", first_unit_id=us[0]["id"])
+    friend, a, mom = mk("ヒノ", "小林"), mk("アダチ", "水野"), mk("アダチさん", "水野媽媽")
+    ensure_glossary(conn, book.id, "アダチさん", "水野媽媽", category="character", origin="t", first_unit_id=us[0]["id"])
     upsert(conn, book.id, friend, a, "アダチさん", ordinal=us[1]["ordinal"], unit_id=us[1]["id"], origin="llm",
-           certainty="inferred", form_zh="安達同學")
+           certainty="inferred", form_zh="水野同學")
     upsert(conn, book.id, friend, mom, "アダチさん", ordinal=us[2]["ordinal"], unit_id=us[2]["id"], origin="llm",
            certainty="inferred", form_zh="阿姨")
-    payload = {"names": [{"ref": "アダチさん", "ja": "アダチさん", "zh": "安達媽媽", "category": "character", "count": 9}],
+    payload = {"names": [{"ref": "アダチさん", "ja": "アダチさん", "zh": "水野媽媽", "category": "character", "count": 9}],
                "address": []}
     naming.apply_naming(conn, book.id, payload, NamingOutput.model_validate(
-        {"names": [{"ref": "アダチさん", "zh": "安達太太", "reason": "", "alternatives": [{"zh": "安達媽媽", "reason": ""}]}]}))
+        {"names": [{"ref": "アダチさん", "zh": "水野太太", "reason": "", "alternatives": [{"zh": "水野媽媽", "reason": ""}]}]}))
     pid = next(p["id"] for p in naming.pending(conn, book.id, include_done=True) if p["ref"] == "アダチさん")
-    naming.decide(conn, book.id, pid, "安達太太")
+    naming.decide(conn, book.id, pid, "水野太太")
     rows = {r[0]: r[1] for r in conn.execute("SELECT addressee_id, form_zh FROM address_terms WHERE form_ja='アダチさん'")}
-    assert rows == {a: "安達同學", mom: "安達太太"}  # the classmate's 「アダチさん」 for アダチ is untouched
+    assert rows == {a: "水野同學", mom: "水野太太"}  # the classmate's 「アダチさん」 for アダチ is untouched
 
 
 def test_honorific_named_character_gets_a_fix_proposal(conn, cfg, fixtures):
@@ -337,23 +337,23 @@ def test_honorific_named_character_gets_a_fix_proposal(conn, cfg, fixtures):
     us = _units(conn, book.id)
     text = conn.execute("SELECT plain_text FROM units WHERE id=?", (us[1]["id"],)).fetchone()[0]
     conn.execute("UPDATE units SET plain_text=? WHERE id=?", (text + "「アダチさん、こんにちは」", us[1]["id"]))
-    a, _ = upsert_character(conn, book.id, "アダチ", name_zh="安達", aliases=[], unit_id=us[0]["id"],
+    a, _ = upsert_character(conn, book.id, "アダチ", name_zh="水野", aliases=[], unit_id=us[0]["id"],
                             ordinal=us[0]["ordinal"], origin="t")
-    mom, _ = upsert_character(conn, book.id, "アダチさん", name_zh="安達太太", aliases=[], unit_id=us[1]["id"],
+    mom, _ = upsert_character(conn, book.id, "アダチさん", name_zh="水野太太", aliases=[], unit_id=us[1]["id"],
                               ordinal=us[1]["ordinal"], origin="t")
-    ensure_glossary(conn, book.id, "アダチさん", "安達太太", category="character", origin="t", first_unit_id=us[1]["id"])
+    ensure_glossary(conn, book.id, "アダチさん", "水野太太", category="character", origin="t", first_unit_id=us[1]["id"])
     payload = naming.build_naming_payload(conn, book.id)
     assert [c["ref"] for c in payload["characters_to_check"]] == [mom]
     assert "アダチさん" not in {n["ref"] for n in payload["names"]}  # not proposed as an ordinary name
     assert "_also_id" not in json.dumps(naming.model_view(payload), ensure_ascii=False)
     out = NamingOutput.model_validate({"characters": [{"ref": mom, "verdict": "different", "name_ja": "アダチの母",
-                                                       "name_zh": "安達媽媽", "reason": "對母親的稱呼"}]})
+                                                       "name_zh": "水野媽媽", "reason": "對母親的稱呼"}]})
     naming.apply_naming(conn, book.id, payload, out)
     p = next(x for x in naming.pending(conn, book.id) if x["kind"] == "character")
-    assert p["options"][0]["zh"].startswith("改名為「安達媽媽」") and p["options"][-1]["zh"] == "維持現狀"
+    assert p["options"][0]["zh"].startswith("改名為「水野媽媽」") and p["options"][-1]["zh"] == "維持現狀"
     naming.decide(conn, book.id, p["id"], p["options"][0]["zh"])
     c = conn.execute("SELECT canonical_name, display_name_zh, aliases_json FROM characters WHERE id=?", (mom,)).fetchone()
-    assert (c[0], c[1]) == ("アダチの母", "安達媽媽") and "アダチさん" in json.loads(c[2])
+    assert (c[0], c[1]) == ("アダチの母", "水野媽媽") and "アダチさん" in json.loads(c[2])
     fmap, ambiguous = name_forms(conn, book.id)
     assert "アダチさん" in ambiguous and "アダチさん" not in fmap  # never attributed automatically any more
 
@@ -415,45 +415,45 @@ def test_given_name_decision_reaches_the_full_name(conn, cfg, fixtures):
 
     book, _ = import_book(conn, cfg, fixtures["basic"])
     us = _units(conn, book.id)
-    cid = upsert_character(conn, book.id, "エリーゼ・ランメル", name_zh="愛麗絲·朗梅爾", aliases=["エリーゼ"],
+    cid = upsert_character(conn, book.id, "ノエル・ランメル", name_zh="諾艾兒·朗梅爾", aliases=["ノエル"],
                            unit_id=us[0]["id"], ordinal=us[0]["ordinal"], origin="t")[0]
-    for ja, zh in (("エリーゼ", "愛麗絲"), ("エリーゼ・ランメル", "愛麗絲·朗梅爾"), ("エリーゼ商会", "愛麗絲商會")):
+    for ja, zh in (("ノエル", "諾艾兒"), ("ノエル・ランメル", "諾艾兒·朗梅爾"), ("ノエル商会", "諾艾兒商會")):
         ensure_glossary(conn, book.id, ja, zh, category="character", origin="t", first_unit_id=us[0]["id"])
-    payload = {"names": [{"ref": "エリーゼ", "ja": "エリーゼ", "zh": "愛麗絲", "category": "character", "count": 9}],
+    payload = {"names": [{"ref": "ノエル", "ja": "ノエル", "zh": "諾艾兒", "category": "character", "count": 9}],
                "address": []}
-    for i, (ja, zh, origin) in enumerate((("エリーゼ様", "愛麗絲大人", "llm"), ("ランメル学院長", "朗梅爾學院長", "llm"),
-                                          ("エリーゼちゃん", "愛麗絲醬", "human"))):
+    for i, (ja, zh, origin) in enumerate((("ノエル様", "諾艾兒大人", "llm"), ("ランメル学院長", "朗梅爾學院長", "llm"),
+                                          ("ノエルちゃん", "諾艾兒醬", "human"))):
         conn.execute("INSERT INTO address_terms(book_id, speaker_id, addressee_id, form_ja, form_zh, zh_origin, origin, "
                      "certainty, first_ordinal, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                      (book.id, f"c_s{i}", cid, ja, zh, origin, "t", "explicit", 1, "t", "t"))
     naming.apply_naming(conn, book.id, payload, NamingOutput.model_validate(
-        {"names": [{"ref": "エリーゼ", "zh": "愛麗絲", "reason": "", "alternatives": [{"zh": "艾莉絲", "reason": ""}]}]}))
-    pid = next(p["id"] for p in naming.pending(conn, book.id, include_done=True) if p["ref"] == "エリーゼ")
+        {"names": [{"ref": "ノエル", "zh": "諾艾兒", "reason": "", "alternatives": [{"zh": "艾莉絲", "reason": ""}]}]}))
+    pid = next(p["id"] for p in naming.pending(conn, book.id, include_done=True) if p["ref"] == "ノエル")
     naming.decide(conn, book.id, pid, "艾莉潔")
     assert conn.execute("SELECT display_name_zh FROM characters WHERE id=?", (cid,)).fetchone()[0] == "艾莉潔·朗梅爾"
-    assert conn.execute("SELECT target_term FROM glossary WHERE source_term='エリーゼ・ランメル'").fetchone()[0] == "艾莉潔·朗梅爾"
-    assert conn.execute("SELECT target_term FROM glossary WHERE source_term='エリーゼ商会'").fetchone()[0] == "艾莉潔商會"
+    assert conn.execute("SELECT target_term FROM glossary WHERE source_term='ノエル・ランメル'").fetchone()[0] == "艾莉潔·朗梅爾"
+    assert conn.execute("SELECT target_term FROM glossary WHERE source_term='ノエル商会'").fetchone()[0] == "艾莉潔商會"
     addr = dict(conn.execute("SELECT form_ja, form_zh FROM address_terms").fetchall())
-    assert addr == {"エリーゼ様": "艾莉潔大人", "ランメル学院長": "朗梅爾學院長", "エリーゼちゃん": "愛麗絲醬"}  # a person's choice stays
+    assert addr == {"ノエル様": "艾莉潔大人", "ランメル学院長": "朗梅爾學院長", "ノエルちゃん": "諾艾兒醬"}  # a person's choice stays
 
 
 def test_family_name_change_reaches_address_forms(conn, cfg, fixtures):
     book, _ = import_book(conn, cfg, fixtures["basic"])
     conn.execute("INSERT INTO address_terms(book_id, speaker_id, addressee_id, form_ja, form_zh, zh_origin, origin, "
                  "certainty, first_ordinal, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                 (book.id, "c_a", "c_b", "フリーデン卿", "福里登卿", "llm", "t", "explicit", 1, "t", "t"))
-    naming._sync_address(conn, book.id, "レイド・フリーデン", "雷德·福里登", "雷德·弗里登")
+                 (book.id, "c_a", "c_b", "ヴァイス卿", "福里登卿", "llm", "t", "explicit", 1, "t", "t"))
+    naming._sync_address(conn, book.id, "カイル・ヴァイス", "凱爾·福里登", "凱爾·弗里登")
     assert conn.execute("SELECT form_zh FROM address_terms").fetchone()[0] == "弗里登卿"
 
 
 def test_address_rendering_replaces_a_contradicting_unconfirmed_glossary_entry():
     from ncte.translation.context_pipeline import drop_address_forms
 
-    gl = [{"ja": "しまむらちゃん", "zh": "島村醬", "verified": False}, {"ja": "島村", "zh": "島村", "verified": True},
-          {"ja": "あだっち", "zh": "阿達", "verified": True}]
-    addr = [{"speaker": "日野", "to": "島村", "ja": "しまむらちゃん", "zh": "小島村"},
-            {"speaker": "日野", "to": "安達", "ja": "あだっち", "zh": "小安"}]
-    assert [g["ja"] for g in drop_address_forms(gl, addr)] == ["島村", "あだっち"]  # a confirmed entry stays
+    gl = [{"ja": "たかぎちゃん", "zh": "高木醬", "verified": False}, {"ja": "高木", "zh": "高木", "verified": True},
+          {"ja": "みずっち", "zh": "阿達", "verified": True}]
+    addr = [{"speaker": "小林", "to": "高木", "ja": "たかぎちゃん", "zh": "小高木"},
+            {"speaker": "小林", "to": "水野", "ja": "みずっち", "zh": "小安"}]
+    assert [g["ja"] for g in drop_address_forms(gl, addr)] == ["高木", "みずっち"]  # a confirmed entry stays
 
 
 def test_retranslate_takes_a_reasoning_effort(tmp_path, fixtures):
@@ -475,7 +475,7 @@ def test_retranslate_takes_a_reasoning_effort(tmp_path, fixtures):
 
 
 def test_scene_the_filter_refuses_is_read_in_parts(conn, cfg, fixtures):
-    """A content filter that refuses one passage must not cost the whole scene its reading (安達 vol 2 regression)."""
+    """A content filter that refuses one passage must not cost the whole scene its reading (水野 vol 2 regression)."""
     from ncte.errors import ContentBlockedError
 
     class ReadFilter(FakeLLM):

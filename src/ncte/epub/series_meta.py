@@ -50,14 +50,14 @@ def _num(s: str) -> float | None:
 
 _LABEL = re.compile(r"[\s　]*[（(\[【][^()（）\[\]【】]*(?:文庫|ノベル|ブックス|books|novels|新書|レーベル|コミックス|"
                     r"版|特典|edition)[^()（）\[\]【】]*[)）\]】][\s　]*$", re.IGNORECASE)
-# the same labels in front: 「【電子版限定特典付き】英雄と賢者の転生婚 1」 (store editions; volume 2 may lack it)
+# the same labels in front: 「【電子版限定特典付き】剣士と魔女の転生記 1」 (store editions; volume 2 may lack it)
 _LEAD = re.compile(r"^[\s　]*[（(\[【][^()（）\[\]【】]*(?:版|特典|限定|edition)[^()（）\[\]【】]*[)）\]】][\s　]*",
                    re.IGNORECASE)
 
 
 def clean_title(title: str) -> str:
-    """Remove imprint / edition labels: 「安達としまむら2 (電撃文庫)」 → 「安達としまむら2」,
-    「【電子版限定特典付き】英雄と賢者の転生婚 1」 → 「英雄と賢者の転生婚 1」."""
+    """Remove imprint / edition labels: 「灯台と少女たち2 (電撃文庫)」 → 「灯台と少女たち2」,
+    「【電子版限定特典付き】剣士と魔女の転生記 1」 → 「剣士と魔女の転生記 1」."""
     t = title.strip()
     while True:
         new = _LEAD.sub("", _LABEL.sub("", t))
@@ -77,7 +77,7 @@ def guess_from_title(title: str) -> tuple[str, float, str] | None:
         rf"^(?P<base>.+?)[\s　]+(?:Vol\.?|vol\.?|VOL\.?){_SEP}(?P<n>\d+(?:\.\d+)?){_SUB}$",
         rf"^(?P<base>.+?)[\s　]+(?P<n>\d{{1,3}}(?:\.\d+)?){_SUB}$",
         r"^(?P<base>.{2,}?)[\s　]+(?P<n>\d{1,3})[\s　]+(?P<sub>\D.*)$",  # 「〇〇 3 副題」
-        # number glued to Japanese/Chinese text: 「安達としまむら2」 (not 「Re:ゼロ2」 / 「1Q84」)
+        # number glued to Japanese/Chinese text: 「灯台と少女たち2」 (not 「Re:スタート2」 / 「2Q31」)
         rf"^(?P<base>.*[぀-ヿ㐀-鿿々〆！？」』】])(?P<n>\d{{1,3}}(?:\.\d+)?){_SUB}$",
     ]
     for p in patterns:
