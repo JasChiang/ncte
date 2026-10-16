@@ -97,37 +97,37 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
     return items
 
 
-MAX_IDENTITY_ITEMS = 12
+MAX_IDENTITY_ITEMS = 16
 
 
 def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]) -> list[dict[str, Any]]:
-    """Characters known only by a common or relational word (「姉ちゃん」「母親」) — is this a character already known by
-    name? — and group characters (「跟班兩人」) — who are they, and are two groups one? The model answers with the
-    passages; the program only finds the cards to ask about (ADR-046)."""
+    """Is a card the same person as another card (「姉ちゃん」 in the sister's story is a character known by name), and who
+    is a group card (「跟班兩人」) made of — or is it the same group as another card? Whether a card's name is a proper
+    name or only a description is the model's call (the glossary keeps 「村長」「跟班」 as character names too), so every
+    card with lines or relations can be asked: groups first, then the cards known by the fewest name forms and lines
+    (ADR-046)."""
     from ..lexicon import names_a_group
     from ..series import SERIES_SCOPE
 
-    proper = {r[0] for r in conn.execute(f"SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND category='character'",
-                                         (book_id,))}
     rows = conn.execute(
         "SELECT c.*, (SELECT COUNT(*) FROM utterances u WHERE u.speaker_id_nullable=c.id) n, "
         "(SELECT COUNT(*) FROM relation_notes r WHERE r.a_id=c.id OR r.b_id=c.id) k FROM characters c "
         "WHERE c.book_id=? AND c.is_narrator=0 ORDER BY c.known_from_ordinal", (book_id,)).fetchall()
-    named = {r["id"]: names[r["id"]] for r in rows if r["canonical_name"] in proper and r["id"] in names}
-    groups = {r["id"]: names[r["id"]] for r in rows if names_a_group(r["canonical_name"]) and r["id"] in names}
+    cards = {r[0]: names[r[0]] for r in conn.execute(  # earlier volumes' characters too
+        f"SELECT id FROM characters WHERE {SERIES_SCOPE} AND is_narrator=0", (book_id,)) if r[0] in names}
+
+    def order(c: sqlite3.Row) -> tuple[int, int, int]:
+        return (0 if names_a_group(c["canonical_name"]) else 1, len(json.loads(c["aliases_json"] or "[]")), c["n"])
+
     out = []
-    for c in rows:
-        if c["id"] not in names or c["canonical_name"] in proper or not (c["n"] or c["k"]):
-            continue
+    for c in sorted((r for r in rows if r["id"] in cards and (r["n"] or r["k"])), key=order):
+        others = {k: v for k, v in cards.items() if k != c["id"]}
         ctx = _window(conn, book_id, c["known_from_ordinal"])
         called_by = [f"{names.get(a['speaker_id'], '?')}：{a['form_ja']}" for a in conn.execute(
             "SELECT speaker_id, form_ja FROM address_terms WHERE book_id=? AND addressee_id=? LIMIT 5", (book_id, c["id"]))]
-        if c["id"] in groups:
-            out.append({"ref": f"p:{c['id']}", "kind": "group", "name": names[c["id"]], "context": ctx,
-                        "candidates": named, "other_groups": {k: v for k, v in groups.items() if k != c["id"]}})
-        else:
-            out.append({"ref": f"i:{c['id']}", "kind": "identity", "name": names[c["id"]], "context": ctx,
-                        "called_by": called_by, "candidates": named})
+        kind = "group" if names_a_group(c["canonical_name"]) else "identity"
+        out.append({"ref": f"{'p' if kind == 'group' else 'i'}:{c['id']}", "kind": kind, "name": cards[c["id"]],
+                    "context": ctx, "called_by": called_by, "candidates": others})
     return out[:MAX_IDENTITY_ITEMS]
 
 
@@ -259,7 +259,7 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
                 _narrator_is(conn, book_id, key, answer)
                 stats["identities_merged"] = stats.get("identities_merged", 0) + 1
         elif kind == "p":
-            if answer.startswith("same:") and answer[5:].strip() in item["other_groups"]:
+            if answer.startswith("same:") and answer[5:].strip() in item["candidates"]:
                 repo.merge_characters(conn, answer[5:].strip(), key)  # one group known by two descriptions
                 stats["groups_merged"] = stats.get("groups_merged", 0) + 1
             else:

@@ -268,12 +268,12 @@ class ContextOrchestrator(Orchestrator):
             self.stage_scene_analyze(sid)
             self.stage_memory_update(sid)
 
-    def verify_pass(self) -> None:
+    def verify_pass(self, *, record_job: bool = True) -> None:
         """Pass 1b (ADR-033): a second look at what the read pass left in doubt, with the surrounding text."""
         from ..analysis import verify
 
         job = self._job("verify", self.book.id)
-        if job is None or job["status"] not in ("pending", "running"):
+        if record_job and (job is None or job["status"] not in ("pending", "running")):
             return
         with self.lock:
             items = verify.collect(self.conn, self.book.id)
@@ -293,7 +293,8 @@ class ContextOrchestrator(Orchestrator):
             with self.lock, Transaction(self.conn):
                 for k, v in verify.apply(self.conn, self.book.id, chunk, parsed, self._finding).items():
                     stats[k] = stats.get(k, 0) + v
-        self._set_job("verify", self.book.id, "succeeded", None, stats)
+        if record_job:
+            self._set_job("verify", self.book.id, "succeeded", None, stats)
         self.log(f"second look: {stats}")
 
     def relations_pass(self, *, record_job: bool = True) -> int:

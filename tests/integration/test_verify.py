@@ -54,7 +54,7 @@ def test_second_look_changes_speaker_drops_doubtful_gender_and_flags_merge(conn,
 
     fake = FakeLLM(responders={**RESPONDERS, "scene_analyze": _analyze, "memory_update": _memory, "verify": verify})
     run_book(conn, cfg, fixtures["basic"], fake, mode="context")
-    assert {it["kind"] for it in seen} == {"speaker", "gender", "merge", "address"}
+    assert {it["kind"] for it in seen} - {"identity", "group"} == {"speaker", "gender", "merge", "address"}
     assert all(not k.startswith("_") for it in seen for k in it)
     line = conn.execute("SELECT u.*, c.canonical_name FROM utterances u JOIN characters c ON c.id=u.speaker_id_nullable "
                         "WHERE u.quote_text LIKE '%カイト、遅いですよ%'").fetchone()

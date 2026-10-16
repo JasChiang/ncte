@@ -69,3 +69,14 @@ def test_nameless_character_merged_and_group_members_recorded(conn, cfg, fixture
     pairs, _ = relations.candidate_pairs(conn, book.id)
     p = next(p for p in pairs if {p["a"], p["b"]} == {named[0]["id"], named[1]["id"]})
     assert any(k[0] == "notes" for k in p["via"])  # the group's relation is material for its member
+
+
+def test_verify_command(tmp_path, fixtures):
+    from typer.testing import CliRunner
+
+    from ncte.cli import app
+
+    ws, epub, r = tmp_path / "ws", str(fixtures["basic"]), CliRunner()
+    assert r.invoke(app, ["-w", str(ws), "translate", epub, "--fake", "--mode", "context"]).exit_code == 0
+    out = r.invoke(app, ["-w", str(ws), "names", "verify", epub, "--fake"])
+    assert out.exit_code == 0 and "second look:" in out.output, out.output
