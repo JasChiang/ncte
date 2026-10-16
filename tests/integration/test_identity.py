@@ -197,3 +197,16 @@ def test_people_page_quotes_come_with_their_translation(conn, cfg, fixtures):
     facts = [f for c in chars.values() for f in c["facts"] if f["quote"]]
     assert facts and all(f["quote_zh"] for f in facts)  # each source quote shown with its paragraph's translation
     assert all(isinstance(a, dict) and "ja" in a for c in chars.values() for a in c["aka"])
+
+
+def test_impression_says_how_much_of_the_book_was_read(conn, cfg, fixtures):
+    """An impression from a sample is labelled with where the reading stopped, not as the whole book's."""
+    from ncte.gui import data
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    imps = [c["impression"] for c in data.characters(conn, book)["characters"].values() if c.get("impression")]
+    assert imps and all(i["read_all"] for i in imps)
+    conn.execute("UPDATE scenes SET version=0 WHERE id=(SELECT id FROM scenes WHERE book_id=? ORDER BY seq DESC LIMIT 1)",
+                 (book.id,))
+    imps = [c["impression"] for c in data.characters(conn, book)["characters"].values() if c.get("impression")]
+    assert imps and not imps[0]["read_all"] and imps[0]["read_to"]

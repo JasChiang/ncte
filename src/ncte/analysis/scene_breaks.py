@@ -41,6 +41,23 @@ def stretches(conn: sqlite3.Connection, book_id: str, max_chars: int = 0) -> lis
     return out
 
 
+def undecided(conn: sqlite3.Connection, book_id: str, todo: list[list[sqlite3.Row]], end: int | None = None,
+              ) -> list[list[sqlite3.Row]]:
+    """The stretches still to divide: not decided before, none of their scenes read yet (their scene ids are in use),
+    and, for a sample, beginning at or before its last paragraph (``end``)."""
+    decided = {r[0] for r in conn.execute("SELECT unit_id FROM scene_breaks WHERE book_id=? AND origin='stretch'",
+                                          (book_id,))}
+    out = []
+    for rows in todo:
+        if rows[0]["id"] in decided or (end is not None and rows[0]["ordinal"] > end):
+            continue
+        if conn.execute("SELECT 1 FROM scenes WHERE book_id=? AND version>0 AND start_ordinal<=? AND end_ordinal>=? "
+                        "LIMIT 1", (book_id, rows[-1]["ordinal"], rows[0]["ordinal"])).fetchone():
+            continue
+        out.append(rows)
+    return out
+
+
 def payload(rows: list[sqlite3.Row], max_units: int, max_chars: int) -> dict[str, Any]:
     paras = []
     for r in rows:

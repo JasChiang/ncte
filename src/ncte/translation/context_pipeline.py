@@ -91,8 +91,9 @@ class ContextOrchestrator(Orchestrator):
     def ensure_jobs(self) -> None:
         with self.lock:
             fresh = not self.conn.execute("SELECT 1 FROM jobs WHERE run_id=?", (self.run_id,)).fetchone()
-        if fresh and self.cfg.context.scene_breaks == "llm" and not self.opts.unit_ids:  # a sample (--limit-units) too
-            # a forced re-read of the whole book chooses the scene breaks again (books cut before ADR-036 too)
+        if fresh and self.cfg.context.scene_breaks == "llm" and not self.opts.unit_ids:
+            # a forced re-read of the whole book chooses the scene breaks again (books cut before ADR-036 too); a sample
+            # (--limit-units) divides only the stretches it reaches, a later run the rest
             self.choose_scene_breaks(recut=self.opts.force)
         super().ensure_jobs()
 
@@ -102,6 +103,13 @@ class ContextOrchestrator(Orchestrator):
         with self.lock:
             unread = self.conn.execute("SELECT COUNT(*) FROM scenes WHERE book_id=? AND version=0", (self.book.id,)).fetchone()[0]
         self.log(f"scene breaks chosen again: {stats}; {unread} scenes to read (the next translate run reads them)")
+
+    def sample_end(self) -> int | None:
+        """The last paragraph a sample (--limit-units) reaches; None for the whole book."""
+        if self.opts.limit is None:
+            return None
+        rows = self.target_units()
+        return max((r["ordinal"] for r in rows), default=None)
 
     def choose_scene_breaks(self, *, recut: bool = False) -> dict[str, int]:
         """Before anything is read (ADR-036): the model divides long stretches the author left undivided.
@@ -118,10 +126,9 @@ class ContextOrchestrator(Orchestrator):
                 with Transaction(self.conn):
                     self.conn.execute("DELETE FROM scene_breaks WHERE book_id=?", (self.book.id,))
                 segment_book(self.conn, self.cfg, self.book.id)  # the author's markers and size cuts only
-            elif self.conn.execute("SELECT 1 FROM scenes WHERE book_id=? AND version>0 LIMIT 1", (self.book.id,)).fetchone() \
-                    or self.conn.execute("SELECT 1 FROM scene_breaks WHERE book_id=? LIMIT 1", (self.book.id,)).fetchone():
-                return {}  # already read (scene ids are in use) or already divided
             todo = sb.stretches(self.conn, self.book.id, max_chars)
+            if not recut:
+                todo = sb.undecided(self.conn, self.book.id, todo, self.sample_end())
         if not todo:
             return {}
         prompt, size = load_prompt("scenes"), self.cfg.memory.max_scene_units

@@ -63,6 +63,15 @@ def overview(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
             "human_edits": sum(1 for t in best.values() if t["status"] == "human")}
 
 
+def _read_range(conn: sqlite3.Connection, book_id: str) -> dict[str, Any]:
+    """How much of the book the reading covered: an impression from a sample is not the whole book's."""
+    last = conn.execute("SELECT MAX(end_ordinal) FROM scenes WHERE book_id=? AND version>0", (book_id,)).fetchone()[0]
+    unread = conn.execute("SELECT COUNT(*) FROM scenes s WHERE book_id=? AND version=0 AND EXISTS (SELECT 1 FROM units u "
+                          "WHERE u.scene_id=s.id AND u.translatable=1 AND u.kind IN ('text','heading'))", (book_id,)
+                          ).fetchone()[0]
+    return {"read_to": last, "read_all": not unread}
+
+
 # ---------------------------------------------------------------- chapters / units
 def chapters(conn: sqlite3.Connection, book: Book) -> list[dict[str, Any]]:
     matter = book_matter(conn, book.id)
@@ -73,6 +82,9 @@ def chapters(conn: sqlite3.Connection, book: Book) -> list[dict[str, Any]]:
     zh_label = {r[0]: plain(r[1]) for r in conn.execute(
         "SELECT u.plain_text, (SELECT text FROM translations t WHERE t.unit_id=u.id ORDER BY rowid DESC LIMIT 1) "
         "FROM units u WHERE u.book_id=? AND u.kind IN ('nav','ncx')", (book.id,)) if r[1]}
+    from ..translation.context_builder import heading_hints
+
+    titles = {h["ja"]: plain(h["zh"]) for h in heading_hints(conn, book.id)}  # the TOC not translated yet (a sample)
     out = []
     carry = ""  # a chapter's title page (TOC target, almost no text) names the file that follows it
     for i, (href, kind) in enumerate(matter.items()):
@@ -86,7 +98,7 @@ def chapters(conn: sqlite3.Connection, book: Book) -> list[dict[str, Any]]:
         label, carry = (own or carry), ""
         first = conn.execute("SELECT plain_text FROM units WHERE book_id=? AND resource_href=? AND kind IN "
                              "('text','heading') ORDER BY ordinal LIMIT 1", (book.id, href)).fetchone()
-        title = zh_label.get(label) or label or (RUBY.sub("", first[0])[:16] if first else href)
+        title = zh_label.get(label) or titles.get(label) or label or (RUBY.sub("", first[0])[:16] if first else href)
         out.append({"index": i, "href": href, "kind": kind, "title": title, "start": r[0], "end": r[1], "units": r[2]})
     return out
 
@@ -278,7 +290,8 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
             out[cid]["narrator"] = True
         imp = conn.execute("SELECT * FROM character_impressions WHERE character_id=?", (cid,)).fetchone()
         if imp is not None:
-            out[cid]["impression"] = {"personality": imp["personality"], "voice": imp["voice"], "role": imp["role"]}
+            out[cid]["impression"] = {"personality": imp["personality"], "voice": imp["voice"], "role": imp["role"],
+                                      **_read_range(conn, book.id)}
         for key, sql in (("members", "SELECT member_id FROM group_members WHERE group_id=?"),
                          ("member_of", "SELECT group_id FROM group_members WHERE member_id=?")):
             if ids := [r[0] for r in conn.execute(sql, (cid,)) if r[0] in chars]:

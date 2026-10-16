@@ -260,3 +260,31 @@ def test_house_style_shows_a_line_for_each_repeated_ending():
         said[i] = (f"「行くっすよ{i}っす」", f"u{i}")
     picked = [q for q, _ in _pick(said)]
     assert any(q.endswith("っす」") for q in picked) and len(picked) <= 12 + 8
+
+
+def test_a_toc_entry_matches_a_paragraph_with_the_same_source(conn, cfg, fixtures):
+    """A book's contents page or a title set as a styled paragraph (「⟦1⟧タイトル⟦/1⟧」): the TOC entry with the same
+    source reuses its translation, and the GUI shows it while the TOC itself is not translated (a sample)."""
+    from ncte.gui.data import chapters
+    from ncte.library import resolve_book
+    from ncte.llm.fake import FakeLLM
+    from ncte.translation.context_builder import heading_hints
+
+    from ..helpers import run_book
+    from ..scripted import RESPONDERS
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    toc = conn.execute("SELECT * FROM units WHERE book_id=? AND kind IN ('nav','ncx') AND plain_text LIKE '第一章%' LIMIT 1",
+                       (book.id,)).fetchone()
+    body = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='text' AND spine_index IS NOT NULL ORDER BY ordinal "
+                        "LIMIT 1", (book.id,)).fetchone()
+    assert toc and body
+    conn.execute("UPDATE units SET plain_text=?, source_text=? WHERE id=?", (toc["plain_text"], f"⟦1⟧{toc['plain_text']}⟦/1⟧",
+                                                                             body["id"]))
+    conn.execute("UPDATE translations SET text='⟦1⟧章的標題⟦/1⟧', source_hash=(SELECT source_hash FROM units WHERE id=?) "
+                 "WHERE unit_id=?", (body["id"], body["id"]))
+    assert {"ja": toc["plain_text"], "zh": "章的標題"} in heading_hints(conn, book.id)
+    conn.execute("DELETE FROM translations WHERE unit_id IN (SELECT id FROM units WHERE book_id=? AND kind IN "
+                 "('nav','ncx')) OR unit_id IN (SELECT id FROM units WHERE book_id=? AND kind='heading')", (book.id, book.id))
+    titles = [c["title"] for c in chapters(conn, resolve_book(conn, book.id))]
+    assert "章的標題" in titles

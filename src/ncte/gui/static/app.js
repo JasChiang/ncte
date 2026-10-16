@@ -524,7 +524,7 @@ async function peopleView(id) {
       ${groupLine(p, d, nm)}
       <div class="secnav">${[["sec-rel", "人物關係"], ["sec-addr", "稱呼"], ["sec-co", "常一起出場"], ["sec-ex", "說話例句"], ["sec-facts", "已知事實"]]
         .map(([k, t]) => `<button class="btn small" data-sec="${k}">${t}</button>`).join("")}</div>
-      ${p.impression ? `<div class="card" style="margin-top:10px;background:var(--accent-soft)"><strong>角色印象</strong> <span class="muted small">讀完全書後整理</span>
+      ${p.impression ? `<div class="card" style="margin-top:10px;background:var(--accent-soft)"><strong>角色印象</strong> <span class="muted small">${p.impression.read_all ? "讀完全書後整理" : `讀到 §${p.impression.read_to ?? "?"} 為止整理`}</span>
         <div class="small" style="margin-top:4px">個性：${esc(p.impression.personality)}</div>
         <div class="small">口吻：${esc(p.impression.voice)}</div>
         <div class="small">定位：${esc(p.impression.role)}</div></div>` : ""}

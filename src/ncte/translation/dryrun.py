@@ -97,6 +97,20 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
         in_tok += 2 * (chars + scenes * 1500)
         out_low += int(chars * 0.5)
         out_high += int(chars * 1.5)
+    breaks = 0
+    if opts.mode == "context" and cfg.context.scene_breaks == "llm" and not opts.unit_ids and todo:
+        # the model divides undivided stretches first (ADR-036); a sample only those it reaches
+        from ..analysis import scene_breaks as sb
+
+        end = max(r["ordinal"] for r in rows) if opts.limit is not None else None
+        stretches = sb.stretches(conn, book.id, cfg.translation.scene_max_chars)
+        stretches = stretches if opts.force else sb.undecided(conn, book.id, stretches, end)
+        paras = sum(len(s) for s in stretches)
+        breaks = len(stretches)
+        n_req += breaks
+        in_tok += breaks * estimate_tokens(load_prompt("scenes").text) + paras * (sb.OPENING_CHARS + sb.ENDING_CHARS + 20)
+        out_low += paras * 5
+        out_high += paras * 30  # reasoning
     cost_low = in_tok * pricing.prompt + out_low * pricing.completion
     cost_high = in_tok * pricing.prompt * 1.3 + out_high * pricing.completion
     stage_chars = {"translate": sum(len(match_text(r["plain_text"])) for r in todo)}
@@ -120,6 +134,8 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
     if client.name == "fal":
         notes.append("fal: OpenRouter catalog prices are reference estimates; final fal billing may differ. "
                      "Fal balance and generation reconciliation are not available in this adapter.")
+    if breaks:
+        notes.append(f"includes choosing scene breaks in {breaks} undivided stretches before reading")
     if old_revision:
         notes.append(f"{old_revision} cached units were translated with an earlier revision of {prompt.version_id.split('#')[0]}"
                      " (kept; use --force or retranslate to refresh them)")

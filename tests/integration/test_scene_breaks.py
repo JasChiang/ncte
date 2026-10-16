@@ -95,3 +95,35 @@ def test_rebreak_command_on_a_book_cut_before_the_model_chose(tmp_path, fixtures
     out = r.invoke(app, [*ws, "scenes", str(fixtures["basic"]), "--rebreak", "--fake"])
     assert out.exit_code == 0, out.output
     assert "scene breaks chosen again" in out.output
+
+
+
+def test_a_sample_divides_only_the_stretches_it_reaches(conn, cfg, fixtures, monkeypatch):
+    """--limit-units: stretches past the sample are not asked about (they cost and the sample never reads them); the
+    next run that reaches them divides them, and the ones decided are not asked again."""
+    import ncte.analysis.scene as scene
+
+    from ..helpers import orchestrator_for, start_run
+
+    cfg.memory.max_scene_units = 5
+    monkeypatch.setattr(scene, "MAX_SIZE_SLACK", 0)
+    asked: list[str] = []
+
+    def scenes(payload, req):
+        ps = payload["paragraphs"]
+        asked.append(ps[0]["unit_id"])
+        return {"breaks": [{"unit_id": ps[len(ps) // 2]["unit_id"], "reason": "test"}]}
+
+    fake = FakeLLM(responders={**RESPONDERS, "scenes": scenes})
+    book, _, _ = start_run(conn, cfg, fixtures["basic"], fake, mode="context", limit=1)
+    stretches = sb.stretches(conn, book.id, cfg.translation.scene_max_chars)
+    assert len(stretches) >= 2, "the fixture needs two stretches"
+    first = stretches[0][0]
+    n = conn.execute("SELECT COUNT(*) FROM units WHERE book_id=? AND translatable=1 AND kind IN ('text','heading') "
+                     "AND ordinal<=?", (book.id, first["ordinal"])).fetchone()[0]
+    _, rid, opts = start_run(conn, cfg, fixtures["basic"], fake, mode="context", limit=n)
+    orchestrator_for(conn, cfg, book, rid, opts, fake).run()
+    assert asked == [first["id"]]  # only the stretch the sample reaches
+    _, rid, opts = start_run(conn, cfg, fixtures["basic"], fake, mode="context")
+    orchestrator_for(conn, cfg, book, rid, opts, fake).run()
+    assert asked[0] == first["id"] and first["id"] not in asked[1:] and len(asked) > 1  # the rest, once

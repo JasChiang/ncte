@@ -7,6 +7,7 @@ speech examples, summaries and facts — all filtered by visibility (no future k
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from typing import Any
 
@@ -14,6 +15,7 @@ from ..config import Config
 from .cache import latest_translation, relevant_glossary
 
 BODY_KINDS = ("text", "heading")
+_WHOLE = re.compile(r"⟦(\d+)⟧(.*)⟦/\1⟧", re.S)  # one placeholder around a whole unit
 META_KINDS = ("head_title", "nav", "ncx", "opf_title")
 
 
@@ -127,12 +129,21 @@ def _entity_name(forms: list[dict[str, Any]]) -> dict[str, str]:
 
 
 def heading_hints(conn: sqlite3.Connection, book_id: str) -> list[dict[str, str]]:
-    """Translated headings, given to the TOC/title task so the TOC matches chapter titles."""
-    rows = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='heading' ORDER BY ordinal",
-                        (book_id,)).fetchall()
+    """Translated chapter titles, given to the TOC/title task (and reused for an identical TOC entry) so the TOC matches
+    them: headings, and any paragraph whose source is exactly a TOC entry (a book's own contents page, a title set as a
+    styled paragraph), with one placeholder around the whole of it taken off."""
+    rows = conn.execute(
+        "SELECT * FROM units u WHERE book_id=? AND (kind='heading' OR (kind='text' AND spine_index IS NOT NULL AND "
+        "length(plain_text)<=40 AND plain_text IN (SELECT plain_text FROM units v WHERE v.book_id=u.book_id AND "
+        "v.kind IN ('nav','ncx')))) ORDER BY ordinal", (book_id,)).fetchall()
     out = []
     for r in rows:
         tr = latest_translation(conn, r["id"], r["source_hash"])
-        if tr is not None and "⟦" not in tr["text"] and "⟦" not in r["source_text"]:
-            out.append({"ja": r["plain_text"], "zh": tr["text"]})
+        if tr is None:
+            continue
+        src, zh = r["source_text"], tr["text"]
+        if (m := _WHOLE.fullmatch(src)) and (z := _WHOLE.fullmatch(zh)) and m.group(1) == z.group(1):
+            src, zh = m.group(2), z.group(2)
+        if "⟦" not in zh and "⟦" not in src:
+            out.append({"ja": r["plain_text"], "zh": zh})
     return out
