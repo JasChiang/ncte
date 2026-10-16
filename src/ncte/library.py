@@ -60,7 +60,7 @@ def import_book(conn: sqlite3.Connection, cfg: Config, epub_path: str | Path, *,
     if not stored.exists():
         shutil.copy2(src, stored)
     units = extract_all_units(pkg)
-    meta = {"metadata": pkg.metadata, "version": pkg.version, "opf_path": pkg.opf_path,
+    meta = {"ruby_format": RUBY_FORMAT, "metadata": pkg.metadata, "version": pkg.version, "opf_path": pkg.opf_path,
             "nav_href": pkg.nav_href, "ncx_href": pkg.ncx_href, "spine": [s.href for s in pkg.spine],
             "warnings": pkg.warnings, "page_progression": pkg.page_progression}
     with Transaction(conn):
@@ -99,6 +99,43 @@ def import_book(conn: sqlite3.Connection, cfg: Config, epub_path: str | Path, *,
 
     segment_book(conn, cfg, bid)
     return book, True
+
+
+RUBY_FORMAT = 2  # readings in interlinear annotation characters (1: base《reading》, mixed up with the author's 《》)
+
+
+def upgrade_ruby(conn: sqlite3.Connection, book: Book) -> int:
+    """A book imported with readings written base《reading》: its paragraphs are extracted again from the stored EPUB
+    with the new markers. A paragraph whose text is the same once the readings are shown as before gets the new text
+    and hash, and its translations follow (nothing is translated again); anything else is left as it was. Returns the
+    paragraphs changed. Runs once per book."""
+    from .epub.units import for_model
+
+    row = conn.execute("SELECT metadata_json, stored_path FROM books WHERE id=?", (book.id,)).fetchone()
+    meta = json.loads(row["metadata_json"] or "{}") if row else {}
+    if not row or meta.get("ruby_format") == RUBY_FORMAT:
+        return 0
+    n = 0
+    if conn.execute("SELECT 1 FROM units WHERE book_id=? AND ruby_count>0 LIMIT 1", (book.id,)).fetchone() and \
+            Path(row["stored_path"] or "").is_file():
+        pkg = load_epub(row["stored_path"])
+        with Transaction(conn):
+            for _, u in extract_all_units(pkg):
+                if not u.ruby_count:
+                    continue
+                uid = unit_id_for(book.id, u.resource_href, u.xpath)
+                old = conn.execute("SELECT source_text, source_hash FROM units WHERE id=?", (uid,)).fetchone()
+                if old is None or old["source_text"] == u.source_text or for_model(u.source_text) != old["source_text"]:
+                    continue
+                conn.execute("UPDATE units SET source_text=?, plain_text=?, source_hash=? WHERE id=?",
+                             (u.source_text, u.plain_text, u.source_hash, uid))
+                conn.execute("UPDATE translations SET source_hash=? WHERE unit_id=? AND source_hash=?",
+                             (u.source_hash, uid, old["source_hash"]))
+                n += 1
+    meta["ruby_format"] = RUBY_FORMAT
+    with Transaction(conn):
+        conn.execute("UPDATE books SET metadata_json=? WHERE id=?", (json.dumps(meta, ensure_ascii=False), book.id))
+    return n
 
 
 def resolve_book(conn: sqlite3.Connection, ref: str | Path) -> Book:

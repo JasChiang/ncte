@@ -117,7 +117,11 @@ class Workspace:
         if not found:
             raise NCTEError(f"Book not imported yet: {ref} (run `ncte import` first)")
         conn = self.series_conn(found[0])
-        return conn, resolve_book(conn, found[1])
+        book = resolve_book(conn, found[1])
+        from .library import upgrade_ruby
+
+        upgrade_ruby(conn, book)  # books imported before readings had their own markers (once)
+        return conn, book
 
     def suggest_series(self, pkg: Any) -> dict[str, Any]:
         """Series/volume suggestion for a package: metadata/title guess + matching series already in the library."""

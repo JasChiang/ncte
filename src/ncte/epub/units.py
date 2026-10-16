@@ -6,7 +6,8 @@ produces HTML:
 
 * paired element ``<em>…</em>``   → ``⟦3⟧…⟦/3⟧``
 * empty/void element ``<br/>``    → ``⟦4/⟧``
-* simple ``<ruby>`` is flattened to ``base《reading》`` (reading is only a hint for the model;
+* simple ``<ruby>`` is flattened to ``base`` + reading in interlinear annotation characters (shown to the model as
+  ``base《reading》``; the reading is only a hint for the model;
   the Chinese output is plain text – Japanese readings are never forced onto Chinese words).
 
 Reassembly rebuilds the element subtree from the *original* element map; the model's text is
@@ -76,7 +77,7 @@ class ExtractedUnit:
     xpath: str
     kind: str  # text | heading | head_title | nav | ncx | opf_title
     source_text: str  # with placeholders
-    plain_text: str  # placeholders removed, ruby as base《reading》
+    plain_text: str  # placeholders removed, ruby as U+FFF9 base U+FFFA reading U+FFFB
     inline_map: dict[int, InlineSpec] = field(default_factory=dict)
     translatable: bool = True
     skip_reason: str | None = None
@@ -129,9 +130,19 @@ def strip_placeholders(text: str) -> str:
     return PH_RE.sub("", text)
 
 
-# a reading the program wrote after its base (蒼《あお》, 本気《マジ》): kana right after a character; brackets the author
-# uses (「…、《亡雄の旅団》」, a title) are text and stay
-RUBY_NOTATION = re.compile(r"(?<=[^\s、。，．！？!?「」『』（）()《》〈〉【】・…―─])《[ぁ-ゖァ-ヺー・ゝゞヽヾ\s]+》")
+# A reading is stored with Unicode's own interlinear annotation characters — anchor, base, separator, reading,
+# terminator (U+FFF9 蒼 U+FFFA あお U+FFFB) — which never occur in a book's text, so the author's own 《》 (a title:
+# 「…、《亡雄の旅団》」) stay text everywhere. The model is shown the familiar 蒼《あお》 (for_model); what it quotes
+# back may carry that form, so matching also drops a kana-only 《…》 right after a character.
+RUBY_OPEN, RUBY_SEP, RUBY_CLOSE = "\ufff9", "\ufffa", "\ufffb"
+RUBY_MARKED = re.compile("\ufff9([^\ufffa\ufffb]*)\ufffa([^\ufffb]*)\ufffb")
+_SHOWN_READING = r"(?<=[^\s、。，．！？!?「」『』（）()《》〈〉【】・…―─])《[ぁ-ゖァ-ヺー・ゝゞヽヾ\s]+》"
+RUBY_NOTATION = re.compile("\ufff9|\ufffa[^\ufffb]*\ufffb|" + _SHOWN_READING)  # .sub("", text) → the base text
+
+
+def for_model(text: str) -> str:
+    """Readings as the model reads them: 蒼《あお》."""
+    return RUBY_MARKED.sub(r"\1《\2》", text)
 
 
 def match_text(text: str) -> str:
@@ -266,7 +277,7 @@ class _Serializer:
             elif name == "rt":
                 reading = (c.text or "").strip()
                 if base:
-                    pieces.append(f"{base}《{reading}》" if reading else base)
+                    pieces.append(f"{RUBY_OPEN}{base}{RUBY_SEP}{reading}{RUBY_CLOSE}" if reading else base)
                 base = ""
             elif name == "rp":
                 pass

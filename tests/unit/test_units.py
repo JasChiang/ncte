@@ -1,7 +1,7 @@
 from lxml import etree
 
 from ncte.epub.security import parse_xml_tree
-from ncte.epub.units import extract_xhtml_units, rebuild_block, rebuild_run, validate_placeholders
+from ncte.epub.units import extract_xhtml_units, for_model, rebuild_block, rebuild_run, validate_placeholders
 
 NS = 'xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"'
 
@@ -27,13 +27,13 @@ def test_paragraph_with_inline_placeholders():
 
 def test_ruby_flattened_and_counted():
     _, us = units("<p><ruby>強敵<rt>とも</rt></ruby>と<ruby><rb>蒼</rb><rp>(</rp><rt>あお</rt><rp>)</rp></ruby></p>")
-    assert us[0].source_text == "強敵《とも》と蒼《あお》"
+    assert for_model(us[0].source_text) == "強敵《とも》と蒼《あお》"  # stored with annotation characters
     assert us[0].ruby_count == 2
 
 
 def test_mono_ruby():
     _, us = units("<p><ruby>魔<rt>ま</rt>法<rt>ほう</rt></ruby></p>")
-    assert us[0].source_text == "魔《ま》法《ほう》"
+    assert for_model(us[0].source_text) == "魔《ま》法《ほう》"
 
 
 def test_complex_ruby_kept_original():
@@ -51,7 +51,7 @@ def test_kobo_span_inside_ruby_is_flattened():
                   '<span class="kobospan" id="kobo.6.1">！」</span></p>')
     u = us[0]
     assert u.translatable and u.ruby_count == 1
-    assert u.source_text == "⟦1⟧「⟦/1⟧蒼《あお》依《い》⟦2⟧！」⟦/2⟧"
+    assert for_model(u.source_text) == "⟦1⟧「⟦/1⟧蒼《あお》依《い》⟦2⟧！」⟦/2⟧"
     rebuild_block(u.element, "⟦1⟧「⟦/1⟧蒼依⟦2⟧！」⟦/2⟧", u.inline_map)
     s = etree.tostring(u.element, encoding="unicode")
     assert 'id="kobo.3.1"' in s and 'id="kobo.6.1"' in s and "<ruby>" not in s
@@ -133,3 +133,12 @@ def test_xpath_stable_and_unique():
     paths = [u.xpath for u in us]
     assert paths == ["/html[1]/body[1]/section[1]/p[1]", "/html[1]/body[1]/section[1]/p[2]",
                      "/html[1]/body[1]/section[2]/p[1]"]
+
+
+def test_the_authors_own_brackets_are_text_and_readings_have_their_own_marks():
+    from ncte.epub.units import RUBY_NOTATION, match_text
+
+    assert match_text("「戦を始めなさい、《亡雄の旅団》」") == "「戦を始めなさい、《亡雄の旅団》」"  # a title stays
+    assert match_text("\ufff9魔法\ufffaまほう\ufffbと《魔装具》") == "魔法と《魔装具》"
+    assert RUBY_NOTATION.sub("", "蒼《あお》依《い》") == "蒼依"  # how the model quotes a reading back
+    assert for_model("\ufff9蒼\ufffaあお\ufffbと《魔装具》") == "蒼《あお》と《魔装具》"

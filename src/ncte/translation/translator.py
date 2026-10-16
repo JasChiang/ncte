@@ -18,7 +18,7 @@ from typing import Any, Protocol
 from pydantic import BaseModel, ValidationError
 
 from ..config import Config, reasoning_param, reasoning_setting
-from ..epub.units import InlineSpec
+from ..epub.units import InlineSpec, for_model
 from ..errors import ContentBlockedError, ModelOutputError, RequestRejectedError
 from ..llm.base import LLMClient, LLMRequest, LLMResponse, StructuredMode
 from ..llm.cost import estimate_tokens
@@ -150,7 +150,7 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
             correction = correction.replace(long_id, code)
         system += f"\n\n## 重要更正\n上一次的輸出未通過程式驗證：{correction}\n請嚴格依照規則與輸出格式重新輸出。\n"
     messages = [{"role": "system", "content": system},
-                {"role": "user", "content": json.dumps(ids.encode(payload), ensure_ascii=False)}]
+                {"role": "user", "content": for_model(json.dumps(ids.encode(payload), ensure_ascii=False))}]
     current: StructuredMode = mode
     max_tokens = cfg.openrouter.max_output_tokens
     auto_cap = max_tokens is None
