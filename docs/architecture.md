@@ -16,11 +16,17 @@ translate (context, read first — default)
   1. read, every scene in order:
        scene_analyze  → analysis/scene.apply_scene_analysis (quotes, tags, speakers, new characters, genders,
                         narration: first/third, narrator or focal character, narrator's self forms — ADR-040)
-       memory_update  → analysis/memory_update (facts with verbatim evidence, summaries, address terms, wordplay)
+       memory_update  → analysis/memory_update (facts with verbatim evidence, summaries, address terms, wordplay,
+                        relations the text states, group members; who each line is said to — ADR-045/046)
        a request the content filter refuses is read in halves and merged (analysis/split_read)
-  2. verify: disputed speakers, inferred genders, reveal merges, address usage, narration conflicts — asked again
-     with the surrounding text (ADR-033, ADR-037)
-  3. relations: summarized from evidence-backed facts (ADR-039)
+  2. verify: disputed speakers, inferred genders, reveal merges, address usage, narration conflicts, unnamed
+     narrators, cards that may be a character known by name, group members — asked again with the surrounding
+     text, high reasoning (ADR-033, ADR-037, ADR-045, ADR-046, ADR-049)
+  3. relations, one pair at a time: the notes made while reading, the facts about both, how they address each
+     other and the source passages where the two appear together (a member's pair gets its group's too); the
+     model writes identity / feeling / same-person relations from where each begins, high reasoning
+     (ADR-039, ADR-045, ADR-046, ADR-048, ADR-049, ADR-050)
+     impressions: personality, voice and place in the story of the main characters (ADR-045)
   4. naming: renderings for names and address terms; the model's choice is kept, the program checks (ADR-035)
   5. translate, per scene in reading order, with memory/retrieval (visibility-filtered characters, relations,
      examples, speaker status, summaries, facts, props, the scene's narration)
@@ -35,7 +41,8 @@ budget pre-check before each request; Ctrl+C → checkpoint; resume re-queues jo
 export ──► epub/reassemble (rebuild only validated text nodes; other files byte-for-byte; mimetype first)
        ──► epub/validate (internal + EPUBCheck) ──► reports (cost / QA / HTML)
 eval   ──► eval/runner (A/B/C/D in fresh workspaces) ──► eval/metrics (annotation-based)
-gui    ──► gui/server (127.0.0.1, token) ── data (reads) · actions (edits) · manage (upload, export, key)
+gui    ──► gui/server (127.0.0.1, token) ── data (reads; source quotes with their translation) · actions (edits)
+                                         · manage (upload, export, key)
                                          └─ runner (one translation at a time in a background thread)
 ```
 
@@ -58,4 +65,4 @@ gui    ──► gui/server (127.0.0.1, token) ── data (reads) · actions (e
 `books, resources, units, scenes, scene_overrides, glossary, runs, jobs, translations, llm_requests, qa_findings,
 human_edits, model_snapshots` (migration 1) · `characters, utterances, speaker_hypotheses, speech_examples, facts,
 chapter_summaries, prop_states, memory_rejections, memory_fts` (migration 2) · 之後：系列（series）、實體連結（entity_links）、
-稱呼（address_terms、address_observations、form_senses）、定名提案（naming_proposals）、譯註（reader_notes）、性別（character_gender，migration 12–13）。
+稱呼（address_terms、address_observations、form_senses）、定名提案（naming_proposals）、譯註（reader_notes）、性別（character_gender，migration 12–13）、人物關係（relations、讀時記錄 relation_notes，migration 16–18）、角色印象（character_impressions）、群體成員（group_members，migration 20–21）。
