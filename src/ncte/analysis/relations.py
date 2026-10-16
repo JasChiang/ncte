@@ -192,8 +192,8 @@ def _pair_passages(conn: sqlite3.Connection, book_id: str, chars: dict[str, sqli
     for k, got in hits.items():
         order = spread(sorted(i for i, s in got.items() if s == 2)) + spread(sorted(i for i, s in got.items() if s == 1))
         for i in sorted(order[:PAIR_PASSAGES]):
-            window = " / ".join(label(j) for j in range(max(0, i - 1), min(len(rows), i + 2)))
-            pairs[k]["passages"].append({"id": rows[i]["id"], "at": rows[i]["ordinal"], "text": window, "via": None})
+            snippet = " / ".join(label(j) for j in range(max(0, i - 1), min(len(rows), i + 2)))
+            pairs[k]["passages"].append({"id": rows[i]["id"], "at": rows[i]["ordinal"], "text": snippet, "via": None})
 
 
 def _around(t: str, forms: dict[str, list[str]], n: int) -> str:
@@ -221,7 +221,7 @@ def requests(pairs: list[dict[str, Any]], chars: dict[str, sqlite3.Row], *, rech
             pid = f"p{k}"
             allowed[pid] = set()
             notes, facts = [], []
-            for n in p["notes"][:MAX_EVIDENCE]:
+            for n in _distinct(p["notes"])[:MAX_EVIDENCE]:
                 r = f"n{len(ev) + 1}"
                 ev[r] = ("note", n["id"], n["first_ordinal"])
                 allowed[pid].add(r)
@@ -258,6 +258,16 @@ def requests(pairs: list[dict[str, Any]], chars: dict[str, sqlite3.Row], *, rech
         out.append((req, {"_chars": {r: c for c, r in cref.items()}, "_ev": ev, "_allowed": allowed,
                           "_pairs": {f"p{k}": (p["a"], p["b"]) for k, p in enumerate(group, 1)}}))
     return out
+
+
+def _distinct(notes: list[Any]) -> list[Any]:
+    """Notes of one kind of relation noted again and again (未婚夫妻 seven times) crowd the others out of the first
+    ten: each relation keeps its earliest and its latest note, in story order, so every different one is seen."""
+    by: dict[str, list[Any]] = {}
+    for n in notes:
+        by.setdefault((n["relation_zh"] or "").strip(), []).append(n)
+    kept = [x for ns in by.values() for x in ({id(ns[0]): ns[0], id(ns[-1]): ns[-1]}.values())]
+    return sorted(kept, key=lambda n: n["first_ordinal"])
 
 
 def _label(chars: dict[str, sqlite3.Row], cid: str) -> str:
