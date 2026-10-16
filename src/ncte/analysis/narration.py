@@ -13,9 +13,11 @@ import re
 import sqlite3
 from typing import Any
 
+from ..epub.units import RUBY_NOTATION
+
 FIRST_PERSON = re.compile(r"(私|俺|僕|わたし|あたし|ぼく|ボク|オレ|わたくし|あたい)(?!達|たち)")
 _QUOTED = re.compile(r"「[^」]*」|『[^』]*』|（[^）]*）|\([^)]*\)")
-_RUBY = re.compile(r"《[^》]*》")
+_RUBY = RUBY_NOTATION  # readings only; the author's own 《》 brackets are text
 MIN_NARRATION = 150  # paragraphs: fewer and the book does not say
 THIRD_BELOW, FIRST_ABOVE = 0.03, 0.10
 

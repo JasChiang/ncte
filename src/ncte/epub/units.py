@@ -129,7 +129,9 @@ def strip_placeholders(text: str) -> str:
     return PH_RE.sub("", text)
 
 
-RUBY_NOTATION = re.compile(r"《[^》]*》")
+# a reading the program wrote after its base (蒼《あお》, 本気《マジ》): kana right after a character; brackets the author
+# uses (「…、《亡雄の旅団》」, a title) are text and stay
+RUBY_NOTATION = re.compile(r"(?<=[^\s、。，．！？!?「」『』（）()《》〈〉【】・…―─])《[ぁ-ゖァ-ヺー・ゝゞヽヾ\s]+》")
 
 
 def match_text(text: str) -> str:

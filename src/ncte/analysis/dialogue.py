@@ -14,11 +14,13 @@ from collections import Counter
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..epub.units import RUBY_NOTATION
+
 OPEN, CLOSE = "「", "」"
 # what may follow a whole-paragraph 『…』 for it to still be a line someone says: nothing, or a speech tag
 # (『帰ったか』と、ルカの脳裏に声が届いた / 『この苦しみを…』──と). 『私』の世界は… is emphasis inside narration.
 _VOICE_TAIL = re.compile(r"^[\s　]*(?:$|[──―─]*[\s　]*と)")
-RUBY = re.compile(r"《[^》]*》")
+RUBY = RUBY_NOTATION  # readings only; the author's own 《》 brackets are text
 
 SPEECH_VERBS = (
     "言っ", "言う", "言い", "言われ", "呟", "つぶや", "答え", "応え", "叫", "告げ", "返し", "返す", "返事", "尋ね", "訊",

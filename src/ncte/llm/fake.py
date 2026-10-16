@@ -18,12 +18,13 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
+from ..epub.units import RUBY_NOTATION
 from ..errors import ContentBlockedError, FatalAPIError, RequestRejectedError, RetryableAPIError
 from .base import LLMRequest, LLMResponse
 from .cost import estimate_tokens
 
 KANA = re.compile(r"[぀-ヿｦ-ﾟ]")
-RUBY = re.compile(r"《[^》]*》")
+RUBY = RUBY_NOTATION  # readings only; the author's own 《》 brackets are text
 FAKE_PROMPT_PRICE = 0.000001
 FAKE_COMPLETION_PRICE = 0.000002
 

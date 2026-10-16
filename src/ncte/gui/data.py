@@ -9,14 +9,14 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from ..epub.matter import book_matter, toc_labels
-from ..epub.units import match_text
+from ..epub.units import RUBY_NOTATION, match_text
 from ..library import Book
 from ..memory.address import find_forms, name_forms
 from ..series import SERIES_SCOPE
 from ..translation.cache import latest_texts
 
 PH = re.compile(r"⟦/?\d+/?⟧")
-RUBY = re.compile(r"《[^》]*》")
+RUBY = RUBY_NOTATION  # readings only; the author's own 《》 brackets are text
 EDGE = re.compile(r"^((?:⟦\d+/?⟧)*)(.*?)((?:⟦/\d+⟧)*)$", re.S)
 
 

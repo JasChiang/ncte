@@ -15,7 +15,7 @@ import json
 import sqlite3
 from typing import Any
 
-from ..epub.units import PH_RE, match_text
+from ..epub.units import PH_RE
 from ..translation.cache import latest_texts
 
 CHUNK_UNITS = 60  # paragraphs per request: source and translation side by side
@@ -41,7 +41,9 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
             out.append(cur)
             cur = []
         href = r["resource_href"]
-        item: dict[str, Any] = {"unit_id": r["id"], "ja": match_text(r["plain_text"]), "zh": PH_RE.sub("", t["text"])}
+        # the source as written: 《》 may be a reading (漢字《かな》) or the author's own brackets (「…、《亡雄の旅団》」);
+        # stripping it would make the translation look like it added words
+        item: dict[str, Any] = {"unit_id": r["id"], "ja": r["plain_text"], "zh": PH_RE.sub("", t["text"])}
         if who := sorted(names.get(x, "?") for x in said.get(r["id"], ())):
             item["speaker"] = "、".join(who)
             item["_who"] = sorted(said[r["id"]])
