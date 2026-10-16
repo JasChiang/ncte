@@ -152,11 +152,13 @@ def _compare(out: EpubPackage, src: EpubPackage, rep: ValidationReport) -> None:
         rep.errors.append(f"non-text resources changed: {sorted(changed_binary)[:20]}")
     if len(src.images()) != len(out.images()):
         rep.errors.append(f"image count changed {len(src.images())} → {len(out.images())}")
-    su = sum(1 for _, u in extract_all_units(src) if u.translatable)
-    ou = rep.stats.get("translatable_units", 0)
-    rep.stats["original_translatable_units"] = su
+    # every paragraph is still there: counted whether or not it has letters (「──っ」 translated 「──！」 is punctuation
+    # only in the output, so a count of translatable paragraphs would differ by one with nothing lost)
+    su = len(extract_all_units(src))
+    ou = rep.stats.get("units", 0)
+    rep.stats["original_units"] = su
     if su != ou:
-        rep.warnings.append(f"translatable unit count changed {su} → {ou}")
+        rep.warnings.append(f"paragraph count changed {su} → {ou}")
 
 
 def find_epubcheck(configured: str | None = None, workspace: Path | None = None) -> list[str] | None:
