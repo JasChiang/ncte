@@ -59,3 +59,11 @@ def test_relations_and_second_look_think_more_when_the_model_offers_it():
     check_reasoning_effort(cfg2, Pricing(model="m", prompt=0.0, completion=0.0, reasoning=0.0, cache_read=None,
                                          context_length=None, supported_parameters=(), reasoning_efforts=()))
     assert reasoning_setting(cfg2, "relations") is None  # a model without reasoning gets nothing
+
+
+def test_a_relation_can_say_two_cards_are_one_person():
+    from ncte.llm.schemas import RelationOut
+
+    r = RelationOut.model_validate({"a": "c1", "b": "c2", "relation": "同一人物", "a_is": "化身", "b_is": "本人",
+                                    "facts": ["n1"], "reason": "t", "kind": "same_person", "certainty": "inferred"})
+    assert r.kind == "same_person"

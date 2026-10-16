@@ -200,7 +200,7 @@ class StatedRelation(_M):
     relation: str
     a_is: str
     b_is: str
-    kind: Literal["identity", "feeling"]  # 身分（親屬、婚約、師生、主從、同班）／情感與立場（好友、宿敵、愛慕、敵視）
+    kind: Literal["identity", "feeling", "same_person"]  # 身分／情感與立場／同一人的不同身分（分身、秘密身分、不同時期）
     evidence_unit_ids: list[str]
     evidence_quote: str
 
@@ -313,7 +313,7 @@ class RelationOut(_M):
     b_is: str  # what b is to a: 女兒
     facts: list[str]  # evidence refs that show it (n… notes made while reading, f… facts)
     reason: str
-    kind: Literal["identity", "feeling"] = "identity"
+    kind: Literal["identity", "feeling", "same_person"] = "identity"
     certainty: Literal["explicit", "inferred"] = "explicit"
     replaces: str | None = None  # an earlier relation of the same pair this one takes the place of (宿敵 → 未婚夫妻)
 

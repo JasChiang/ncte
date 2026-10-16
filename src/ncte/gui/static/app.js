@@ -482,7 +482,7 @@ function relationList(d, pid, upto, nm) {
     const other = r.a === pid ? r.b : r.a, mine = r.a === pid ? r.a_is : r.b_is, theirs = r.a === pid ? r.b_is : r.a_is;
     const ev = (r.evidence || []).filter(e => e.at <= upto)[0];
     return `<tr><td><a href="#" data-k="${esc(other)}">${esc(nm(other))}</a></td><td>${esc(theirs || r.rel)}</td>
-      <td>${chip(r.kind === "feeling" ? "c-warn" : "c-acc", r.kind === "feeling" ? "情感" : "身分")}${r.certainty === "inferred" ? chip("c-warn", "推測") : ""}${r.origin !== "llm" ? chip("c-ok", "人工") : ""}</td>
+      <td>${kindChip(r)}${r.certainty === "inferred" ? chip("c-warn", "推測") : ""}${r.origin !== "llm" ? chip("c-ok", "人工") : ""}</td>
       <td class="mono small">§${r.at}</td><td class="small">${ev ? bi(ev.quote, ev.zh) : ""}</td></tr>`;
   }).join("");
   return `<div style="margin-top:12px"><strong>人物關係</strong> <span class="muted small">對方是他的什麼</span>
@@ -592,9 +592,11 @@ function radial(nodes, edges, center, R) {
             h: Math.max(...ys) - Math.min(...ys) + 2 * m};
   return P;
 }
-// a relation that says two cards are one person (a reveal), drawn as a link between two names of one person
-const SAME_PERSON = /同一人/;
-const relOrder = (x, y) => (x.kind === "feeling") - (y.kind === "feeling") || x.at - y.at;  // identity first, then by start
+// kinds of relation: one person in two identities (the model's judgement, kind "same_person") first, then identity,
+// then feeling; within a kind, by where it begins
+const KIND_RANK = {same_person: 0, identity: 1, feeling: 2};
+const relOrder = (x, y) => (KIND_RANK[x.kind] ?? 1) - (KIND_RANK[y.kind] ?? 1) || x.at - y.at;
+const kindChip = r => r.kind === "same_person" ? chip("c-ok", "同一人") : chip(r.kind === "feeling" ? "c-warn" : "c-acc", r.kind === "feeling" ? "情感" : "身分");
 async function graphView(id) {
   view.classList.add("wide");  // the graph uses the whole window width
   const ov = await loadBook(id, "overview");
@@ -694,25 +696,27 @@ async function graphView(id) {
       const op = Math.min(dim(e.a), dim(e.b)), pk = [e.a, e.b].sort().join("|"), h = bend(e), mid = pt(e, h, 0.5);
       const dpath = `M${P[e.a].x},${P[e.a].y} Q${mid.cx},${mid.cy} ${P[e.b].x},${P[e.b].y}`;
       const rs = e.rels || [], main = rs[0], more = rs.length - 1;
-      const same = main && SAME_PERSON.test(main.rel), fresh = rs.some(isNew), change = rs.some(isChange);
+      const same = main && main.kind === "same_person", fresh = rs.some(isNew), change = rs.some(isChange);
       // line: identity solid, feeling dashed, inferred lighter; a reveal (one person) a double line; new ones in colour
       const color = fresh || G.pair === pk ? "var(--accent)" : "var(--muted)";
       const dash = main && main.kind === "feeling" ? ` stroke-dasharray="6 5"` : "";
       const alpha = (main && main.certainty === "inferred" ? .5 : 1) * (.3 + .6 * e.w / mx);
       const width = 1 + 6 * e.w / mx;
       const title = `${esc(nm(e.a))}・${esc(nm(e.b))}：${rs.length ? rs.map(r => esc(r.rel)).join("、") : e.w + " 個場景"}`;
-      const soft = crowded && G.mode === "rel" && middle && e.a !== middle && e.b !== middle;
+      // many people: only the middle person's labels show, others on hover — except two identities of one person,
+      // a reveal the reader needs to see
+      const soft = crowded && G.mode === "rel" && middle && e.a !== middle && e.b !== middle && !same;
       const ask = (text, t0, size) => reqs.push({k, e, h, text, t0, size, soft, w: e.w});
       if (main) {
         const tag = change ? "（變）" : fresh ? "（新）" : "";
-        if (same) ask(`＝ 同一人${tag}`, 0.5, 14);
+        if (same) ask(`＝ ${main.rel}${main.certainty === "inferred" ? "（推測）" : ""}${tag}`, 0.5, 14);
         else if (directed(main)) {  // two different roles (父親／女兒): each written next to its person
           [[main.a, main.a_is], [main.b, main.b_is]].forEach(([who, role]) => ask(role, who === e.a ? 0.3 : 0.7, 14));
           if (more || tag) ask(`${more ? "＋" + more : ""}${tag}`, 0.5, 12);
         } else ask(`${main.rel}${more ? " ＋" + more : ""}${tag}`, 0.5, 14);
       }
-      const stroke = same
-        ? `<path d="${dpath}" fill="none" stroke="var(--accent)" stroke-width="7" stroke-opacity=".9"/><path d="${dpath}" fill="none" stroke="var(--panel)" stroke-width="3"/>`
+      const stroke = same  // a double line; dashed when it is inferred
+        ? `<path d="${dpath}" fill="none" stroke="var(--accent)" stroke-width="7" stroke-opacity=".9"${main.certainty === "inferred" ? ` stroke-dasharray="10 6"` : ""}/><path d="${dpath}" fill="none" stroke="var(--panel)" stroke-width="3"/>`
         : `<path d="${dpath}" fill="none" stroke="${color}" stroke-opacity="${alpha}" stroke-width="${width}"${dash}/>`;
       parts.push({pk, op, head: `<path d="${dpath}" fill="none" stroke="transparent" stroke-width="12"/>${stroke}<title>${title}</title>`, labels: ""});
     });
@@ -748,7 +752,7 @@ async function graphView(id) {
       <span><svg width="36" height="10"><line x1="0" y1="5" x2="36" y2="5" stroke="var(--muted)" stroke-width="3"/></svg> 身分（親屬、師生、婚約…）</span>
       <span><svg width="36" height="10"><line x1="0" y1="5" x2="36" y2="5" stroke="var(--muted)" stroke-width="3" stroke-dasharray="6 5"/></svg> 情感、立場（好友、愛慕、敵對…）</span>
       <span><svg width="36" height="10"><line x1="0" y1="5" x2="36" y2="5" stroke="var(--accent)" stroke-width="3"/></svg> 這一步新出現（新）或改變（變）</span>
-      <span><svg width="36" height="12"><line x1="0" y1="6" x2="36" y2="6" stroke="var(--accent)" stroke-width="7"/><line x1="0" y1="6" x2="36" y2="6" stroke="var(--panel)" stroke-width="3"/></svg> 揭曉是同一人</span>
+      <span><svg width="36" height="12"><line x1="0" y1="6" x2="36" y2="6" stroke="var(--accent)" stroke-width="7"/><line x1="0" y1="6" x2="36" y2="6" stroke="var(--panel)" stroke-width="3"/></svg> 同一人的不同身分（虛線＝推測）</span>
       <span>線越粗＝一起出場越多；淡色＝推測；＋N＝還有 N 個關係（點線看全部）${fading ? "；淡化的人＝最近 8 個場景沒出場" : ""}</span></div>` : "";
   view.innerHTML = `<div class="row" style="align-items:center;margin-bottom:10px;gap:10px">
       <div class="seg"><button data-m="rel" class="${G.mode === "rel" ? "on" : ""}">關係</button><button data-m="talk" class="${G.mode === "talk" ? "on" : ""}">一起出場</button><button data-m="addr" class="${G.mode === "addr" ? "on" : ""}">誰怎麼叫誰</button></div>
@@ -785,7 +789,7 @@ function graphSide(d, nm, upto, pairScenes, addr, cnt) {
         const ended = r.until != null && r.until <= upto, ev = (r.evidence || []).find(e => e.at <= upto);
         return `<div class="small" style="margin-top:6px${ended ? ";opacity:.6" : ""}"><span class="mono">${r.at < 0 ? "前集" : "§" + r.at}${ended ? "–§" + r.until : " 起"}</span>
           <strong>${esc(r.rel)}</strong>${directed(r) ? `（${esc(nm(r.a))}是${esc(r.a_is)}，${esc(nm(r.b))}是${esc(r.b_is)}）` : ""}
-          ${chip(r.kind === "feeling" ? "c-warn" : "c-acc", r.kind === "feeling" ? "情感" : "身分")}${r.certainty === "inferred" ? chip("c-warn", "推測") : ""}${ended ? chip("c-unk", "已結束") : ""}
+          ${kindChip(r)}${r.certainty === "inferred" ? chip("c-warn", "推測") : ""}${ended ? chip("c-unk", "已結束") : ""}
           ${ev ? `<div style="margin-top:2px">${bi(ev.quote, ev.zh, "small")}</div>` : ""}</div>`; }).join("") || '<div class="muted">—</div>'}</div>
       <div style="margin-top:8px"><div class="muted small">互相怎麼稱呼（依首次出現）</div>${between.map(t => `<div>${esc(nm(t.speaker))} → ${esc(nm(t.to))}：<span class="ja">${esc(t.ja)}</span>（${esc(t.zh || "")}）<span class="muted small">${t.at < 0 ? "前集" : "§" + t.at}・×${t.uses}</span></div>`).join("") || '<div class="muted">—</div>'}</div>
       <div style="margin-top:8px"><div class="muted small">相關事實</div>${facts.map(f => `<div class="small">${esc(nm(f.who))} ${esc(f.predicate)}：${esc(f.object)} ${chip(f.certainty === "explicit" ? "c-ok" : "c-warn", f.certainty === "explicit" ? "明寫" : "推測")}<div class="muted">${bi(f.quote, f.quote_zh)}</div></div>`).join("") || '<div class="muted">—</div>'}</div>
