@@ -42,7 +42,7 @@ async function route() {
     if (b === "settings") { $("#tabs").hidden = true; $("#posbar").hidden = true; $("#crumb").textContent = "設定"; return await settingsView(); }
     if (b !== "b" || !id) { $("#tabs").hidden = true; $("#posbar").hidden = true; $("#crumb").textContent = ""; return await libraryView(); }
     const tabs = $("#tabs"); tabs.hidden = false;
-    tabs.innerHTML = TABS.map(t => t.length === 1 ? `<span class="grp">${t[0]}</span>`
+    tabs.innerHTML = TABS.map((t, i) => t.length === 1 ? (i ? `<span class="sep"></span>` : "")
       : `<a href="#/b/${id}/${t[0]}" class="${t[0] === tab ? "on" : ""}">${t[1]}</a>`).join("");
     $("#posbar").hidden = !READING.has(tab);
     const ov = await loadBook(id, "overview");
@@ -54,17 +54,25 @@ async function route() {
 
 // ------------------------------------------------------------ library
 async function libraryView() {
-  const lib = await api("library");
-  view.innerHTML = `<h2>書庫</h2>
+  const [lib, k] = await Promise.all([api("library"), api("settings")]);
+  const hasBook = lib.some(s => s.volumes.length);
+  // first steps, shown until there is a key and a book: what to do, in order
+  const step = (n, done, title, body) => `<div class="step ${done ? "done" : ""}"><span class="num">${done ? "✓" : n}</span><div><strong>${title}</strong><div class="small muted">${body}</div></div></div>`;
+  const guide = k.set && hasBook ? "" : `<div class="card steps"><strong>開始使用</strong>
+      ${step(1, k.set, "設定 OpenRouter 金鑰", k.set ? "已設定。" : `NCTE 透過 OpenRouter 使用翻譯模型，費用從你的 OpenRouter 帳戶扣。<a href="#/settings">去設定</a>（一本輕小說約 US$5）。`)}
+      ${step(2, hasBook, "加入一本日文 EPUB", "把沒有 DRM 的日文 EPUB 拖到下面的框裡。檔案只存在這台電腦。")}
+      ${step(3, false, "看估價，開始翻譯", "打開書以後會先估價（費用、時間），按「開始翻譯」就會自動讀完整本再翻，中途可以暫停。")}</div>`;
+  const status = v => v.translatable == null ? chip("c-unk", "找不到資料夾") : v.translatable && v.translated >= v.translatable ? chip("c-ok", "翻譯完成")
+    : v.translated ? chip("c-acc", "翻譯到一半") : v.read ? chip("c-acc", "讀完一部分") : chip("c-unk", "還沒開始");
+  view.innerHTML = `<h2>書庫</h2>${guide}
     <div class="card drop" id="drop"><strong>加入一本書</strong>
-      <p class="muted small">把日文 EPUB（無 DRM）拖到這裡，或 <label class="link">選擇檔案<input type="file" id="file" accept=".epub" hidden></label>。檔案只存在這台電腦。</p>
-      <div id="upl"></div></div>` + (lib.map(s => `<div class="card"><strong>${esc(s.title)}</strong>
-    <span class="muted small">　${s.volumes.length} 集</span>
+      <p class="muted">把日文 EPUB（無 DRM）拖到這裡，或 <label class="link">選擇檔案<input type="file" id="file" accept=".epub" hidden></label>。檔案只存在這台電腦。</p>
+      <div id="upl"></div></div>` + (lib.map(s => `<div class="card book">${s.volumes.length === 1 && s.volumes[0].title.startsWith(s.title) ? "" : `<div class="book-h"><strong>${esc(s.title)}</strong>
+    ${s.volumes.length > 1 ? `<span class="muted small">共 ${s.volumes.length} 集</span>` : ""}</div>`}
     ${s.volumes.map(v => { const p = v.translatable ? Math.round(100 * v.translated / v.translatable) : 0;
-      return `<div style="margin-top:8px"><a href="#/b/${esc(v.book_id)}/overview">第 ${v.volume_index} 集　${esc(v.title)}</a>
-      <span class="muted small">　${v.translatable == null ? "（找不到資料夾）" : `${v.translated} / ${v.translatable} 段`}</span>
-      <div class="bar"><i style="width:${p}%"></i></div></div>`; }).join("")}</div>`).join("")
-    || `<p class="muted">書庫是空的。先在上面加入一本書。</p>`);
+      return `<a class="vol" href="#/b/${esc(v.book_id)}/overview"><span class="vol-t ${s.volumes.length === 1 ? "solo" : ""}">${s.volumes.length > 1 ? `第 ${v.volume_index} 集　` : ""}${esc(v.title)}</span>
+      ${status(v)}<span class="muted small">${v.translatable == null ? "" : `${p}%（${v.translated} / ${v.translatable} 段）`}</span>
+      <div class="bar"><i style="width:${p}%"></i></div></a>`; }).join("")}</div>`).join(""));
   const drop = $("#drop"), file = $("#file");
   file.onchange = () => file.files[0] && upload(file.files[0]);
   drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
@@ -102,17 +110,22 @@ async function upload(f) {
 async function settingsView() {
   const k = await api("settings");
   const fal = k.provider === "fal", label = fal ? "fal" : "OpenRouter";
-  view.innerHTML = `<h2>設定</h2><div class="card"><strong>連線方式</strong>
-    <p><select id="provider"><option value="openrouter" ${fal ? "" : "selected"}>直連 OpenRouter</option>
-    <option value="fal" ${fal ? "selected" : ""}>透過 fal 連 OpenRouter</option></select> <button class="btn" id="saveProvider">套用</button></p>
-    <p class="small muted">新任務使用此設定；續譯沿用原任務的連線方式。</p>
-    ${fal ? `<p class="small">費用由 fal 結算；估價參考 OpenRouter 價目，實際帳單以 fal 為準。此處不提供 fal 餘額查詢。</p>` : ""}</div>
+  view.innerHTML = `<h2>設定</h2>
     <div class="card"><strong>${label} 金鑰</strong>
-    <p class="small">${k.set ? `已設定（結尾 ${esc(k.hint)}）` : `尚未設定。到 ${fal ? "fal.ai" : "openrouter.ai"} 建立金鑰，貼在下面。`}</p>
+    ${fal ? "" : `<p>NCTE 透過 <a href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter</a> 使用翻譯模型（Gemini），費用從你的 OpenRouter 帳戶扣，NCTE 不另外收費。</p>
+      <ol class="small"><li>到 <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a> 登入並建立一把金鑰（以 sk-or- 開頭）。</li>
+      <li>到 <a href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener">Credits</a> 儲值；一本輕小說約 US$5。</li>
+      <li>把金鑰貼在下面，按儲存。</li></ol>`}
+    <p>${k.set ? `${chip("c-ok", "已設定")} 結尾 ${esc(k.hint)}` : chip("c-warn", "尚未設定")}</p>
     <p><input type="password" id="key" size="48" placeholder="${fal ? "FAL_KEY" : "sk-or-…"}" autocomplete="off"> <button class="btn primary" id="saveKey">儲存</button></p>
     <p class="muted small">只存在這台電腦的 ${esc(k.file)}，不會顯示在畫面上，也不會寫進紀錄。</p>
-    <div id="bal" class="small"></div></div>
-    <div class="card"><strong>翻譯設定</strong><p class="small">模型與推理程度用預設（目前測試結果最好的組合），不需要選。預算上限會依每本書的估價自動設定。</p></div>`;
+    <div id="bal"></div></div>
+    <div class="card"><strong>翻譯設定</strong><p>模型與推理程度用預設（目前測試結果最好的組合），不需要選。預算上限會依每本書的估價自動設為 2 倍，到了會先停下來問你。</p></div>
+    <details class="card" ${fal ? "open" : ""}><summary><strong>進階：連線方式</strong> <span class="muted small">一般不用改</span></summary>
+    <p><select id="provider"><option value="openrouter" ${fal ? "" : "selected"}>直連 OpenRouter（建議）</option>
+    <option value="fal" ${fal ? "selected" : ""}>透過 fal 連 OpenRouter</option></select> <button class="btn" id="saveProvider">套用</button></p>
+    <p class="small muted">新任務使用此設定；續譯沿用原任務的連線方式。</p>
+    ${fal ? `<p class="small">費用由 fal 結算；估價參考 OpenRouter 價目，實際帳單以 fal 為準。此處不提供 fal 餘額查詢。</p>` : ""}</details>`;
   $("#saveProvider").onclick = async () => {
     try { await api("settings/provider", {provider: $("#provider").value}); toast("已套用"); settingsView(); }
     catch (e) { toast(e.message); }
@@ -121,10 +134,10 @@ async function settingsView() {
     try { await api("settings/key", {key: $("#key").value}); toast("已儲存"); settingsView(); }
     catch (e) { toast(e.message); }
   };
-  if (k.set) {
+  if (k.set && !fal) {
     $("#bal").textContent = "查詢餘額…";
     try { const b = await api("balance");
-      $("#bal").innerHTML = [b.account_usd != null ? `帳戶餘額 US$${b.account_usd.toFixed(2)}` : "",
+      $("#bal").innerHTML = [b.account_usd != null ? `帳戶餘額 <b>US$${b.account_usd.toFixed(2)}</b>` : "",
         b.key_limit_usd != null ? `這把金鑰還能用 US$${b.key_limit_usd.toFixed(2)}` : ""].filter(Boolean).join("　") || "查不到餘額";
     } catch (e) { $("#bal").textContent = "查不到餘額：" + e.message; }
   }
@@ -145,15 +158,16 @@ let poll = null;
 async function overviewView(id) {
   const o = await loadBook(id, "overview");
   const stat = (label, v, extra = "") => `<div class="card stat"><span class="muted small">${label}</span><b>${v}</b>${extra}</div>`;
-  view.innerHTML = `<div class="card" id="runcard"><p class="muted">讀取翻譯狀態…</p></div><div class="row">
-    ${stat("已翻譯", `${o.translated} / ${o.translatable}`)}${stat("已花費", "US$" + o.spent_usd.toFixed(2))}
+  // before anything is translated the counts are all zero: only the start card
+  view.innerHTML = `<div class="card" id="runcard"><p class="muted">讀取翻譯狀態…</p></div>${!o.translated && !o.runs.length ? "" : `<div class="row">
+    ${stat("已翻譯", `${o.translatable ? Math.round(100 * o.translated / o.translatable) : 0}%`, `<span class="small muted">${o.translated} / ${o.translatable} 段</span>`)}${stat("這本書總共花費", "US$" + o.spent_usd.toFixed(2), `<span class="small muted">所有執行加總</span>`)}
     ${stat("有疑點的段落", o.flagged_units, `<a class="small" href="#/b/${id}/review?f=flagged">去看</a>`)}
     ${stat("可再確認的譯法", o.pending_names, `<a class="small" href="#/b/${id}/names">去看看</a>`)}
     ${stat("說話者未定", o.unknown_speakers)}${stat("譯註", o.notes)}${stat("人工修改", o.human_edits)}</div>
     <details class="card"><summary><strong>執行紀錄</strong></summary><div class="scroll"><table><tr><th>run</th><th>模式</th><th>模型</th><th>狀態</th><th>待處理</th><th>費用</th></tr>
     ${o.runs.map(r => `<tr><td class="mono small">${esc(r.id)}</td><td>${esc(r.mode)}</td><td>${esc(r.model)}</td>
       <td>${esc(RUNSTATUS[r.status] || r.status)}</td><td class="mono">${r.pending}</td><td class="mono">$${(r.cost_usd || 0).toFixed(3)}</td></tr>`).join("")}
-    </table></div></details>`;
+    </table></div></details>`}`;
   await runCard(id, o);
 }
 async function runCard(id, o) {
@@ -163,17 +177,32 @@ async function runCard(id, o) {
   const money = v => "US$" + (+v || 0).toFixed(2);
   const bars = (p.stages || []).map(s => { const pc = Math.round(100 * s.done / s.total);
     return `<div class="small" style="margin-top:6px">${esc(s.label)}　${s.done} / ${s.total}${s.failed ? `　<span class="issue">失敗 ${s.failed}</span>` : ""}<div class="bar"><i style="width:${pc}%"></i></div></div>`; }).join("");
-  const exportBtns = o.translated ? `<button class="btn" id="exp">匯出 EPUB</button> <span id="expres" class="small"></span>` : "";
+  const exportBtns = o.translated ? `<button class="btn ${r && r.status === "completed" ? "primary big" : ""}" id="exp">匯出並下載 EPUB</button> <span id="expres" class="small"></span>` : "";
+  // where the run is, in words, and about how long is left (from the share of the work done so far)
+  const WEIGHT = {read: .36, verify: .01, cast: .02, naming: .01, translate: .55, review: .02, reader: .05};
+  const stages = p.stages || [], cur = stages.find(s => s.done < s.total);
+  const SAY = {read: s => `讀全書：第 ${s.done + 1} / ${s.total} 項（先讀完整本，這時還看不到譯文）`, verify: () => "讀完了，正在覆核有疑點的地方",
+    cast: () => "整理人物關係與角色印象", naming: () => "決定名字與稱呼的譯法", translate: s => `翻譯：${s.done} / ${s.total} 批`,
+    review: () => "審稿：重看被標出問題的段落", reader: () => "像讀者一樣把譯文讀一遍，修正讀不順的地方"};
+  const share = stages.reduce((n, s) => n + (WEIGHT[s.key] || 0) * s.done / s.total, 0) / Math.max(.01, stages.reduce((n, s) => n + (WEIGHT[s.key] || 0), 0));
+  const elapsed = r && r.started_at ? (Date.now() - Date.parse(r.started_at)) / 60000 : 0;
+  const left = share > .03 && elapsed > 1 ? Math.max(1, Math.round(elapsed / share - elapsed)) : null;
+  const now = cur ? (SAY[cur.key] || (() => cur.label))(cur) : "收尾中";
   let body;
   if (p.busy) {
-    body = `<strong>翻譯中</strong>　<span class="muted small">已花 ${money(r.spent_usd)}／上限 ${money(r.budget_usd)}</span>
-      <p class="muted small">先讀完整本（說話者、角色、稱呼、劇情）再定名、翻譯；讀的階段還看不到譯文。可以關掉這個分頁，但不要關掉 NCTE 視窗。</p>
-      ${bars}<pre class="log small">${esc((p.log || []).join("\n"))}</pre><button class="btn" id="pause">暫停</button>`;
+    body = `<div class="run-now"><strong>翻譯中</strong><span>${esc(now)}</span></div>
+      <div class="run-meta">已花 <b>${money(r.spent_usd)}</b>（上限 ${money(r.budget_usd)}）${left ? `・大約還要 <b>${left < 60 ? left + " 分鐘" : (left / 60).toFixed(1) + " 小時"}</b>` : ""}・已進行 ${Math.round(elapsed)} 分鐘</div>
+      ${bars}<p class="muted small">可以關掉這個分頁，但不要關掉 NCTE 視窗。暫停後按「繼續翻譯」會從停下的地方接著做。</p>
+      <button class="btn" id="pause">暫停</button>
+      <details class="small"><summary class="muted">詳細紀錄（給除錯用）</summary><pre class="log">${esc((p.log || []).join("\n"))}</pre></details>`;
   } else if (!r) {
     const k = await api("settings");
-    body = `<strong>開始翻譯</strong><div id="est" class="small muted">估價中…</div>
-      ${k.set ? "" : `<p class="issue">還沒設定目前連線方式的金鑰：<a href="#/settings">去設定</a></p>`}
-      <button class="btn primary" id="start" disabled>開始翻譯</button>`;
+    body = `<strong class="big-title">開始翻譯</strong><div id="est" class="est">估價中…</div>
+      <ol class="flow small"><li>先把整本讀完：誰在說話、對誰說、角色、稱呼、人物關係（這時還看不到譯文）</li>
+        <li>決定名字與稱呼的譯法（自動，不會停下來問）</li><li>一個場景一個場景翻譯，翻完自動檢查、審稿</li></ol>
+      <p class="small muted">讀的過程中，「故事進度」「角色檔案」「人物關係圖」會一路長出內容。中途可以暫停，之後接著做。</p>
+      ${k.set ? "" : `<p class="issue">還沒設定金鑰：<a href="#/settings">去設定</a></p>`}
+      <button class="btn primary big" id="start" disabled>開始翻譯</button>`;
   } else {
     const st = RUNSTATUS[r.status] || r.status;
     let action = "";
@@ -183,7 +212,7 @@ async function runCard(id, o) {
         <button class="btn primary" data-go data-budget="${Math.max(more, r.budget_usd + 1)}">把上限提高到 ${money(Math.max(more, r.budget_usd + 1))} 並繼續</button>`; }
     else if (r.status === "running_elsewhere") action = `<p class="small">${esc(p.elsewhere.source)}（pid ${esc(p.elsewhere.pid)}）正在翻譯這本書；這裡不能同時繼續，等它結束或在那邊暫停後再回來。</p>`;
     else if (r.status !== "completed") action = `<button class="btn primary" data-go>繼續翻譯</button>`;
-    body = `<strong>${esc(st)}</strong>　<span class="muted small">已花 ${money(r.spent_usd)}／上限 ${money(r.budget_usd)}</span>
+    body = `<div class="run-now"><strong>${esc(st)}</strong><span class="muted small">最近一次執行：花 ${money(r.spent_usd)}（上限 ${money(r.budget_usd)}）</span></div>
       ${p.error ? `<p class="issue">${esc(p.error)}</p>` : ""}${r.status === "stopped_fatal" ? `<p class="small">如果是餘額不足，儲值後按繼續即可。</p>` : ""}
       ${bars}<div style="margin-top:10px">${action} ${exportBtns}</div>`;
   }
@@ -207,7 +236,10 @@ async function runCard(id, o) {
   });
   if ($("#est")) {
     try { const e = await api(`book/${id}/estimate`, {});
-      $("#est").innerHTML = `${e.units} 段要翻譯。預估約 <b>${money(e.estimate_usd)}</b>${e.calibrated ? "（依你之前的實際花費校正）" : "（保守估計）"}；上限自動設為 ${money(e.budget_usd)}，到了會先問你。`;
+      const lo = Math.max(5, Math.round(e.units * .025)), hi = Math.max(10, Math.round(e.units * .035));
+      const t = m => m < 60 ? `${m} 分鐘` : `${(m / 60).toFixed(1)} 小時`;
+      $("#est").innerHTML = `<div><b>${e.units}</b> 段要翻譯</div><div>預估費用約 <b>${money(e.estimate_usd)}</b>${e.calibrated ? "（依你之前的實際花費校正）" : "（保守估計）"}</div>
+        <div>預估時間約 <b>${t(lo)}–${t(hi)}</b></div><div class="small muted">預算上限自動設為 ${money(e.budget_usd)}，到了會先停下來問你。</div>`;
       const k = await api("settings"); $("#start").disabled = !k.set || !e.units;
     } catch (err) { $("#est").textContent = "無法估價：" + err.message; }
   }
@@ -401,7 +433,7 @@ async function storyView(id) {
       <details data-a="${s.a}" data-b="${s.b}"><summary class="small muted">看這個場景的原文與譯文</summary><div class="body muted small">載入中…</div></details></div>`; }).join("");
   view.innerHTML = `<div class="card scroll"><strong>誰在哪一章出場</strong> <span class="muted small">數字＝場景數；點名字看角色檔案</span>
     <div class="grid" style="grid-template-columns:110px repeat(${usedCh.length},minmax(30px,1fr));margin-top:8px">${grid}</div></div>
-    <p class="muted small">摘要是模型整理的，可能有誤；展開可對照原文。封面、目次、後記等書籍資訊不列入。</p>${list || "<p>還沒讀到任何場景。</p>"}`;
+    <p class="muted small">摘要是模型整理的，可能有誤；展開可對照原文。封面、目次、後記等書籍資訊不列入。</p>${list || `<p class="muted">還沒讀到任何場景。開始翻譯後，引擎每讀完一個場景，這裡就會多一則摘要。</p>`}`;
   view.querySelectorAll("[data-p]").forEach(e => e.onclick = () => { peopleState.person = e.dataset.p; location.hash = `#/b/${id}/people`; });
   if (storyJump) { const el = document.getElementById("scene-" + storyJump); storyJump = null;
     if (el) { el.scrollIntoView({block: "center"}); el.style.outline = "2px solid var(--accent)"; } }
@@ -424,7 +456,7 @@ async function peopleView(id) {
   if (!peopleState.person || !d.characters[peopleState.person] || d.characters[peopleState.person].from > upto)
     peopleState.person = (groups.main[0] || groups.sub[0] || [])[0];
   const btn = ([k, c]) => `<button data-k="${esc(k)}" class="${k === peopleState.person ? "on" : ""}">${esc(c.zh)}<span class="cnt">${c.scenes}</span></button>`;
-  let card = "<p>沒有角色。</p>";
+  let card = `<p class="muted">還沒有角色。讀的階段會一路記下角色，讀完整本後這裡會列出每個人的稱呼、關係與事實。</p>`;
   const p = d.characters[peopleState.person];
   if (p) {
     const pid = peopleState.person;
@@ -814,9 +846,13 @@ async function glossaryView(id) {
       <tr><th>說話者 → 對象</th><th>稱呼</th><th>譯法</th><th>次數</th></tr>
       ${d.address.map(a => `<tr><td>${esc(nm(a.speaker))} → ${a.speaker === a.to ? "（自稱）" : esc(nm(a.to))}</td><td class="ja">${esc(a.ja)}</td>
         <td>${esc(a.zh || "")} ${a.origin === "human" ? chip("c-ok", "人工") : a.origin === "naming" ? chip("c-acc", "定名") : ""}</td><td class="mono">${a.uses}</td></tr>`).join("")}</table></div></div></div>`;
-  const draw = q => { $("#gt").innerHTML = `<tr><th>日文</th><th>譯名</th><th>類別</th><th>狀態</th></tr>` + g.filter(x => !q || x.ja.includes(q) || x.zh.includes(q))
-    .map(x => `<tr><td class="ja">${esc(x.ja)}</td><td>${esc(x.zh)}</td><td class="muted small">${esc(x.category)}</td>
-      <td>${x.verified ? chip("c-ok", "已確認") : chip("c-unk", esc(x.origin))}</td></tr>`).join(""); };
+  // the program's own words for where a rendering came from, in plain Chinese
+  const CAT = {character: "人物", place: "地名", item: "物品", term: "名詞", organization: "組織", group: "群體", title: "稱號", skill: "技能", creature: "生物", event: "事件"};
+  const ORIGIN = {user: "你設定的", human: "你設定的", naming: "定名", memory_update: "讀的時候記下", scene_analysis: "讀的時候記下",
+    scene_analyze: "讀的時候記下", glossary: "名詞表", series: "前一集"};
+  const draw = q => { $("#gt").innerHTML = `<tr><th>日文</th><th>譯名</th><th>類別</th><th>來源</th></tr>` + g.filter(x => !q || x.ja.includes(q) || x.zh.includes(q))
+    .map(x => `<tr><td class="ja">${esc(x.ja)}</td><td>${esc(x.zh)}</td><td class="muted small">${esc(CAT[x.category] || x.category)}</td>
+      <td>${x.verified ? chip("c-ok", "已確認") : chip("c-unk", ORIGIN[x.origin] || x.origin)}</td></tr>`).join(""); };
   draw(""); $("#gq").oninput = e => draw(e.target.value.trim());
 }
 

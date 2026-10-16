@@ -42,7 +42,8 @@ def library(ws: Any) -> list[dict[str, Any]]:
                 vols.append({**v, "translated": None, "translatable": None})
                 continue
             total = conn.execute("SELECT COUNT(*) FROM units WHERE book_id=? AND translatable=1", (book.id,)).fetchone()[0]
-            vols.append({**v, "translatable": total, "translated": len(latest_texts(conn, book.id))})
+            read = conn.execute("SELECT COUNT(*) FROM scenes WHERE book_id=? AND version>0", (book.id,)).fetchone()[0]
+            vols.append({**v, "translatable": total, "translated": len(latest_texts(conn, book.id)), "read": read})
         out.append({**s, "volumes": vols})
     return out
 

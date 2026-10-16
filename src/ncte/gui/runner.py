@@ -189,7 +189,7 @@ class Runner:
                     self._left[row["id"]] = 0.0
             left = self._left[row["id"]]
         return {"run": {"id": row["id"], "status": status, "budget_usd": row["budget_usd"], "spent_usd": round(spent, 4),
-                        "left_usd": left, "model": row["model"]},
+                        "left_usd": left, "model": row["model"], "started_at": row["started_at"]},
                 "stages": stages, "busy": live, "other_busy": (self.busy and not live) or elsewhere is not None,
                 "elsewhere": elsewhere,
                 "log": list(self.log)[-8:] if live or self.run_id == row["id"] else [],
