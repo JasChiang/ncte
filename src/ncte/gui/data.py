@@ -199,6 +199,25 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
         f"SELECT speaker_id_nullable sp, scene_id FROM utterances WHERE {SERIES_SCOPE} AND sp IS NOT NULL", (book.id,))
         if u["scene_id"] in in_story)
     chars = {r["id"]: r for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book.id,))}
+    # every source quote shown with the translation of its paragraph, so the page reads in both languages
+    best = latest_texts(conn, book.id)
+    texts = {u["ordinal"]: (RUBY.sub("", plain(u["plain_text"])), plain(best[u["id"]]["text"]) if u["id"] in best else None)
+             for u in conn.execute("SELECT id, ordinal, plain_text FROM units WHERE book_id=?", (book.id,))}
+
+    def zh_of(quote: str | None, at: int | None) -> str | None:
+        """The translation of the paragraph the quote is from: near where it was cited (a note may quote a later
+        paragraph than the one it starts at), else the paragraph at that position."""
+        if at is None or at < 0:
+            return None
+        key = RUBY.sub("", plain(quote or "")).strip("「」『』　 ")[:12]
+        if key:
+            for o in sorted(range(at - 3, at + 80), key=lambda o: abs(o - at)):
+                t = texts.get(o)
+                if t and key in t[0]:
+                    return t[1]
+        return (texts.get(at) or (None, None))[1]
+    rendering = {g["source_term"]: g["target_term"] for g in conn.execute(
+        f"SELECT source_term, target_term FROM glossary WHERE {SERIES_SCOPE}", (book.id,))}
     facts: dict[str, list[dict[str, Any]]] = defaultdict(list)
     from ..series import volume_of as _vol
     from ..series import volumes as _vols
@@ -216,11 +235,12 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
             facts[f["subject"]].append({"at": f["first_revealed_ordinal"] if fv == _here else -1,
                                         "predicate": _names(f["predicate"]), "object": _names(f["object"]),
                                         "type": f["fact_type"], "certainty": f["certainty"],
-                                        "viewpoint": _names(f["source_viewpoint"] or "") or None, "quote": RUBY.sub("", f["evidence_quote"] or "")})
+                                        "viewpoint": _names(f["source_viewpoint"] or "") or None, "quote": RUBY.sub("", f["evidence_quote"] or ""),
+                                        "quote_zh": zh_of(f["evidence_quote"], f["first_revealed_ordinal"]) if fv == _here else None})
     examples: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for e in conn.execute("SELECT e.character_id, e.raw_text, u.ordinal FROM speech_examples e JOIN units u ON "
                           "u.id=e.unit_id WHERE u.book_id=? ORDER BY u.ordinal", (book.id,)):
-        examples[e["character_id"]].append({"at": e["ordinal"], "text": RUBY.sub("", e["raw_text"])})
+        examples[e["character_id"]].append({"at": e["ordinal"], "text": RUBY.sub("", e["raw_text"]), "zh": zh_of(e["raw_text"], e["ordinal"])})
     matter_first = {c["start"]: c["kind"] for c in st["chapters"]}
     from ..series import volume_of, volumes
 
@@ -247,8 +267,9 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
         cv = vols.get(c["book_id"], 1.0)
         if cv > here or (c["book_id"] != book.id and not scene_count.get(cid) and not series):
             continue
-        out[cid] = {"ja": c["canonical_name"], "zh": c["display_name_zh"] or c["canonical_name"],
-                    "aka": json.loads(c["aliases_json"] or "[]"), "from": c["known_from_ordinal"] if cv == here else -1,
+        # the name as the translation writes it: the glossary's rendering (your choice included) over the card's own
+        out[cid] = {"ja": c["canonical_name"], "zh": rendering.get(c["canonical_name"]) or c["display_name_zh"] or c["canonical_name"],
+                    "aka": [{"ja": a, "zh": rendering.get(a)} for a in json.loads(c["aliases_json"] or "[]")], "from": c["known_from_ordinal"] if cv == here else -1,
                     "scenes": scene_count.get(cid, 0), "lines": lines.get(cid, 0), "facts": facts.get(cid, []),
                     "examples": examples.get(cid, [])[:6], "first_person": first_person[cid].most_common(4),
                     "info": cv == here and info(c["known_from_ordinal"])}  # earlier volumes: never book matter here
@@ -264,7 +285,7 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
         g = genders.get(cid)
         if g is not None and vols.get(g["book_id"], 1.0) <= here:
             out[cid]["gender"] = {"g": g["gender"], "sure": "human" if g["origin"] == "human" else g["certainty"],
-                                  "quote": RUBY.sub("", g["evidence_quote"] or ""),
+                                  "quote": RUBY.sub("", g["evidence_quote"] or ""), "quote_zh": zh_of(g["evidence_quote"], g["ordinal"]),
                                   "at": g["ordinal"] if vols.get(g["book_id"], 1.0) == here else -1}
     from ..memory.address import usage_of
 
@@ -298,7 +319,8 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
                      "at": r["since_ordinal"] if this else -1,
                      "until": (r["until_ordinal"] if this else -1) if r["until_ordinal"] is not None else None,
                      "kind": r["kind"] or "identity", "certainty": r["certainty"] or "explicit", "origin": r["origin"],
-                     "reason": r["reason"], "evidence": [{"quote": q, "at": o if this else -1} for q, o in ev[:3]]})
+                     "reason": r["reason"], "evidence": [{"quote": q, "zh": zh_of(q, o) if this else None, "at": o if this else -1}
+                                                          for q, o in ev[:3]]})
     return {"characters": out, "address": address, "relations": rels, "scenes": st["scenes"], "chapters": st["chapters"]}
 
 

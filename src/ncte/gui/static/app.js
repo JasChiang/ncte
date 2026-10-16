@@ -361,13 +361,15 @@ async function namesView(id) {
 }
 
 // ------------------------------------------------------------ reading (spoiler-aware)
-let POSIDX = null;
+let POSIDX = null, AT_LINK = null;
 async function readingData(id) { return readingDataFor(id, "characters"); }
 async function readingDataFor(id, what) {
   const d = await loadBook(id, what);
   const pos = $("#pos"), story = d.scenes.filter(s => s.story && s.a >= 0);
   pos.max = story.length;
-  const at = location.hash.match(/[?&]at=(\d+)/); if (at && POSIDX == null) POSIDX = +at[1];  // a link to a point in the story
+  // a link to a point in the story (?at=): applied whenever the link changes, so the slider still moves freely after it
+  const at = location.hash.match(/[?&]at=(\d+)/);
+  if (at && at[0] !== AT_LINK) { POSIDX = +at[1]; } AT_LINK = at ? at[0] : null;
   if (POSIDX == null || POSIDX > story.length) POSIDX = story.length;
   pos.value = POSIDX;
   const upto = POSIDX >= story.length ? Infinity : story[POSIDX].a - 1;
@@ -433,7 +435,7 @@ async function peopleView(id) {
     const ftype = {objective: "客觀", character_belief: "角色認為", narrator_claim: "敘述者說"};
     card = `<div class="row" style="align-items:baseline;gap:10px"><h2 style="margin:0">${esc(p.zh)}</h2><span class="ja">${esc(p.ja)}</span>
       <span class="muted small">初登場 §${p.from}・出場 ${p.scenes} 場景・台詞 ${p.lines} 句</span></div>
-      ${p.aka.length ? `<div class="muted small">其他稱呼：<span class="ja">${p.aka.map(esc).join("・")}</span></div>` : ""}
+      ${p.aka.length ? `<div class="muted small">其他稱呼：${p.aka.map(a => `<span class="ja">${esc(a.ja)}</span>${a.zh && a.zh !== a.ja ? `（${esc(a.zh)}）` : ""}`).join("・")}</div>` : ""}
       ${(p.first_person || []).length ? `<div class="small" style="margin-top:4px">自稱：${p.first_person.map(([w, n]) => `<span class="form-tag"><span class="ja">${esc(w)}</span><span class="n">×${n}</span></span>`).join(" ")}</div>` : ""}
       ${genderLine(p, upto)}
       ${groupLine(p, d, nm)}
@@ -446,9 +448,9 @@ async function peopleView(id) {
         <div style="flex:1 1 320px"><div class="addr-h"><strong>別人怎麼叫他</strong><span class="muted small">左邊是說話的人</span></div>${byPerson(called, a => a.speaker, k => esc(nm(k))) || '<div class="muted">—</div>'}</div>
         <div style="flex:1 1 320px"><div class="addr-h"><strong>他怎麼叫別人</strong><span class="muted small">左邊是被叫的人</span></div>${byPerson(calls, a => a.to, k => k === pid ? "（提到自己）" : esc(nm(k))) || '<div class="muted">—</div>'}</div></div>
       <div style="margin-top:12px"><strong>常一起出場</strong><div>${Object.entries(co).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([o, k]) => `<a href="#" data-k="${esc(o)}">${esc(nm(o))}</a> <span class="muted small">${k}</span>`).join("　") || "—"}</div></div>
-      <div style="margin-top:12px"><strong>說話例句</strong>${EX.map(e => `<div class="ja">${esc(e.text)}</div>`).join("") || '<div class="muted">—</div>'}</div>
+      <div style="margin-top:12px"><strong>說話例句</strong> <span class="muted small">原文與該段譯文</span>${EX.map(e => `<div style="margin-top:6px">${bi(e.text, e.zh)}</div>`).join("") || '<div class="muted">—</div>'}</div>
       <div style="margin-top:12px"><strong>已知事實</strong> <span class="muted small">${F.length} 筆</span><div class="scroll"><table><tr><th>段</th><th>內容</th><th>類型</th><th>原文依據</th></tr>
-      ${F.map(f => `<tr><td class="mono small">${f.at}</td><td>${esc(f.predicate)}：${esc(f.object)}</td><td>${chip("c-acc", ftype[f.type] || f.type)}${chip(f.certainty === "explicit" ? "c-ok" : "c-warn", f.certainty === "explicit" ? "明寫" : "推測")}</td><td class="ja small">${esc(f.quote)}</td></tr>`).join("")}</table></div></div>`;
+      ${F.map(f => `<tr><td class="mono small">${f.at}</td><td>${esc(f.predicate)}：${esc(f.object)}</td><td>${chip("c-acc", ftype[f.type] || f.type)}${chip(f.certainty === "explicit" ? "c-ok" : "c-warn", f.certainty === "explicit" ? "明寫" : "推測")}</td><td class="small">${bi(f.quote, f.quote_zh)}</td></tr>`).join("")}</table></div></div>`;
   }
   view.innerHTML = `<div class="row" style="align-items:flex-start"><div class="card plist" style="flex:0 1 210px;max-height:80vh;overflow:auto">
     <div class="muted small">主要角色</div>${groups.main.map(btn).join("")}<div class="muted small" style="margin-top:8px">次要角色</div>${groups.sub.map(btn).join("")}
@@ -461,6 +463,10 @@ async function peopleView(id) {
     catch (e) { toast(e.message); } };
 }
 // relations of one person as known at the slider position (begun, not yet replaced), each with its source quote
+// a source line with the translation of its paragraph under it (both languages, for comparison)
+function bi(ja, zh, cls = "") {
+  return `<span class="bi ${cls}"><span class="ja">${esc(ja || "")}</span>${zh ? `<span class="zh">${esc(zh)}</span>` : ""}</span>`;
+}
 function groupLine(p, d, nm) {
   // a group card and who it is made of; a member shows the groups it belongs to (people not shown yet are left out)
   const link = ids => (ids || []).filter(k => d.characters[k]).map(k => `<a href="#" data-k="${esc(k)}">${esc(nm(k))}</a>`).join("・");
@@ -477,7 +483,7 @@ function relationList(d, pid, upto, nm) {
     const ev = (r.evidence || []).filter(e => e.at <= upto)[0];
     return `<tr><td><a href="#" data-k="${esc(other)}">${esc(nm(other))}</a></td><td>${esc(theirs || r.rel)}</td>
       <td>${chip(r.kind === "feeling" ? "c-warn" : "c-acc", r.kind === "feeling" ? "情感" : "身分")}${r.certainty === "inferred" ? chip("c-warn", "推測") : ""}${r.origin !== "llm" ? chip("c-ok", "人工") : ""}</td>
-      <td class="mono small">§${r.at}</td><td class="ja small">${ev ? esc(ev.quote) : ""}</td></tr>`;
+      <td class="mono small">§${r.at}</td><td class="small">${ev ? bi(ev.quote, ev.zh) : ""}</td></tr>`;
   }).join("");
   return `<div style="margin-top:12px"><strong>人物關係</strong> <span class="muted small">對方是他的什麼</span>
     <div class="scroll"><table><tr><th>對方</th><th>關係</th><th>類型</th><th>從</th><th>原文依據</th></tr>${rows}</table></div></div>`;
@@ -497,11 +503,11 @@ function genderLine(p, upto) {
   const g = p.gender && p.gender.at <= upto ? p.gender : null;
   const label = {female: "女", male: "男"}, sure = {explicit: ["c-ok", "原文明寫"], inferred: ["c-warn", "推測"], human: ["c-acc", "你設定的"]};
   const cur = g ? g.g : "unknown";
-  return `<div class="small" style="margin-top:4px">性別：${g ? `${label[g.g]} ${chip(...sure[g.sure])} ${g.quote ? `<span class="ja muted">「${esc(g.quote)}」</span>` : ""}`
+  return `<div class="small" style="margin-top:4px">性別：${g ? `${label[g.g]} ${chip(...sure[g.sure])} ${g.quote ? `<span class="ja muted">「${esc(g.quote)}」</span>${g.quote_zh ? `<span class="muted">（譯：${esc(g.quote_zh.slice(0, 80))}${g.quote_zh.length > 80 ? "…" : ""}）</span>` : ""}` : ""}`
     : '<span class="muted">不明（翻譯時用「你」）</span>'}
     <select id="genderSet" title="改成你確定的性別">${[["unknown", "不明"], ["female", "女"], ["male", "男"]].map(([v, t]) => `<option value="${v}" ${v === cur ? "selected" : ""}>${t}</option>`).join("")}</select></div>`;
 }
-const G = {mode: "rel", mentions: false, n: 12, hideMinor: true, series: false, focus: null, pair: null, center: null};
+const G = {mode: "rel", mentions: false, n: 12, hideMinor: true, fade: true, series: false, focus: null, pair: null, layout: null};
 const GROUPISH = /(たち|みんな|観客|生徒たち|周り|の声|チーム|們|觀眾|路人|大家)$/;
 // Each group of linked people is laid out on its own (repel, attract along links, keep circles and labels apart),
 // then the groups are placed side by side, biggest first. The SVG view box is fitted around the result, so circles,
@@ -586,64 +592,85 @@ function radial(nodes, edges, center, R) {
             h: Math.max(...ys) - Math.min(...ys) + 2 * m};
   return P;
 }
+// a relation that says two cards are one person (a reveal), drawn as a link between two names of one person
+const SAME_PERSON = /同一人/;
+const relOrder = (x, y) => (x.kind === "feeling") - (y.kind === "feeling") || x.at - y.at;  // identity first, then by start
 async function graphView(id) {
   view.classList.add("wide");  // the graph uses the whole window width
   const ov = await loadBook(id, "overview");
   const {d, upto, nm} = await readingDataFor(id, G.series ? "characters?series=1" : "characters");
-  const scenes = d.scenes.filter(s => s.story && s.a <= upto);
+  const story = d.scenes.filter(s => s.story);
   const members = s => G.mode === "talk" && !G.mentions ? s.speakers : s.who;
-  const ok = c => d.characters[c] && d.characters[c].from <= upto && !d.characters[c].info &&
+  const shown = c => d.characters[c] && !d.characters[c].info &&
     !(G.hideMinor && (GROUPISH.test(d.characters[c].ja) || GROUPISH.test(d.characters[c].zh)));
-  const cnt = {}; scenes.forEach(s => members(s).forEach(c => { if (ok(c)) cnt[c] = (cnt[c] || 0) + 1; }));
-  let nodes = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a]);
-  if (G.hideMinor) nodes = nodes.filter(c => cnt[c] >= 2);
-  if (G.n) nodes = nodes.slice(0, G.n);
-  // relations known by this point (ADR-039): from the facts, shown from where the story reveals them
-  // relations known at this point: begun and not yet replaced (宿敵 until they become 未婚夫妻)
-  const rels = (d.relations || []).filter(r => r.at <= upto && (r.until == null || r.until > upto) && ok(r.a) && ok(r.b));
-  if (G.mode === "rel") {  // the people the relations are about (most present first), nobody without one
-    const inRel = new Set(rels.flatMap(r => [r.a, r.b]));
-    inRel.forEach(c => { cnt[c] = cnt[c] || 1; });
-    nodes = [...inRel].sort((a, b) => cnt[b] - cnt[a]);
-    // people with a relation are few: show them all up to 20 (12 cut 馬可, one of two followers)
-    if (G.n && nodes.length > Math.max(G.n, 20)) { const keep = new Set(nodes.slice(0, G.n)); nodes = nodes.filter(c => keep.has(c)); }
+  // who and what is known at a point of the story
+  const at = u => {
+    const ok = c => shown(c) && d.characters[c].from <= u;
+    const scenes = story.filter(s => s.a <= u);
+    const cnt = {}; scenes.forEach(s => members(s).forEach(c => { if (ok(c)) cnt[c] = (cnt[c] || 0) + 1; }));
+    let nodes = Object.keys(cnt).sort((a, b) => cnt[b] - cnt[a]);
+    if (G.hideMinor) nodes = nodes.filter(c => cnt[c] >= 2);
+    if (G.n) nodes = nodes.slice(0, G.n);
+    const rels = (d.relations || []).filter(r => r.at <= u && (r.until == null || r.until > u) && ok(r.a) && ok(r.b));
+    if (G.mode === "rel") {  // the people the relations are about (most present first), nobody without one
+      const inRel = new Set(rels.flatMap(r => [r.a, r.b]));
+      inRel.forEach(c => { cnt[c] = cnt[c] || 1; });
+      nodes = [...inRel].sort((a, b) => cnt[b] - cnt[a]);
+      if (G.n && nodes.length > Math.max(G.n, 20)) { const keep = new Set(nodes.slice(0, G.n)); nodes = nodes.filter(c => keep.has(c)); }
+    }
+    const inSet = new Set(nodes), pairScenes = {};
+    scenes.forEach(s => { const m = members(s).filter(c => inSet.has(c)); m.forEach((a, i) => m.slice(i + 1).forEach(b => {
+      const k = [a, b].sort().join("|"); (pairScenes[k] = pairScenes[k] || []).push(s); })); });
+    const addr = d.address.filter(a => inSet.has(a.speaker) && inSet.has(a.to) && a.speaker !== a.to && (a.at == null || a.at <= u));
+    const edges = G.mode === "addr"
+      ? Object.values(addr.reduce((m, a) => { const k = [a.speaker, a.to].sort().join("|"); (m[k] = m[k] || {a: a.speaker, b: a.to, w: 0}).w += a.uses; return m; }, {}))
+      : G.mode === "rel"
+      ? Object.values(rels.filter(r => inSet.has(r.a) && inSet.has(r.b)).reduce((m, r) => { const k = [r.a, r.b].sort().join("|");
+          (m[k] = m[k] || {a: r.a, b: r.b, w: 1 + (pairScenes[k] || []).length, rels: []}).rels.push(r); return m; }, {}))
+      : Object.entries(pairScenes).map(([k, ss]) => { const [a, b] = k.split("|"); return {a, b, w: ss.length}; });
+    edges.forEach(e => e.rels && e.rels.sort(relOrder));
+    return {scenes, cnt, nodes, rels, pairScenes, addr, edges};
+  };
+  const now = at(upto);
+  // positions come from the whole book and stay put while the slider moves: people appear in their place, lines grow
+  const key = [id, G.mode, G.n, G.hideMinor, G.mentions, G.series].join("|");
+  if (!G.layout || G.layout.key !== key) {
+    const full = at(Infinity), maxF = Math.max(1, ...full.nodes.map(c => full.cnt[c]));
+    const radF = c => 26 + 18 * Math.sqrt((full.cnt[c] || 1) / maxF);
+    let center = null;
+    if (G.mode === "rel" && full.nodes.length) {  // the person with the most relations over the whole book
+      const deg = {}; full.edges.forEach(e => { deg[e.a] = (deg[e.a] || 0) + 1; deg[e.b] = (deg[e.b] || 0) + 1; });
+      center = full.nodes.slice().sort((a, b) => (deg[b] || 0) - (deg[a] || 0) || full.cnt[b] - full.cnt[a])[0];
+    }
+    const P = !full.nodes.length ? {_box: {x: 0, y: 0, w: 900, h: 620}}
+      : center ? radial(full.nodes, full.edges, center, radF) : layout(full.nodes, full.edges, 900, 620, radF);
+    G.layout = {key, P, maxN: maxF};
   }
-  const inSet = new Set(nodes);
-  const pairScenes = {};
-  scenes.forEach(s => { const m = members(s).filter(c => inSet.has(c)); m.forEach((a, i) => m.slice(i + 1).forEach(b => {
-    const k = [a, b].sort().join("|"); (pairScenes[k] = pairScenes[k] || []).push(s); })); });
-  const addr = d.address.filter(a => inSet.has(a.speaker) && inSet.has(a.to) && a.speaker !== a.to && (a.at == null || a.at <= upto));
-  const edges = G.mode === "addr"
-    ? Object.values(addr.reduce((m, a) => { const k = [a.speaker, a.to].sort().join("|"); (m[k] = m[k] || {a: a.speaker, b: a.to, w: 0}).w += a.uses; return m; }, {}))
-    : G.mode === "rel"
-    ? Object.values(rels.filter(r => inSet.has(r.a) && inSet.has(r.b)).reduce((m, r) => { const k = [r.a, r.b].sort().join("|");
-        const e = (m[k] = m[k] || {a: r.a, b: r.b, w: 1 + (pairScenes[k] || []).length, labels: [], roles: []});
-        e.labels.push(r.rel); if (directed(r)) e.roles.push(r); return m; }, {}))
-    : Object.entries(pairScenes).map(([k, ss]) => { const [a, b] = k.split("|"); return {a, b, w: ss.length}; });
-  const maxN = Math.max(1, ...nodes.map(c => cnt[c]));
-  const rad = c => 26 + 18 * Math.sqrt((cnt[c] || 1) / maxN);
-  const linkEdges = edges.filter(e => nodes.includes(e.a) && nodes.includes(e.b));
-  if (G.mode === "rel" && nodes.length) {
-    const deg = {}; linkEdges.forEach(e => { deg[e.a] = (deg[e.a] || 0) + 1; deg[e.b] = (deg[e.b] || 0) + 1; });
-    const best = nodes.slice().sort((a, b) => (deg[b] || 0) - (deg[a] || 0) || cnt[b] - cnt[a])[0];
-    if (!G.center || !nodes.includes(G.center) || (deg[best] || 0) >= (deg[G.center] || 0) + 2) G.center = best;
-  }
-  // the center chosen at a later point may not be known yet (the slider moved back): no center then
-  const middle = G.mode === "rel" && G.focus && nodes.includes(G.focus) ? G.focus : nodes.includes(G.center) ? G.center : null;
-  const W = 900, H = 620, P = G.mode === "rel" && middle ? radial(nodes, linkEdges, middle, rad) : layout(nodes, linkEdges, W, H, rad),
-    mx = Math.max(1, ...edges.map(e => e.w));
+  const P = G.layout.P, W = P._box.w, H = P._box.h;
+  const nodes = now.nodes.filter(c => P[c]), inSet = new Set(nodes), cnt = now.cnt;
+  const edges = now.edges.filter(e => inSet.has(e.a) && inSet.has(e.b));
+  const rad = c => 26 + 18 * Math.sqrt((cnt[c] || 1) / G.layout.maxN);
+  const mx = Math.max(1, ...edges.map(e => e.w));
+  // the previous step of the slider: relations that began since then are new (or a change, when one ended there)
+  const idx = story.findIndex(s => s.a - 1 === upto), prev = idx > 0 ? story[idx - 1].a - 1 : null;
+  const isNew = r => prev != null && r.at > prev && r.at <= upto;
+  const isChange = r => isNew(r) && (d.relations || []).some(o => o !== r && o.until === r.at && [o.a, o.b].sort().join() === [r.a, r.b].sort().join());
+  // people not seen in the last eight scenes fade (still known; just not around lately)
+  const recent = new Set(now.scenes.slice(-8).flatMap(s => s.who));
   const near = new Set(G.focus ? [G.focus, ...edges.filter(e => e.a === G.focus || e.b === G.focus).flatMap(e => [e.a, e.b])] : nodes);
-  const dim = c => near.has(c) ? 1 : .15;
-  if (!nodes.length) P._box = {x: 0, y: 0, w: W, h: H};  // nobody yet at this point of the story
-  let svg = (nodes.length ? "" : `<text x="${W / 2}" y="${H / 2}" font-size="16" text-anchor="middle" fill="var(--muted)">${
+  const fading = G.fade && upto !== Infinity;  // the whole book: nobody is "lately absent"
+  const dim = c => (near.has(c) ? 1 : .15) * (fading && !recent.has(c) ? .45 : 1);
+  const crowded = nodes.length > 12;  // many people: labels on the lines of the middle / chosen person only, others on hover
+  const middle = G.focus || (G.mode === "rel" ? nodes.slice().sort((a, b) => edges.filter(e => e.a === b || e.b === b).length - edges.filter(e => e.a === a || e.b === a).length)[0] : null);
+  let svg = (nodes.length ? "" : `<text x="${P._box.x + W / 2}" y="${P._box.y + H / 2}" font-size="16" text-anchor="middle" fill="var(--muted)">${
     G.mode === "rel" ? "讀到這裡還沒有人物關係" : "讀到這裡還沒有人物"}</text>`) + `<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" fill="var(--accent)"/></marker></defs>`;
   if (G.mode === "addr") {
     const seen = {};
-    addr.forEach(a => { const key = a.speaker + a.to; seen[key] = (seen[key] || 0) + 1;
+    now.addr.filter(a => inSet.has(a.speaker) && inSet.has(a.to)).forEach(a => { const key = a.speaker + a.to; seen[key] = (seen[key] || 0) + 1;
       const p = P[a.speaker], q = P[a.to], dx = q.x - p.x, dy = q.y - p.y, L = Math.max(1, Math.hypot(dx, dy)), ux = dx / L, uy = dy / L, o = seen[key] * 9, nx = -uy * o, ny = ux * o;
       const op = Math.min(dim(a.speaker), dim(a.to)), pk = [a.speaker, a.to].sort().join("|");
       svg += `<g data-pair="${esc(pk)}" style="cursor:pointer;opacity:${op}"><line x1="${p.x + ux * 30 + nx}" y1="${p.y + uy * 30 + ny}" x2="${q.x - ux * 34 + nx}" y2="${q.y - uy * 34 + ny}" stroke="var(--accent)" stroke-width="1.4" marker-end="url(#ah)"/>
-        <text x="${(p.x + q.x) / 2 + nx * 2.2}" y="${(p.y + q.y) / 2 + ny * 2.2}" font-size="11" text-anchor="middle">${esc(a.ja)}</text></g>`; });
+        <text x="${(p.x + q.x) / 2 + nx * 2.2}" y="${(p.y + q.y) / 2 + ny * 2.2}" font-size="11" text-anchor="middle">${esc(a.ja)}${a.zh ? "（" + esc(a.zh) + "）" : ""}</text></g>`; });
   } else {
     // a line that would pass through another person bends around them: the smallest bend (either side) that clears
     // every other circle, as a quadratic curve; labels sit on the curve
@@ -657,36 +684,58 @@ async function graphView(id) {
       for (let h = 0; h <= 360; h += 15) { if (clear(h)) return h; if (h && clear(-h)) return -h; }
       return 0;
     };
-    const at = (e, h, t) => { const p = P[e.a], q = P[e.b], L = Math.max(1, Math.hypot(q.x - p.x, q.y - p.y)),
+    const pt = (e, h, t) => { const p = P[e.a], q = P[e.b], L = Math.max(1, Math.hypot(q.x - p.x, q.y - p.y)),
       cx = (p.x + q.x) / 2 - (q.y - p.y) / L * h, cy = (p.y + q.y) / 2 + (q.x - p.x) / L * h, u = 1 - t;
       return {x: u * u * p.x + 2 * t * u * cx + t * t * q.x, y: u * u * p.y + 2 * t * u * cy + t * t * q.y, cx, cy}; };
-    // a relation with two different roles (父親／女兒, 老師／學生): one line, each role written next to its person
-    const roleLabels = (e, h) => (e.roles || []).map(r => [[r.a, r.b, r.a_is], [r.b, r.a, r.b_is]].map(([who, other, role]) => {
-      const pt = at(e, h, who === e.a ? 0.3 : 0.7);
-      return `<text x="${pt.x}" y="${pt.y - 5}" font-size="14" text-anchor="middle" class="rel-label">${esc(role)}<title>${esc(nm(who))} 是 ${esc(nm(other))} 的${esc(role)}</title></text>`;
-    }).join("")).join("");
     edges.forEach(e => {
-      const op = Math.min(dim(e.a), dim(e.b)), pk = [e.a, e.b].sort().join("|"), h = bend(e), mid = at(e, h, 0.5);
-      const d = `M${P[e.a].x},${P[e.a].y} Q${mid.cx},${mid.cy} ${P[e.b].x},${P[e.b].y}`;
-      svg += `<g data-pair="${esc(pk)}" style="cursor:pointer;opacity:${op}"><path d="${d}" fill="none" stroke="transparent" stroke-width="12"/>
-        <path d="${d}" fill="none" stroke="${G.pair === pk ? "var(--accent)" : "var(--muted)"}" stroke-opacity="${.25 + .6 * e.w / mx}" stroke-width="${1 + 7 * e.w / mx}"><title>${esc(nm(e.a))}・${esc(nm(e.b))}：${e.labels ? esc(e.labels.join("、")) : e.w + " 個場景"}</title></path>
-        ${e.labels ? `<text x="${mid.x}" y="${mid.y - 4}" font-size="14" text-anchor="middle" class="rel-label">${esc(e.labels.filter(l => !(e.roles || []).some(r => r.rel === l)).join("・"))}</text>` : ""}
-        ${G.mode === "rel" ? roleLabels(e, h) : ""}</g>`; });
+      const op = Math.min(dim(e.a), dim(e.b)), pk = [e.a, e.b].sort().join("|"), h = bend(e), mid = pt(e, h, 0.5);
+      const dpath = `M${P[e.a].x},${P[e.a].y} Q${mid.cx},${mid.cy} ${P[e.b].x},${P[e.b].y}`;
+      const rs = e.rels || [], main = rs[0], more = rs.length - 1;
+      const same = main && SAME_PERSON.test(main.rel), fresh = rs.some(isNew), change = rs.some(isChange);
+      // line: identity solid, feeling dashed, inferred lighter; a reveal (one person) a double line; new ones in colour
+      const color = fresh || G.pair === pk ? "var(--accent)" : "var(--muted)";
+      const dash = main && main.kind === "feeling" ? ` stroke-dasharray="6 5"` : "";
+      const alpha = (main && main.certainty === "inferred" ? .5 : 1) * (.3 + .6 * e.w / mx);
+      const width = 1 + 6 * e.w / mx;
+      const title = `${esc(nm(e.a))}・${esc(nm(e.b))}：${rs.length ? rs.map(r => esc(r.rel)).join("、") : e.w + " 個場景"}`;
+      const soft = crowded && G.mode === "rel" && middle && e.a !== middle && e.b !== middle ? " soft" : "";
+      let labels = "";
+      if (main) {
+        const tag = change ? "（變）" : fresh ? "（新）" : "";
+        if (same) labels = `<text x="${mid.x}" y="${mid.y - 4}" font-size="14" text-anchor="middle" class="rel-label">＝ 同一人${tag}</text>`;
+        else if (directed(main)) {  // two different roles (父親／女兒): each written next to its person
+          labels = [[main.a, main.a_is], [main.b, main.b_is]].map(([who, role]) => { const q = pt(e, h, who === e.a ? 0.3 : 0.7);
+            return `<text x="${q.x}" y="${q.y - 5}" font-size="14" text-anchor="middle" class="rel-label${soft}">${esc(role)}</text>`; }).join("")
+            + (more || tag ? `<text x="${mid.x}" y="${mid.y + 14}" font-size="12" text-anchor="middle" class="rel-label${soft}">${more ? "＋" + more : ""}${tag}</text>` : "");
+        } else labels = `<text x="${mid.x}" y="${mid.y - 4}" font-size="14" text-anchor="middle" class="rel-label${soft}">${esc(main.rel)}${more ? " ＋" + more : ""}${tag}</text>`;
+      }
+      const stroke = same
+        ? `<path d="${dpath}" fill="none" stroke="var(--accent)" stroke-width="7" stroke-opacity=".9"/><path d="${dpath}" fill="none" stroke="var(--panel)" stroke-width="3"/>`
+        : `<path d="${dpath}" fill="none" stroke="${color}" stroke-opacity="${alpha}" stroke-width="${width}"${dash}/>`;
+      svg += `<g data-pair="${esc(pk)}" class="edge" style="cursor:pointer;opacity:${op}"><path d="${dpath}" fill="none" stroke="transparent" stroke-width="12"/>
+        ${stroke}<title>${title}</title>${labels}</g>`; });
   }
   nodes.forEach(c => { const r = rad(c);
     svg += `<g data-k="${esc(c)}" style="cursor:pointer;opacity:${dim(c)}"><circle cx="${P[c].x}" cy="${P[c].y}" r="${r}" fill="${G.focus === c ? "var(--accent-soft)" : "var(--panel)"}" stroke="var(--accent)" stroke-width="${G.focus === c ? 3 : 1.6}"/>
-      <text x="${P[c].x}" y="${P[c].y + 5}" text-anchor="middle" font-size="15" font-weight="600">${esc(nm(c))}</text><title>${esc(nm(c))}：${cnt[c]} 個場景</title></g>`; });
+      <text x="${P[c].x}" y="${P[c].y + 5}" text-anchor="middle" font-size="15" font-weight="600">${esc(nm(c))}</text><title>${esc(nm(c))}：${cnt[c]} 個場景${recent.has(c) ? "" : "（最近沒出場）"}</title></g>`; });
   const sel = (name, opts, cur) => `<select data-ctl="${name}">${opts.map(([v, l]) => `<option value="${v}" ${String(v) === String(cur) ? "selected" : ""}>${l}</option>`).join("")}</select>`;
+  const legend = G.mode === "rel" ? `<div class="legend small">
+      <span><svg width="36" height="10"><line x1="0" y1="5" x2="36" y2="5" stroke="var(--muted)" stroke-width="3"/></svg> 身分（親屬、師生、婚約…）</span>
+      <span><svg width="36" height="10"><line x1="0" y1="5" x2="36" y2="5" stroke="var(--muted)" stroke-width="3" stroke-dasharray="6 5"/></svg> 情感、立場（好友、愛慕、敵對…）</span>
+      <span><svg width="36" height="10"><line x1="0" y1="5" x2="36" y2="5" stroke="var(--accent)" stroke-width="3"/></svg> 這一步新出現（新）或改變（變）</span>
+      <span><svg width="36" height="12"><line x1="0" y1="6" x2="36" y2="6" stroke="var(--accent)" stroke-width="7"/><line x1="0" y1="6" x2="36" y2="6" stroke="var(--panel)" stroke-width="3"/></svg> 揭曉是同一人</span>
+      <span>線越粗＝一起出場越多；淡色＝推測；＋N＝還有 N 個關係（點線看全部）${fading ? "；淡化的人＝最近 8 個場景沒出場" : ""}</span></div>` : "";
   view.innerHTML = `<div class="row" style="align-items:center;margin-bottom:10px;gap:10px">
       <div class="seg"><button data-m="rel" class="${G.mode === "rel" ? "on" : ""}">關係</button><button data-m="talk" class="${G.mode === "talk" ? "on" : ""}">一起出場</button><button data-m="addr" class="${G.mode === "addr" ? "on" : ""}">誰怎麼叫誰</button></div>
       ${G.mode === "talk" ? `<label class="small"><input type="checkbox" data-ctl="mentions" ${G.mentions ? "checked" : ""}> 只被提到也算</label>` : ""}
       ${sel("n", [[12, "12 人"], [20, "20 人"], [0, "全部"]], G.n)}
       <label class="small"><input type="checkbox" data-ctl="hideMinor" ${G.hideMinor ? "checked" : ""}> 隱藏路人、群體</label>
+      <label class="small"><input type="checkbox" data-ctl="fade" ${G.fade ? "checked" : ""}> 淡化最近沒出場的人</label>
       <div class="seg"><button data-s="0" class="${G.series ? "" : "on"}">本集</button><button data-s="1" class="${G.series ? "on" : ""}">系列累計</button></div>
       ${G.focus ? `<button class="btn" data-clear>取消聚焦</button>` : ""}</div>
-    <div class="card scroll" style="padding:6px"><svg viewBox="${P._box.x} ${P._box.y} ${P._box.w} ${P._box.h}" width="100%" style="min-width:640px;min-height:560px;max-height:82vh">${svg}</svg></div>
-    <div class="row" style="align-items:flex-start"><div class="card" style="flex:1 1 340px" id="gside">${graphSide(d, nm, upto, pairScenes, addr, cnt)}</div></div>
-    <p class="muted small">${G.mode === "rel" ? `線＝故事中的關係（依讀到的事實整理，讀到揭露處才出現）${rels.length ? "" : "；這本書還沒有整理關係（ncte names relations）"}` : G.mode === "talk" ? (G.mentions ? "線＝同一場景出現（含只被提到）" : "線＝兩人在同一場景都有台詞") : "箭頭＝誰用什麼稱呼叫誰"}；圓圈大小＝出場場景數。點人物聚焦，點線看兩人的互動。${ov.title}</p>`;
+    <div class="card scroll" style="padding:6px"><svg viewBox="${P._box.x} ${P._box.y} ${W} ${H}" width="100%" style="min-width:640px;min-height:560px;max-height:82vh">${svg}</svg>${legend}</div>
+    <div class="row" style="align-items:flex-start"><div class="card" style="flex:1 1 340px" id="gside">${graphSide(d, nm, upto, now.pairScenes, now.addr, cnt)}</div></div>
+    <p class="muted small">${G.mode === "rel" ? `線＝故事中的關係（讀到揭露處才出現）${now.rels.length || (d.relations || []).length ? "" : "；這本書還沒有整理關係（ncte names relations）"}${crowded ? "；人多時只標出中心人物的關係，其他的滑過線條才顯示" : ""}` : G.mode === "talk" ? (G.mentions ? "線＝同一場景出現（含只被提到）" : "線＝兩人在同一場景都有台詞") : "箭頭＝誰用什麼稱呼叫誰"}；圓圈大小＝出場場景數；人物位置依全書固定，拖動「讀到」只會增減人物與關係。點人物聚焦，點線看兩人的關係與互動。${ov.title}</p>`;
   view.querySelectorAll("[data-m]").forEach(b => b.onclick = () => { G.mode = b.dataset.m; G.pair = null; graphView(id); });
   view.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { G.series = b.dataset.s === "1"; graphView(id); });
   view.querySelectorAll("[data-ctl]").forEach(el => el.onchange = () => { const k = el.dataset.ctl; G[k] = el.type === "checkbox" ? el.checked : +el.value; graphView(id); });
@@ -699,14 +748,22 @@ async function graphView(id) {
 function graphSide(d, nm, upto, pairScenes, addr, cnt) {
   if (G.pair) {
     const [a, b] = G.pair.split("|"), ss = pairScenes[G.pair] || [];
-    const names = c => [d.characters[c].ja, d.characters[c].zh, ...d.characters[c].aka].filter(x => x && x.length >= 2);
+    const names = c => [d.characters[c].ja, d.characters[c].zh, ...d.characters[c].aka.map(x => x.ja)].filter(x => x && x.length >= 2);
     const facts = [a, b].flatMap(x => d.characters[x].facts.filter(f => f.at <= upto && names(x === a ? b : a).some(n => (f.object + f.predicate).includes(n)))
       .map(f => ({...f, who: x})));
     const between = d.address.filter(t => (t.speaker === a && t.to === b) || (t.speaker === b && t.to === a)).filter(t => t.at == null || t.at <= upto)
       .sort((x, y) => (x.at ?? -1) - (y.at ?? -1));
+    // the pair's relations as a timeline: each with where it began, where it ended, and the source with its translation
+    const timeline = (d.relations || []).filter(r => [r.a, r.b].sort().join("|") === G.pair && r.at <= upto).sort((x, y) => x.at - y.at);
     return `<strong>${esc(nm(a))} ⇄ ${esc(nm(b))}</strong>
+      <div style="margin-top:8px"><div class="muted small">關係的變化（讀到這裡為止）</div>${timeline.map(r => {
+        const ended = r.until != null && r.until <= upto, ev = (r.evidence || []).find(e => e.at <= upto);
+        return `<div class="small" style="margin-top:6px${ended ? ";opacity:.6" : ""}"><span class="mono">${r.at < 0 ? "前集" : "§" + r.at}${ended ? "–§" + r.until : " 起"}</span>
+          <strong>${esc(r.rel)}</strong>${directed(r) ? `（${esc(nm(r.a))}是${esc(r.a_is)}，${esc(nm(r.b))}是${esc(r.b_is)}）` : ""}
+          ${chip(r.kind === "feeling" ? "c-warn" : "c-acc", r.kind === "feeling" ? "情感" : "身分")}${r.certainty === "inferred" ? chip("c-warn", "推測") : ""}${ended ? chip("c-unk", "已結束") : ""}
+          ${ev ? `<div style="margin-top:2px">${bi(ev.quote, ev.zh, "small")}</div>` : ""}</div>`; }).join("") || '<div class="muted">—</div>'}</div>
       <div style="margin-top:8px"><div class="muted small">互相怎麼稱呼（依首次出現）</div>${between.map(t => `<div>${esc(nm(t.speaker))} → ${esc(nm(t.to))}：<span class="ja">${esc(t.ja)}</span>（${esc(t.zh || "")}）<span class="muted small">${t.at < 0 ? "前集" : "§" + t.at}・×${t.uses}</span></div>`).join("") || '<div class="muted">—</div>'}</div>
-      <div style="margin-top:8px"><div class="muted small">相關事實</div>${facts.map(f => `<div class="small">${esc(nm(f.who))} ${esc(f.predicate)}：${esc(f.object)} ${chip(f.certainty === "explicit" ? "c-ok" : "c-warn", f.certainty === "explicit" ? "明寫" : "推測")}<div class="ja muted">${esc(f.quote)}</div></div>`).join("") || '<div class="muted">—</div>'}</div>
+      <div style="margin-top:8px"><div class="muted small">相關事實</div>${facts.map(f => `<div class="small">${esc(nm(f.who))} ${esc(f.predicate)}：${esc(f.object)} ${chip(f.certainty === "explicit" ? "c-ok" : "c-warn", f.certainty === "explicit" ? "明寫" : "推測")}<div class="muted">${bi(f.quote, f.quote_zh)}</div></div>`).join("") || '<div class="muted">—</div>'}</div>
       <div style="margin-top:8px"><div class="muted small">一起出場的場景（${ss.length}）</div>${ss.map(s => `<div class="small">${s.a < 0 ? "<span class='muted'>前集</span> " : `<a href="#" data-goscene="${esc(s.id)}">§${s.a}</a> `}${esc((s.summary || "").slice(0, 60))}</div>`).join("")}</div>`;
   }
   if (G.focus && d.characters[G.focus]) {
@@ -716,7 +773,7 @@ function graphSide(d, nm, upto, pairScenes, addr, cnt) {
       <div style="margin-top:8px">${partners.map(([o, n]) => `<div>${esc(nm(o))} <span class="muted small">${n} 個場景</span></div>`).join("") || '<div class="muted">—</div>'}</div>
       <p><a href="#" data-profile="${esc(G.focus)}">看角色檔案</a></p>`;
   }
-  return `<div class="muted">點人物：只顯示他和他的連線。<br>點兩人之間的線：看兩人怎麼互相稱呼、相關事實、一起出場的場景。</div>`;
+  return `<div class="muted">點人物：只顯示他和他的連線。<br>點兩人之間的線：看兩人的關係如何變化（附原文與譯文）、怎麼互相稱呼、相關事實、一起出場的場景。</div>`;
 }
 // ------------------------------------------------------------ names & address terms
 async function glossaryView(id) {

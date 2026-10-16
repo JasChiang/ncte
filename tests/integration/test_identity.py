@@ -187,3 +187,13 @@ def test_pairs_get_passages_where_the_two_appear_together(conn, cfg, fixtures):
     assert any(n in g["text"] for n in names) and len(p["passages"]) <= relations.MAX_PASSAGES + relations.PAIR_PASSAGES
     req = relations.requests([p], chars)[0][0]
     assert req["pairs"][0]["passages"] and not req["pairs"][0]["passages"][0]["text"].startswith("〔")
+
+
+def test_people_page_quotes_come_with_their_translation(conn, cfg, fixtures):
+    from ncte.gui import data
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    chars = data.characters(conn, book)["characters"]
+    facts = [f for c in chars.values() for f in c["facts"] if f["quote"]]
+    assert facts and all(f["quote_zh"] for f in facts)  # each source quote shown with its paragraph's translation
+    assert all(isinstance(a, dict) and "ja" in a for c in chars.values() for a in c["aka"])
