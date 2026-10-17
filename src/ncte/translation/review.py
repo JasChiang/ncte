@@ -25,7 +25,7 @@ from ..llm.schemas import FixCheck, FixCheckOutput, ReviewOutput
 from ..memory.db import Transaction, utcnow
 from ..qa.rules import worst
 from .cache import glossary_hash, latest_translation, relevant_glossary
-from .translator import UnitInput, call_structured
+from .translator import BatchResult, UnitInput, call_structured
 
 SEV = {"low": "low", "medium": "medium", "high": "high"}
 REVIEW_BATCH = 20
@@ -84,8 +84,10 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
         return stats
     prompt = load_prompt("review")
     model = orch.model_for("review")
-    for i in range(0, len(targets), REVIEW_BATCH):
-        chunk = targets[i:i + REVIEW_BATCH]
+    # one scene per request: the reviewer, and the fixes it asks for, get that scene's people and who speaks to whom
+    ordered = scene_groups(sorted((rows[u] for u in targets), key=lambda r: r["ordinal"]))
+    chunks = [[r["id"] for r in g[i:i + REVIEW_BATCH]] for g in ordered for i in range(0, len(g), REVIEW_BATCH)]
+    for chunk in chunks:
         items = []
         tids: dict[str, int] = {}  # the version each unit is reviewed in
         with orch.lock:
@@ -266,11 +268,49 @@ def _clear_confirmed(orch: Any, reviewed: dict[str, int], stats: dict[str, int])
                 stats["cleared"] = stats.get("cleared", 0) + 1
 
 
-def _fake_batch(orch: Any, rows: list[sqlite3.Row]) -> Any:
+def _fake_batch(orch: Any, rows: list[sqlite3.Row], *, whole_scene: bool = False) -> Any:
     from .orchestrator import Batch
 
     scene_ids = {r["scene_id"] for r in rows}
-    return Batch(rows, False, next(iter(scene_ids)) if len(scene_ids) == 1 and orch.opts.mode == "context" else None)
+    return Batch(rows, False, next(iter(scene_ids)) if len(scene_ids) == 1 and orch.opts.mode == "context" else None,
+                 whole_scene)
+
+
+def scene_groups(rows: list[sqlite3.Row]) -> list[list[sqlite3.Row]]:
+    """``rows`` (in story order) split where the scene changes: a request about one scene gets that scene's memory
+    (characters, who speaks to whom, address table); one spanning two gets none."""
+    out: list[list[sqlite3.Row]] = []
+    for r in rows:
+        if out and out[-1][-1]["scene_id"] == r["scene_id"]:
+            out[-1].append(r)
+        else:
+            out.append([r])
+    return out
+
+
+def fix_groups(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row]) -> list[list[sqlite3.Row]]:
+    """Units to retranslate, one group per scene and run of adjacent paragraphs: the context window sits around a
+    group, so two fixes far apart in a scene are sent apart (together, the paragraphs between them were neither
+    translated nor shown)."""
+    rows = sorted(rows, key=lambda r: r["ordinal"])
+    if not rows:
+        return []
+    ords = [o for (o,) in conn.execute(
+        "SELECT ordinal FROM units WHERE book_id=? AND translatable=1 AND kind IN ('text','heading') AND ordinal "
+        "BETWEEN ? AND ? ORDER BY ordinal", (book_id, rows[0]["ordinal"], rows[-1]["ordinal"]))]
+    pos = {o: i for i, o in enumerate(ords)}
+    out: list[list[sqlite3.Row]] = []
+    for group in scene_groups(rows):
+        run = [group[0]]
+        for r in group[1:]:
+            at = pos.get(r["ordinal"])
+            if at is not None and at == pos.get(run[-1]["ordinal"], -2) + 1:
+                run.append(r)
+            else:
+                out.append(run)
+                run = [r]
+        out.append(run)
+    return out
 
 
 def _close_jobs(orch: Any, unit_ids: list[str], status: str) -> None:
@@ -298,22 +338,30 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
         todo.append(r)
     if not todo:
         return
-    units = [UnitInput.from_row(r) for r in todo]
     before = {u: (t["text"] if t is not None else "") for u, t in current.items()}
-    ctx = orch.batch_context(_fake_batch(orch, todo))
-    ctx["review_feedback"] = [
-        {"unit_id": r["id"], **({"current_translation": before[r["id"]]} if before[r["id"]] else {}),
-         "issues": [{k: v for k, v in i.items() if k in ("issue_type", "evidence", "suggestion")} for i in feedback[r["id"]]]}
-        for r in todo]
-    stats["retranslated"] += len(units)
-    try:
-        res = orch.translator.translate(units, ctx, qa_glossary=orch.qa_glossary())
-    except FatalAPIError:
-        raise
-    except LLMError as exc:
-        orch._finding(None, "review_retranslation_failed", "medium", str(exc)[:300])
-        stats["pending"] += len(units)
-        stats["still_flagged"] += len(units)
+    stats["retranslated"] += len(todo)
+    res = BatchResult()
+    # the fix sees as much of its scene as the first translation did (the scene around it, up to
+    # targeted_scene_context_chars a side), not only the two paragraphs before and one after
+    for group in fix_groups(conn, orch.book.id, todo):
+        ctx = orch.batch_context(_fake_batch(orch, group, whole_scene=True))
+        ctx["review_feedback"] = [
+            {"unit_id": r["id"], **({"current_translation": before[r["id"]]} if before[r["id"]] else {}),
+             "issues": [{k: v for k, v in i.items() if k in ("issue_type", "evidence", "suggestion")}
+                        for i in feedback[r["id"]]]}
+            for r in group]
+        try:
+            part = orch.translator.translate([UnitInput.from_row(r) for r in group], ctx, qa_glossary=orch.qa_glossary())
+        except FatalAPIError:
+            raise
+        except LLMError as exc:
+            orch._finding(None, "review_retranslation_failed", "medium", str(exc)[:300])
+            stats["pending"] += len(group)
+            stats["still_flagged"] += len(group)
+            continue
+        res.ok.update(part.ok)
+        res.failed.update(part.failed)
+    if not res.ok and not res.failed:
         return
     by_id = {r["id"]: r for r in todo}
     new_tid: dict[str, int] = {}

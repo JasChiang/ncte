@@ -690,3 +690,8 @@ open workspace/eval/<timestamp>/report.html
     - 本次花費 US$0.38（gemini 0.304、其他三個 0.074），餘額 US$0.64 → 0.26。正式設定未改。
 - 推理 high 的請求不再先被截斷再付一次：沒有設定輸出上限時，推理 high（含 xhigh、max）的起始上限從 16,384 提高到 32,768；`max:N` 則在答案所需之外加上 N。上限只是預留額度，實際依用量計費。影響 fix_check、relations、verify 等預設 high 的步驟。`fix-check` 評測的估價改成照輸出上限計算的真正上限（gemini 一輪 ≤ US$0.28，實際 US$0.30 是含一次重送）。`tests/unit/test_translator.py`。
 - 審查第五節第 2 項（修正是否只改錯處）準備完成、**尚未付費執行**：`ncte eval retranslate`，38 組（27 組問題成立、11 組建議錯或判斷不了），照審稿後重譯的格式送翻譯模型，另一家族的模型以 fix_check 判定，並算編輯距離與「照錯建議改」的比例；輸出供人工抽查的對照表。說明見 `docs/evaluation.md`。測試 `tests/eval/test_fix_check_eval.py`。
+- 修正時的上下文（`translation/review.py`）：
+  - 審稿、對照校稿、讀者檢查之後的重譯，前後文從「前 2 段、後 1 段」改成和指定重譯相同的場景範圍（前後各 `targeted_scene_context_chars`，預設 2,500 字），第一次翻譯看得到的場景，修正時也看得到。要修的段落依場景與相鄰段落分組送出：同一場景裡相隔很遠的兩段分開送，原本兩段之間的段落既不翻譯也不顯示。
+  - `ncte review`（整本審稿）一次只問一個場景：原本每批 20 段常跨兩三個場景，審稿請求沒有人物與台詞的說話者／對象，送回的重譯完全沒有記憶（性別、稱呼表、敘述者）。翻譯途中的審稿本來就是逐場景，不受影響。
+  - 成本：每次重譯多送最多約 5,000 個日文字（gemini-3.8-flash 約 US$0.004）；`ncte review` 的請求數變成至少每個有問題的場景一個。
+  - 測試 `tests/integration/test_fix_context.py`（兩個測試在修改前都失敗）；全部 413 passed、3 skipped（無 EPUBCheck）。
