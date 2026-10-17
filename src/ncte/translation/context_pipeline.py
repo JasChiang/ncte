@@ -41,8 +41,6 @@ CONFIRM_RULES = ("offensive_term", "narration_first_person", "narrator_self_form
                  "second_person_gender", "narrator_name_leak")
 
 
-STORY_CONTEXT = {"previous_chapter", "story_so_far", "previous_scene_end"}  # what a read request carries besides the scene itself
-
 class ContextOrchestrator(Orchestrator):
     def prepare(self) -> None:
         super().prepare()
@@ -860,10 +858,6 @@ class ContextOrchestrator(Orchestrator):
         """
         blocked: list[str] = []
         parsed = self._read_parts(stage, prompt, payload, blocked)
-        if parsed is None and STORY_CONTEXT & payload.keys():  # the story so far may be what the filter refused
-            blocked = []
-            parsed = self._read_parts(stage, prompt, {k: v for k, v in payload.items() if k not in STORY_CONTEXT},
-                                      blocked)
         for uid in blocked:
             self._finding(uid, "read_blocked", "medium",
                           f"{sid} {stage}: the content filter refused this passage; it was not read "
