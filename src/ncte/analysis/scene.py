@@ -6,6 +6,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from ..config import Config
@@ -35,11 +36,16 @@ class Scene:
 
 
 def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units: int,
-                  breaks: dict[str, str] | None = None, *, lone_headings: bool = False) -> list[Scene]:
+                  breaks: dict[str, str] | None = None, *, lone_headings: bool = False,
+                  chapters: dict[str, bool] | None = None) -> list[Scene]:
     """``breaks``: unit id → "llm" (a scene the model starts there) or "stretch" (a stretch the model divided: no
     size cuts inside it up to twice the limit, ADR-036). A heading stays with the text after it (「序章」 followed by
     blank lines was a scene of its own: read, summarised, translated and reviewed alone); ``lone_headings`` keeps the
-    old cut for a book already read that way."""
+    old cut for a book already read that way.
+
+    ``chapters`` (first unit of each TOC chapter → whether the model has cut it): a chapter always starts a scene, and
+    inside a chapter the model's cut is the cut (the author's blank lines and separators were candidates it weighed);
+    a chapter not cut yet keeps the program's provisional cut."""
     breaks = breaks or {}
     decided = False
     scenes: list[Scene] = []
@@ -47,9 +53,18 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
     cur: Scene | None = None
     prev_href: str | None = None
     prev_row: sqlite3.Row | None = None
+    decided_chapter = False
     for r in rows:
         reason = None
-        if cur is None or r["resource_href"] != prev_href:
+        if chapters is not None and (cur is None or r["id"] in chapters):
+            reason = "chapter"
+            decided_chapter = chapters.get(r["id"], False)
+        elif chapters is not None and decided_chapter:
+            if overrides.get(r["id"]) == "split" or breaks.get(r["id"]) == "llm":
+                reason = "manual" if overrides.get(r["id"]) == "split" else "llm"
+            elif overrides.get(r["id"]) != "merge" and len(cur.unit_ids) >= max_units * 3:  # type: ignore[union-attr]
+                reason = "max_size"  # the model's scene runs far past any limit: cut at size, as a last resort
+        elif cur is None or r["resource_href"] != prev_href:
             reason = "document"
         elif overrides.get(r["id"]) == "split":
             reason = "manual"
@@ -69,7 +84,7 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
             reason = None
         elif len(cur.unit_ids) >= max_units and (_calm(r, prev_row) or len(cur.unit_ids) >= max_units + MAX_SIZE_SLACK):
             reason = "max_size"
-        if reason in ("document", "manual", "separator", "heading", "blank_lines"):
+        if reason in ("chapter", "document", "manual", "separator", "heading", "blank_lines"):
             decided = False  # the author's marker ends a stretch
         if breaks.get(r["id"]) == "stretch":
             decided = True
@@ -99,6 +114,43 @@ def _calm(r: sqlite3.Row, prev: sqlite3.Row | None) -> bool:
     return not talk(r) and not talk(prev)
 
 
+def segmentation(conn: sqlite3.Connection, book_id: str) -> str:
+    """How this book is cut into scenes: "chapters" (TOC chapters, the model cuts inside them) for a book not read
+    yet; "files" (files, headings, the author's markers, size) for one already read that way — a changed range would
+    lose what reading it left and be read again (paid)."""
+    row = conn.execute("SELECT segmentation FROM books WHERE id=?", (book_id,)).fetchone()
+    if row is not None and row[0]:
+        return str(row[0])
+    read = conn.execute("SELECT 1 FROM scenes WHERE book_id=? AND version>0 LIMIT 1", (book_id,)).fetchone()
+    scheme = "files" if read else "chapters"
+    conn.execute("UPDATE books SET segmentation=? WHERE id=?", (scheme, book_id))
+    return scheme
+
+
+def chapter_starts_for(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row]) -> dict[str, bool] | None:
+    """First unit of each chapter → whether the model has cut it (None: the book is cut the old way). Chapters come
+    from the TOC; a book without one is a single chapter until the model finds its chapters."""
+    if segmentation(conn, book_id) != "chapters":
+        return None
+    if conn.execute("SELECT 1 FROM chapters WHERE book_id=? LIMIT 1", (book_id,)).fetchone() is None:
+        from ..epub.chapters import chapter_starts, save_chapters
+        from ..epub.parser import load_epub
+
+        path = conn.execute("SELECT stored_path FROM books WHERE id=?", (book_id,)).fetchone()
+        starts = chapter_starts(conn, book_id, load_epub(path[0])) if path and path[0] and Path(path[0]).exists() else []
+        save_chapters(conn, book_id, starts, "toc" if starts else "none")
+    decided = {r[0] for r in conn.execute("SELECT unit_id FROM scene_breaks WHERE book_id=? AND origin='chapter'",
+                                          (book_id,))}
+    out: dict[str, bool] = {}
+    bounds = conn.execute("SELECT start_ordinal, end_ordinal FROM chapters WHERE book_id=? ORDER BY seq",
+                          (book_id,)).fetchall()
+    for start, end in bounds:
+        first = next((r for r in rows if start <= r["ordinal"] <= end), None)
+        if first is not None:
+            out[first["id"]] = first["id"] in decided
+    return out
+
+
 def segment_book(conn: sqlite3.Connection, cfg: Config, book_id: str) -> list[Scene]:
     rows = conn.execute(
         f"SELECT * FROM units WHERE book_id=? AND kind IN ({','.join('?' * len(BODY_KINDS))}) "
@@ -111,10 +163,12 @@ def segment_book(conn: sqlite3.Connection, cfg: Config, book_id: str) -> list[Sc
     lone = conn.execute("SELECT 1 FROM scenes s JOIN units u ON u.book_id=s.book_id AND u.id=s.start_unit_id AND "
                         "u.id=s.end_unit_id WHERE s.book_id=? AND s.version>0 AND u.kind='heading' LIMIT 1",
                         (book_id,)).fetchone() is not None
-    scenes = segment_units(rows, overrides, cfg.memory.max_scene_units, breaks, lone_headings=lone)
     from .memory_update import forget_scene
 
     with Transaction(conn):
+        chapters = chapter_starts_for(conn, book_id, rows)
+        scenes = segment_units(rows, overrides, cfg.memory.max_scene_units, breaks, lone_headings=lone,
+                               chapters=chapters)
         existing = {r["id"]: r for r in conn.execute("SELECT * FROM scenes WHERE book_id=?", (book_id,))}
         conn.execute("UPDATE units SET scene_id=NULL WHERE book_id=?", (book_id,))
         keep: set[str] = set()
@@ -134,6 +188,8 @@ def segment_book(conn: sqlite3.Connection, cfg: Config, book_id: str) -> list[Sc
                      s.end_ordinal, s.break_reason))
             keep.add(s.id)
             conn.executemany("UPDATE units SET scene_id=? WHERE id=?", [(s.id, u) for u in s.unit_ids])
+            conn.execute("UPDATE scenes SET kind=(SELECT kind FROM scene_breaks WHERE book_id=? AND unit_id=?) "
+                         "WHERE book_id=? AND id=?", (book_id, s.unit_ids[0], book_id, s.id))
         for sid in existing:
             if sid not in keep:
                 if int(existing[sid]["version"]) > 0:

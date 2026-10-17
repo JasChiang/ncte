@@ -26,8 +26,9 @@ def test_scene_segmentation(conn, cfg, fixtures):
 
     book, _ = import_book(conn, cfg, fixtures["basic"])
     scenes = conn.execute("SELECT id, break_reason FROM scenes WHERE book_id=? ORDER BY seq", (book.id,)).fetchall()
-    assert [tuple(r) for r in scenes] == [("s_000_01", "document"), ("s_000_02", "separator"),
-                                          ("s_001_01", "document"), ("s_002_01", "document")]
+    # each TOC chapter starts a scene; inside one not cut by the model yet, the author's separator cuts for now
+    assert [tuple(r) for r in scenes] == [("s_000_01", "chapter"), ("s_000_02", "separator"),
+                                          ("s_001_01", "chapter"), ("s_002_01", "chapter")]
     # manual override: split before 「待って」
     uid = conn.execute("SELECT id FROM units WHERE book_id=? AND plain_text='「待って」'", (book.id,)).fetchone()[0]
     conn.execute("INSERT INTO scene_overrides VALUES (?,?,?,?)", (book.id, uid, "split", "t"))

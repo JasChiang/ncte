@@ -584,6 +584,21 @@ ALTER TABLE group_members ADD COLUMN origin TEXT NOT NULL DEFAULT 'verify';
     (22, "the translation a review / proofreading / reader finding was made on (a finding is settled for that version only)", """
 ALTER TABLE qa_findings ADD COLUMN translation_id INTEGER;
 """),
+    (23, "chapters from the table of contents; how a book is cut into scenes; what kind of scene a break opens", """
+CREATE TABLE chapters (
+    book_id TEXT NOT NULL,
+    seq INTEGER NOT NULL,
+    start_ordinal INTEGER NOT NULL,
+    end_ordinal INTEGER NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL,
+    PRIMARY KEY (book_id, seq)
+);
+ALTER TABLE books ADD COLUMN segmentation TEXT;
+ALTER TABLE scene_breaks ADD COLUMN kind TEXT;
+ALTER TABLE scene_breaks ADD COLUMN sure INTEGER;
+ALTER TABLE scenes ADD COLUMN kind TEXT;
+"""),
 ]
 
 
