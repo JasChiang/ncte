@@ -49,6 +49,13 @@ def test_keep_doing_is_not_a_speech_verb():
     assert ev[("u0", 0)][0].character_id == "c_mina"
 
 
+def test_narration_looking_back_on_earlier_words_is_not_the_tag():
+    # 「まぁ……確かにそれくらいしか方法はないだろうからな」 then 「エルリアはその場の勢いで言ったようだが、」: the line
+    # is his answer; the narration is about what she said before (英雄と賢者の転生婚 1, s_011_01)
+    _, qs, ev = ev_for(["「まぁ……それしか方法はないだろうからな」", "　ミナはその場の勢いで言ったようだが、それが唯一の方法だ。"])
+    assert ("u0", 0) not in ev
+
+
 def test_name_spoken_to_is_not_the_speaker():
     # 「…」と小林に声をかけた: 小林 is addressed (灯台と少女たち §1301)
     _, qs, ev = ev_for(["「いつもありがとうございます」とミナに声をかけた。"])

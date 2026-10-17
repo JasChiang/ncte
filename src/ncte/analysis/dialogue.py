@@ -32,6 +32,8 @@ SPEECH_VERBS = (
 )
 # how a line is said, not that it is said: a tag only right after the quote with と
 MANNER_VERBS = ("笑っ", "微笑", "苦笑")
+# 「エルリアはその場の勢いで言ったようだが、」 looks back on what she said before: not the tag of the line above
+_HEARSAY = re.compile("よう|らしい|はず|かもしれ|だろう|けど|ものの|のは|ことを|ことに|が、")
 # 「続け」 after a verb stem is 「使い続け」 (keep doing), not 「…と続けた」 (went on saying)
 _VERB_ALT = "|".join(r"(?<![いきしちにひみりぎじびぴえけせてねへめれげぜでべぺ])続け" if v == "続け" else re.escape(v)
                      for v in SPEECH_VERBS)
@@ -149,6 +151,11 @@ def _alias_pattern(aliases: dict[str, str]) -> re.Pattern[str] | None:
     return re.compile("|".join(re.escape(n) for n in names))
 
 
+def _looks_back(text: str, tag: re.Pattern[str]) -> bool:
+    m = tag.match(text)
+    return m is not None and bool(_HEARSAY.search(text[m.end():].split("。")[0]))
+
+
 def detect_tags(units: list[UnitText], quotes: list[Quote], aliases: dict[str, str]) -> dict[tuple[str, int], list[TagEvidence]]:
     """aliases: name_ja/alias → character_id. Returns evidence per (unit_id, quote_index)."""
     pat = _alias_pattern(aliases)
@@ -187,7 +194,7 @@ def detect_tags(units: list[UnitText], quotes: list[Quote], aliases: dict[str, s
         # narration paragraph right after a quote-only paragraph
         if only_quote and by_unit[u.id] + 1 < len(units):
             nu = units[by_unit[u.id] + 1]
-            if OPEN not in nu.text[:2]:
+            if OPEN not in nu.text[:2] and not _looks_back(nu.text, narr_tag):
                 m = narr_tag.match(nu.text)
                 if m:
                     add(q, aliases[m.group(1)], "dialogue_tag", nu.id, nu.text)
