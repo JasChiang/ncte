@@ -86,7 +86,7 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
     model = orch.model_for("review")
     # one scene per request: the reviewer, and the fixes it asks for, get that scene's people and who speaks to whom
     ordered = scene_groups(sorted((rows[u] for u in targets), key=lambda r: r["ordinal"]))
-    chunks = [[r["id"] for r in g[i:i + REVIEW_BATCH]] for g in ordered for i in range(0, len(g), REVIEW_BATCH)]
+    chunks = [[r["id"] for r in part] for g in ordered for part in even_parts(g, REVIEW_BATCH)]
     for chunk in chunks:
         items = []
         tids: dict[str, int] = {}  # the version each unit is reviewed in
@@ -105,7 +105,7 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
             continue
         with orch.lock:
             ctx_batch = _fake_batch(orch, [rows[i["unit_id"]] for i in items])
-        ctx = orch.batch_context(ctx_batch)
+        ctx = _scene_context(orch, ctx_batch, {i["unit_id"] for i in items})
         with orch.lock:
             around = _surroundings(conn, orch.book.id, [rows[i["unit_id"]] for i in items])
             for it in items:
@@ -274,6 +274,33 @@ def _fake_batch(orch: Any, rows: list[sqlite3.Row], *, whole_scene: bool = False
     scene_ids = {r["scene_id"] for r in rows}
     return Batch(rows, False, next(iter(scene_ids)) if len(scene_ids) == 1 and orch.opts.mode == "context" else None,
                  whole_scene)
+
+
+def even_parts(rows: list[Any], size: int) -> list[list[Any]]:
+    """``rows`` in parts of at most ``size``, as even as possible: 43 → 15/14/14, not 20/20/3 (a part of three at the
+    end of a scene has almost nothing of the scene around it)."""
+    n = -(-len(rows) // size) if rows else 0
+    return [rows[len(rows) * k // n:len(rows) * (k + 1) // n] for k in range(n)]
+
+
+def _scene_context(orch: Any, batch: Any, unit_ids: set[str]) -> dict[str, Any]:
+    """What a reviewer of ``unit_ids`` knows: the people of their whole scene, as the translator had them (a woman
+    named a paragraph after the part reviewed was missing, and the 妳 said to her looked wrong); the lines and
+    actions are the reviewed units' own."""
+    if batch.scene_id is None:
+        return orch.batch_context(batch)  # type: ignore[no-any-return]
+    from .orchestrator import Batch
+
+    with orch.lock:
+        scene = orch.conn.execute(
+            "SELECT * FROM units WHERE book_id=? AND scene_id=? AND translatable=1 AND kind IN ('text','heading') "
+            "ORDER BY ordinal", (orch.book.id, batch.scene_id)).fetchall()
+    ctx: dict[str, Any] = orch.batch_context(Batch(scene or batch.rows, False, batch.scene_id))
+    sc = ctx.get("scene") or {}
+    for key in ("utterances", "omitted_arguments", "uncertainties"):
+        if key in sc:
+            sc[key] = [x for x in sc[key] if x.get("unit_id") in unit_ids or set(x.get("unit_ids", [])) & unit_ids]
+    return ctx
 
 
 def scene_groups(rows: list[sqlite3.Row]) -> list[list[sqlite3.Row]]:

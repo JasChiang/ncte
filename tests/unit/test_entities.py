@@ -33,6 +33,20 @@ def test_a_size_cut_waits_for_a_quiet_point():
     assert [len(s.unit_ids) for s in scenes] == [13, 2]  # cut after it, between two narration paragraphs
 
 
+def test_a_heading_stays_with_the_text_after_it():
+    """「序章」 followed by blank lines was a scene of its own (read, summarised, translated and reviewed alone)."""
+    from ncte.analysis.scene import segment_units
+
+    def row(i, text, kind="text", blank=0):
+        return {"id": f"u{i}", "ordinal": i, "resource_href": "a.xhtml", "is_separator": 0, "kind": kind,
+                "blank_before": blank, "spine_index": 1, "plain_text": text}
+
+    rows = [row(0, "序章", "heading"), row(1, "　地の文。", blank=2), row(2, "　地の文。"), row(3, "　次の場面。", blank=2)]
+    assert [s.unit_ids for s in segment_units(rows, {}, 80)] == [["u0", "u1", "u2"], ["u3"]]
+    # a book already read with the heading alone keeps that cut (a changed range would be read again)
+    assert [s.unit_ids for s in segment_units(rows, {}, 80, lone_headings=True)] == [["u0"], ["u1", "u2"], ["u3"]]
+
+
 def test_a_description_is_not_a_name():
     from ncte.analysis.scene import _is_description
 

@@ -109,6 +109,15 @@ def candidate_pairs(conn: sqlite3.Connection, book_id: str) -> tuple[list[dict[s
     return out[:MAX_PAIRS], chars
 
 
+def read_text(conn: sqlite3.Connection, book_id: str) -> list[sqlite3.Row]:
+    """The story paragraphs read so far, in order: only scenes the read pass has been through. Book matter is never
+    read (an afterword's 「二人が夫婦となり」 is the author's summary, not the story, which says 「夫婦じゃなくて婚約者」),
+    and a sample run (--limit-units) does not reach past what it read."""
+    return conn.execute("SELECT u.id, u.ordinal, u.plain_text FROM units u JOIN scenes s ON s.book_id=u.book_id AND "
+                        "s.id=u.scene_id WHERE u.book_id=? AND u.kind='text' AND s.version>0 ORDER BY u.ordinal",
+                        (book_id,)).fetchall()
+
+
 def _forms(c: sqlite3.Row) -> list[str]:
     return [f for f in {c["canonical_name"], *json.loads(c["aliases_json"] or "[]")} if f and len(f) >= 2]
 
@@ -122,8 +131,7 @@ def _group_passages(conn: sqlite3.Connection, book_id: str, chars: dict[str, sql
         return
     from .dialogue import clean
 
-    units = [(u["id"], u["ordinal"], clean(u["plain_text"])) for u in conn.execute(
-        "SELECT id, ordinal, plain_text FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal", (book_id,))]
+    units = [(u["id"], u["ordinal"], clean(u["plain_text"])) for u in read_text(conn, book_id)]
     for grp, ms in members.items():
         gforms = _forms(chars[grp])
         others = {x for (a, b) in list(pairs) for x in (a, b) if {a, b} & {grp, *ms}} - {grp, *ms}
@@ -148,8 +156,7 @@ def _pair_passages(conn: sqlite3.Connection, book_id: str, chars: dict[str, sqli
     model's call (ADR-048)."""
     from .dialogue import clean
 
-    rows = conn.execute("SELECT id, ordinal, plain_text FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal",
-                        (book_id,)).fetchall()
+    rows = read_text(conn, book_id)
     speakers: dict[str, set[str]] = {}
     for u in conn.execute("SELECT unit_id, speaker_id_nullable FROM utterances WHERE book_id=? AND speaker_id_nullable "
                           "IS NOT NULL", (book_id,)):

@@ -39,3 +39,14 @@ def test_line_analysis_with_short_keys_and_short_ids():
     u = UtteranceAnalysis.model_validate(ids.decode(answer))
     assert u.unit_id == U and u.speaker_ref == C and u.speaker_candidates[0].character_ref == C
     assert u.speaker_candidates[0].evidence_unit_ids == [U] and u.quote_index == 0
+
+
+def test_paragraphs_are_numbered_in_reading_order():
+    """A scene's utterances (sent before ``units``) mention a paragraph first; the paragraphs still read P1, P2, P3…"""
+    u = [f"u_{i:016x}" for i in range(1, 7)]
+    payload = {"scene": {"utterances": [{"unit_id": u[4]}]},  # mentions the 5th paragraph first
+               "context_before": [{"unit_id": u[0]}, {"unit_id": u[1]}],
+               "units": [{"unit_id": u[2]}, {"unit_id": u[3]}, {"unit_id": u[4]}],
+               "context_after": [{"unit_id": u[5]}]}
+    ids = ShortIds.for_payload(payload)
+    assert [ids.to_short[x] for x in u] == ["P1", "P2", "P3", "P4", "P5", "P6"]

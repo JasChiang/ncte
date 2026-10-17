@@ -189,6 +189,21 @@ def test_pairs_get_passages_where_the_two_appear_together(conn, cfg, fixtures):
     assert req["pairs"][0]["passages"] and not req["pairs"][0]["passages"][0]["text"].startswith("〔")
 
 
+def test_pair_passages_come_only_from_what_was_read(conn, cfg, fixtures):
+    """An afterword (book matter, never read) and the chapters a sample run has not reached are not evidence: an
+    afterword's 「二人が夫婦となり」 made a couple of two the story calls 「夫婦じゃなくて婚約者」."""
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    pairs, _ = relations.candidate_pairs(conn, book.id)
+    used = {g["id"] for p in pairs for g in p["passages"]}
+    assert used
+    scene_of = {r[0]: r[1] for r in conn.execute("SELECT id, scene_id FROM units WHERE book_id=?", (book.id,))}
+    unread = scene_of[min(used, key=lambda u: -conn.execute("SELECT ordinal FROM units WHERE id=?", (u,)).fetchone()[0])]
+    conn.execute("UPDATE scenes SET version=0 WHERE book_id=? AND id=?", (book.id, unread))  # as if not read
+    pairs, _ = relations.candidate_pairs(conn, book.id)
+    again = {g["id"] for p in pairs for g in p["passages"]}
+    assert not {u for u in again if scene_of[u] == unread}
+
+
 def test_people_page_quotes_come_with_their_translation(conn, cfg, fixtures):
     from ncte.gui import data
 

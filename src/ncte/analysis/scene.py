@@ -35,9 +35,11 @@ class Scene:
 
 
 def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units: int,
-                  breaks: dict[str, str] | None = None) -> list[Scene]:
+                  breaks: dict[str, str] | None = None, *, lone_headings: bool = False) -> list[Scene]:
     """``breaks``: unit id → "llm" (a scene the model starts there) or "stretch" (a stretch the model divided: no
-    size cuts inside it up to twice the limit, ADR-036)."""
+    size cuts inside it up to twice the limit, ADR-036). A heading stays with the text after it (「序章」 followed by
+    blank lines was a scene of its own: read, summarised, translated and reviewed alone); ``lone_headings`` keeps the
+    old cut for a book already read that way."""
     breaks = breaks or {}
     decided = False
     scenes: list[Scene] = []
@@ -57,6 +59,8 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
             reason = "separator"
         elif r["kind"] == "heading" and cur.has_body:
             reason = "heading"
+        elif not cur.has_body and not lone_headings:
+            reason = None  # only a heading so far: the text after it belongs with it
         elif r["blank_before"] >= 2:
             reason = "blank_lines"
         elif breaks.get(r["id"]) == "llm":
@@ -103,7 +107,11 @@ def segment_book(conn: sqlite3.Connection, cfg: Config, book_id: str) -> list[Sc
                  conn.execute("SELECT unit_id, action FROM scene_overrides WHERE book_id=?", (book_id,))}
     breaks = {r["unit_id"]: r["origin"] for r in conn.execute("SELECT unit_id, origin FROM scene_breaks WHERE book_id=?",
                                                               (book_id,))}
-    scenes = segment_units(rows, overrides, cfg.memory.max_scene_units, breaks)
+    # a book read with headings as scenes of their own keeps them: a changed range would be read again
+    lone = conn.execute("SELECT 1 FROM scenes s JOIN units u ON u.book_id=s.book_id AND u.id=s.start_unit_id AND "
+                        "u.id=s.end_unit_id WHERE s.book_id=? AND s.version>0 AND u.kind='heading' LIMIT 1",
+                        (book_id,)).fetchone() is not None
+    scenes = segment_units(rows, overrides, cfg.memory.max_scene_units, breaks, lone_headings=lone)
     from .memory_update import forget_scene
 
     with Transaction(conn):

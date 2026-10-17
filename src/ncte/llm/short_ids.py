@@ -14,6 +14,7 @@ from typing import Any
 
 _ID = re.compile(r"^(?:[ucf]_[0-9a-f]{12,16}|q_[0-9a-f]{16}_\d+)$")
 _LETTER = {"u": "P", "c": "C", "f": "F", "q": "Q"}
+READING_ORDER = ("context_before", "units", "items", "paragraphs", "context_after", "context")
 _REF_KEYS = {"ref", "a", "b", "same_as", "object", "subject", "speaker", "evidence", "replaces_ref", "to"}
 
 
@@ -29,7 +30,14 @@ class ShortIds:
 
     @classmethod
     def for_payload(cls, payload: Any) -> ShortIds:
+        """Paragraphs are numbered in reading order first (the text before, the paragraphs asked about, the text
+        after), then whatever else the payload mentions: numbered by first mention, a scene's utterance list placed
+        before ``units`` made the paragraphs read P26, P27, P10, P28 — "out of order" to the model."""
         ids = cls()
+        if isinstance(payload, dict):
+            for key in READING_ORDER:
+                if key in payload:
+                    ids._collect(payload[key])
         ids._collect(payload)
         return ids
 
