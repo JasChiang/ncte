@@ -1,8 +1,9 @@
 """How well a model judges fixes (audit 2026-10-17 §5.1): known cases sent to ``fix_check`` exactly as a run sends
 them; the number that matters is how often a fix that is still wrong, or broke something, is settled (target < 5%).
 
-Cases are self-made short lines (``data/fix_check_v1.json``); the same source comes with different ``after`` texts, so
-a model that settles whatever reads well is caught. Each model gets the same batches (shuffled once, 20 per request
+Cases are self-made (``data/fix_check_v*.json``); the same source comes with different ``after`` texts, so a model that
+settles whatever reads well is caught. v2 adds subtle meaning, a wrong suggestion the translator followed, longer
+passages fixed in one place and broken in another, and cases the source cannot settle (only ``undecided`` is right). Each model gets the same batches (shuffled once, 20 per request
 like a run) with the run's prompt, schema, structured mode and reasoning (``high`` when the model offers it)."""
 
 from __future__ import annotations
@@ -27,10 +28,11 @@ from ..translation.orchestrator import DEFAULT_STAGE_REASONING
 from ..translation.review import FIX_CHECK_BATCH, fix_outcome
 from ..translation.translator import call_structured
 
-DEFAULT_FIX_SET = Path(__file__).parent / "data" / "fix_check_v1.json"
-Gold = Literal["fixed", "still_wrong", "issue_invalid", "regressed"]
+DATA = Path(__file__).parent / "data"
+DEFAULT_FIX_SET = DATA / "fix_check_v2.json"
+Gold = Literal["fixed", "still_wrong", "issue_invalid", "regressed", "undecided"]
 SETTLED = ("fixed", "issue_invalid")  # what closes an issue (fix_outcome)
-OPEN_GOLD = ("still_wrong", "regressed")  # must stay open
+OPEN_GOLD = ("still_wrong", "regressed", "undecided")  # must stay open (the source does not settle an undecided one)
 
 
 class _M(BaseModel):
@@ -41,6 +43,8 @@ class FixCase(_M):
     id: str
     category: str
     gold: Gold
+    accept: list[Gold] = []  # other answers that also hold (and, like the gold one, settle or not alike)
+    genre: str = ""
     source: str
     before: str
     after: str
@@ -69,11 +73,15 @@ class FixSet(_M):
         ids = [c.id for c in self.cases]
         if len(ids) != len(set(ids)):
             raise ValueError("duplicate case ids")
+        for c in self.cases:
+            if any((a in SETTLED) != (c.gold in SETTLED) for a in c.accept):
+                raise ValueError(f"{c.id}: an accepted answer must settle (or not) like the gold one")
         return self
 
 
 def load_fix_set(path: str | Path | None = None) -> FixSet:
-    p = Path(path) if path else DEFAULT_FIX_SET
+    """A bundled set by name (``fix_check_v1``) or a JSON path; default the latest bundled set."""
+    p = DATA / f"{path}.json" if path and (DATA / f"{path}.json").exists() else Path(path) if path else DEFAULT_FIX_SET
     return FixSet.model_validate(json.loads(p.read_text(encoding="utf-8")))
 
 
@@ -122,7 +130,8 @@ def score(fs: FixSet, checks: dict[str, FixCheck]) -> dict[str, Any]:
     rows = []
     for c in fs.cases:
         got = fix_outcome(checks.get(c.id), program_high=False)
-        rows.append({"id": c.id, "category": c.category, "gold": c.gold, "outcome": got,
+        rows.append({"id": c.id, "category": c.category, "genre": c.genre, "gold": c.gold, "accept": c.accept,
+                     "outcome": got, "ok": got == c.gold or got in c.accept,
                      "reason": checks[c.id].reason if c.id in checks else "",
                      "new_error": checks[c.id].new_error if c.id in checks else ""})
     open_gold = [r for r in rows if r["gold"] in OPEN_GOLD]
@@ -141,11 +150,16 @@ def score(fs: FixSet, checks: dict[str, FixCheck]) -> dict[str, Any]:
                                  sum(r["gold"] != "fixed" for r in rows)),
         "settle_recall": rate(sum(r["outcome"] in SETTLED for r in settle_gold), len(settle_gold)),
         "exact": rate(sum(r["outcome"] == r["gold"] for r in rows), len(rows)),
+        "acceptable": rate(sum(bool(r["ok"]) for r in rows), len(rows)),  # the gold answer or one also accepted
+        "undecided_caught": rate(sum(r["outcome"] == "undecided" for r in rows if r["gold"] == "undecided"),
+                                 sum(r["gold"] == "undecided" for r in rows)),
+        "false_settled_by_category": dict(Counter(r["category"] for r in false_settled)),
         "regressed_caught": rate(sum(r["outcome"] == "regressed" for r in rows if r["gold"] == "regressed"),
                                  sum(r["gold"] == "regressed" for r in rows)),
-        "new_error_on_clean": rate(sum(r["outcome"] == "regressed" for r in rows if r["gold"] != "regressed"),
-                                   sum(r["gold"] != "regressed" for r in rows)),
+        "new_error_on_clean": rate(sum(r["outcome"] == "regressed" for r in settle_gold), len(settle_gold)),
         "undecided_rate": rate(sum(r["outcome"] == "undecided" for r in rows), len(rows)),
+        # settle recall's other side: an issue that should close stays open (more work, not a wrong close)
+        "kept_open": [r["id"] for r in settle_gold if r["outcome"] not in SETTLED],
         "unchecked": sum(r["outcome"] == "unchecked" for r in rows),
         "confusion": {g: dict(Counter(r["outcome"] for r in rows if r["gold"] == g)) for g in Gold.__args__},  # type: ignore[attr-defined]
         "cases": rows,

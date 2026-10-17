@@ -426,7 +426,7 @@ def eval_run(dataset: Annotated[str | None, typer.Option("--dataset")] = None,
 
 @eval_app.command("fix-check")
 def eval_fix_check(models: Annotated[list[str], typer.Option("--model", help="model to compare (repeatable)")],
-                   cases: Annotated[str | None, typer.Option("--cases", help="case set JSON (default: bundled v1)")] = None,
+                   cases: Annotated[str | None, typer.Option("--cases", help="bundled set name (fix_check_v1) or JSON path; default the latest")] = None,
                    repeat: Annotated[int, typer.Option("--repeat", min=1, max=5)] = 1,
                    budget_usd: Annotated[float, typer.Option("--budget-usd", help="for the whole comparison")] = 0.3,
                    out: Annotated[str | None, typer.Option("--out")] = None,

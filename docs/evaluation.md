@@ -66,7 +66,7 @@ ncte eval run --fake                              # 只檢查評測流程（指�
 無遺漏 `unit_id`（對齊檢查）、placeholder 檢查全過（不通過即阻擋）、有效來源的 EPUBCheck 不新增錯誤、無金鑰外洩（redact＋測試）、無越權劇透記憶（visibility＋測試）。語意準確率門檻需先以真實模型收集 baseline 後再訂定。
 
 ## 修正驗收的判斷品質（`ncte eval fix-check`）
-審查報告第五節第 1 項。`src/ncte/eval/data/fix_check_v1.json`：40 題自製短句，已知答案為已修 14、仍錯 14、問題不成立 8、改出新錯 4；同一句原文配不同的 `after`（例如否定改對／只加了副詞／改對但「昨日」變「明天」），看模型是不是只要讀起來通順就判 `fixed`。送出的內容與正式流程相同：同一份 `fix_check` 提示詞、schema、每次 20 題、相關人物的譯名與性別、`lines`；推理照正式流程（模型提供 `high` 時用 `high`，`stage_reasoning.fix_check` 可覆寫）。
+審查報告第五節第 1 項。預設 `src/ncte/eval/data/fix_check_v2.json`（40 題：已修 11、仍錯 10、改出新錯 8、問題不成立 6、原文判斷不了 5；含審稿建議錯而譯者照改、長段落改壞別處、第一人稱敘述者，`accept` 列出也成立的答案；判斷不了的題被結案也算誤結案）；第一版 `--cases fix_check_v1`（40 題短句：已修 14、仍錯 14、問題不成立 8、改出新錯 4）。同一句原文配不同的 `after`（例如否定改對／只加了副詞／改對但「昨日」變「明天」），看模型是不是只要讀起來通順就判 `fixed`。送出的內容與正式流程相同：同一份 `fix_check` 提示詞、schema、每次 20 題、相關人物的譯名與性別、`lines`；推理照正式流程（模型提供 `high` 時用 `high`，`stage_reasoning.fix_check` 可覆寫）。
 
 ```bash
 ncte eval fix-check --dry-run --model google/gemini-3.8-flash --model anthropic/claude-sonnet-5.5   # 只查 /models 估價與餘額
@@ -74,7 +74,8 @@ ncte eval fix-check --model google/gemini-3.8-flash --model anthropic/claude-hai
 ncte eval fix-check --fake --model google/gemini-3.8-flash                                         # 只檢查流程
 ```
 指標（`workspace/eval/fix_check_<時間>/fix_check_results.json`，每題附模型的理由）：
-- `false_settle_rate`：仍錯或改出新錯的修正被結案（判 `fixed`／`issue_invalid` 且沒有新錯）的比例，**目標 < 5%**（18 題中 0 題）。
+- `false_settle_rate`：仍錯、改出新錯或判斷不了的修正被結案（判 `fixed`／`issue_invalid` 且沒有新錯）的比例，**目標 < 5%**（v2 為 23 題中 1 題以下）；`false_settled_by_category` 依類別列出。
+- `acceptable`：標準答案或 `accept` 內的答案；`undecided_caught`：判斷不了的題答 `undecided`；`kept_open`：該結案卻沒結案的題（多一次人工，不是錯誤結案）。
 - `false_fixed_rate`：不是「已修」卻判 `fixed` 的比例；`settle_recall`：該結案的有結案；`regressed_caught`：新錯有抓到；`new_error_on_clean`：沒有新錯卻報新錯；`undecided_rate`、`exact`、混淆表。
 - 限制：題目短、錯誤明顯，量的是「會不會放過明顯沒修好的」，不是長段落的判斷力；通過不代表真實作品上的誤判率也低。題目由開發者撰寫並標註，尚未經第二人覆核。
 

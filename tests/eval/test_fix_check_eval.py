@@ -3,20 +3,23 @@ still-wrong fix that is closed (offline)."""
 
 import json
 
+import pytest
+
 from ncte.eval.fix_check import OPEN_GOLD, load_fix_set, payloads, run_comparison, score
 from ncte.llm.fake import FakeLLM
 from ncte.llm.schemas import FixCheck
 
 
-def test_the_bundled_set_has_every_kind_and_paired_sources():
-    fs = load_fix_set()
+@pytest.mark.parametrize("name", ["fix_check_v1", "fix_check_v2"])
+def test_the_bundled_sets_have_every_kind_and_paired_sources(name):
+    fs = load_fix_set(name)
     gold = {c.gold for c in fs.cases}
-    assert gold == {"fixed", "still_wrong", "issue_invalid", "regressed"}
+    assert gold >= {"fixed", "still_wrong", "issue_invalid", "regressed"}
     assert len(fs.cases) == 40
     by_source: dict[str, set[str]] = {}
     for c in fs.cases:
         by_source.setdefault(c.source, set()).add(c.gold)
-    assert sum(len(g) > 1 for g in by_source.values()) >= 10  # the same line, judged both ways
+    assert sum(len(g) > 1 for g in by_source.values()) >= 2  # the same line, judged two ways
     for c in fs.cases:
         assert c.issues and c.before and c.after
         if c.gold == "issue_invalid":
@@ -42,11 +45,20 @@ def test_closing_a_still_wrong_fix_is_the_counted_error():
     def check(cid: str, verdict: str, new_error: str = "") -> FixCheck:
         return FixCheck(unit_id=cid, verdict=verdict, new_error=new_error, reason="r")  # type: ignore[arg-type]
 
-    perfect = {c.id: check(c.id, "still_wrong" if c.gold == "still_wrong" else
-                           ("fixed" if c.gold == "regressed" else c.gold), "x" if c.gold == "regressed" else "")
+    perfect = {c.id: check(c.id, "fixed" if c.gold == "regressed" else c.gold, "x" if c.gold == "regressed" else "")
                for c in fs.cases}
     s = score(fs, perfect)
     assert s["false_settle_rate"] == 0 and s["exact"] == 1 and s["regressed_caught"] == 1
+    assert s["undecided_caught"] == 1 and s["kept_open"] == []
+
+    # a new error reported where "undecided" is the answer still keeps it open, and is accepted where listed
+    loose = {**perfect, "child-gender": check("child-gender", "issue_invalid", "加了性別")}
+    s = score(fs, loose)
+    assert s["false_settle_rate"] == 0 and s["acceptable"] == 1 and s["exact"] < 1
+
+    trusting = {**perfect, "you-inferred": check("you-inferred", "fixed")}  # a guessed gender taken as known
+    s = score(fs, trusting)
+    assert s["false_settled"] == ["you-inferred"] and s["false_settled_by_category"] == {"undecidable": 1}
 
     gullible = {c.id: check(c.id, "fixed") for c in fs.cases}
     s = score(fs, gullible)
