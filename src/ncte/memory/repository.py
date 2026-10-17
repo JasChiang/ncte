@@ -264,6 +264,12 @@ def character_basics(conn: sqlite3.Connection, character_id: str, hz: tuple[floa
     return out
 
 
+def at_period(text: str, period: str) -> str:
+    """A relation word with the time it holds in (「前世：長官」): every task that shows the relation shows when, so
+    the subordinate of a past life is not taken for one in the story's present."""
+    return f"{period}：{text}" if period and text else text
+
+
 def qualified_fact(f: Any, text: str, names: dict[str, str]) -> str:
     """``text`` (a fact as a task reads it) with whose view it is and how sure, so that a belief or a guess is never
     passed on as a plain fact: 「〔米娜認為〕海斗是她哥哥（推測）」, not 「海斗是她哥哥」."""
@@ -273,6 +279,8 @@ def qualified_fact(f: Any, text: str, names: dict[str, str]) -> str:
         pre = f"〔{names.get(who, who) if who else '某個角色'}認為〕"
     elif f["fact_type"] == "narrator_claim":
         pre = "〔敘述者的說法〕"
+    if "period" in f.keys() and f["period"]:
+        pre = f"〔{f['period']}〕" + pre  # 〔前世〕: not the story's present
     return pre + text + ("" if f["certainty"] == "explicit" else "（推測）")
 
 

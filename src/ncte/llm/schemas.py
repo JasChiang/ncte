@@ -48,6 +48,9 @@ class NewCharacter(_M):
     evidence_unit_ids: list[str]
     same_as_ref: str | None = None  # a known character (so far unnamed / described) this name now reveals
     alias_kinds: list[AliasKind] = Field(default_factory=list)  # what each alias is; common nouns are not kept
+    # the same words as a known character's name but another person (the mother of a past life, not of this one)
+    other_person: bool = False
+    period: str = ""  # when this person lives, if not the story's present (前世, 三年前)
 
 
 class Participant(_M):
@@ -148,6 +151,7 @@ class FactOut(_M):
     evidence_quote: str
     source_viewpoint: str | None
     retracts_fact_ids: list[str]
+    period: str = ""  # when it holds, if not the story's present: 前世, 千年前, 三年前 (empty = now)
 
 
 class GlossaryCandidate(_M):
@@ -203,6 +207,7 @@ class StatedRelation(_M):
     kind: Literal["identity", "feeling", "same_person"]  # 身分／情感與立場／同一人的不同身分（分身、秘密身分、不同時期）
     evidence_unit_ids: list[str]
     evidence_quote: str
+    period: str = ""  # when it holds, if not the story's present (前世的宿敵)
 
 
 class GroupMembers(_M):
@@ -363,6 +368,7 @@ class RelationOut(_M):
     kind: Literal["identity", "feeling", "same_person"] = "identity"
     certainty: Literal["explicit", "inferred"] = "explicit"
     replaces: str | None = None  # an earlier relation of the same pair this one takes the place of (宿敵 → 未婚夫妻)
+    period: str = ""  # when it holds, if not the story's present (前世)
 
 
 class RelationsOutput(_M):

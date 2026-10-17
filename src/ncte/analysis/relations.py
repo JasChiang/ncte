@@ -20,7 +20,7 @@ from typing import Any
 from ..llm.schemas import RelationsOutput  # noqa: F401  (re-exported for callers)
 from ..memory.address import calls_by
 from ..memory.db import Transaction, utcnow
-from ..memory.repository import qualified_fact
+from ..memory.repository import at_period, qualified_fact
 from ..series import SERIES_SCOPE
 
 MAX_PAIRS = 40
@@ -317,17 +317,19 @@ def apply(conn: sqlite3.Connection, book_id: str, results: list[tuple[RelationsO
                 pair_ok = any(set(lk["_pairs"][p]) == {a, b} and set(r.facts) & lk["_allowed"][p] for p in lk["_pairs"])
                 if not pair_ok:  # evidence of another pair: not this pair's relation
                     continue
-                rel = r.relation.strip()[:20]
+                when = r.period.strip()[:20]
+                rel = at_period(r.relation.strip()[:20], when)
                 if (a, b, rel) in manual or (b, a, rel) in manual:
                     continue
                 since = min(o for _, _, o in cited)
                 conn.execute(
                     "INSERT OR REPLACE INTO relations(book_id, a_id, b_id, relation_zh, a_is, b_is, since_ordinal, "
-                    "fact_ids_json, reason, created_at, kind, certainty, origin, evidence_json) "
-                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (book_id, a, b, rel, r.a_is.strip()[:12] or None, r.b_is.strip()[:12] or None, since,
+                    "fact_ids_json, reason, created_at, kind, certainty, origin, evidence_json, period) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (book_id, a, b, rel, at_period(r.a_is.strip()[:12], when) or None,
+                     at_period(r.b_is.strip()[:12], when) or None, since,
                      json.dumps([i for k, i, _ in cited if k == "fact"]), r.reason[:200], utcnow(), r.kind, r.certainty,
-                     "llm", json.dumps([{"kind": k, "id": i, "at": o} for k, i, o in cited])))
+                     "llm", json.dumps([{"kind": k, "id": i, "at": o} for k, i, o in cited]), when or None))
                 placed.append((a, b, rel, since, (r.replaces or "").strip() or None))
                 n += 1
         for a, b, _rel, since, replaces in placed:  # 宿敵 → 未婚夫妻: the earlier relation ends where the later begins

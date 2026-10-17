@@ -599,6 +599,11 @@ ALTER TABLE scene_breaks ADD COLUMN kind TEXT;
 ALTER TABLE scene_breaks ADD COLUMN sure INTEGER;
 ALTER TABLE scenes ADD COLUMN kind TEXT;
 """),
+    (24, "the time a fact or a relation holds in (a past life, years before): not the story's present", """
+ALTER TABLE facts ADD COLUMN period TEXT;
+ALTER TABLE relation_notes ADD COLUMN period TEXT;
+ALTER TABLE relations ADD COLUMN period TEXT;
+"""),
 ]
 
 

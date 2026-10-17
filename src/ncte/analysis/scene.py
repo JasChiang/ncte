@@ -525,6 +525,16 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 via_entity = character_for_form(conn, book_id, name)
                 if via_entity:  # a known name form of an existing character (full name, nickname …)
                     existing_alias[name] = via_entity
+            if name in existing_alias and nc.other_person:
+                # 「母親」 of a past life is not the mother of this one: a card of its own, named with its time, and the
+                # bare word stays with the card it had (the reader tells them apart by the cards it is given)
+                label = f"{name}（{nc.period.strip()[:10] or '另一人'}）"
+                cid, created = repo.upsert_character(conn, book_id, label, name_zh=None, aliases=[], unit_id=first.id,
+                                                     ordinal=first.ordinal, origin="scene_analysis")
+                stats["new_characters"] += int(created)
+                ref_map[nc.temp_id] = ref_map[cid] = cid
+                names_of[cid] = [name]
+                continue
             if name in existing_alias:
                 ref_map[nc.temp_id] = existing_alias[name]
                 canon = conn.execute("SELECT canonical_name FROM characters WHERE id=?", (existing_alias[name],)).fetchone()

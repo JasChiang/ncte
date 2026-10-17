@@ -60,6 +60,8 @@ def build_memory_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
            "glossary": [g for g in glossary if str(g.get("ja", "")) in text]}
     if known := known_facts(conn, book_id, scene, views, names, text):
         out["known_facts"] = known
+    if "kind" in scene.keys() and scene["kind"] and scene["kind"] != "present":
+        out["scene_kind"] = scene["kind"]  # a flashback's facts are of its time
     return out
 
 
@@ -91,6 +93,8 @@ def known_facts(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, view
                                 "certainty": f["certainty"]}
         if f["source_viewpoint"]:
             item["source_viewpoint"] = names.get(f["source_viewpoint"], f["source_viewpoint"])
+        if f["period"]:
+            item["period"] = f["period"]
         out.append(item)
     return out
 
@@ -149,12 +153,13 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         conn.execute(
             "INSERT OR REPLACE INTO facts(id, book_id, subject, predicate, object, fact_type, certainty, fact_json, "
             "evidence_unit_ids_json, evidence_quote, first_revealed_unit_id, first_revealed_ordinal, source_viewpoint, "
-            "scene_id, run_id, created_at, object_ref) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "scene_id, run_id, created_at, object_ref, period) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (fid, book_id, f.subject_ref, f.predicate[:200], f.object[:400], f.fact_type, f.certainty,
              json.dumps(f.model_dump(), ensure_ascii=False), json.dumps(ev), f.evidence_quote[:400], first,
-             ordinal[first], f.source_viewpoint, sid, run_id, utcnow(), obj_ref))
+             ordinal[first], f.source_viewpoint, sid, run_id, utcnow(), obj_ref, f.period.strip()[:20] or None))
         subj = chars[f.subject_ref]["canonical_name"] if f.subject_ref in chars else f.subject_ref
-        index_memory(conn, book_id, "fact", fid, ordinal[first], f"{subj} {f.predicate} {f.object}")
+        index_memory(conn, book_id, "fact", fid, ordinal[first],
+                     f"{f'〔{f.period.strip()}〕' if f.period.strip() else ''}{subj} {f.predicate} {f.object}")
         stats["facts"] += 1
         for old in f.retracts_fact_ids:
             r = conn.execute(f"SELECT * FROM facts WHERE id=? AND {SERIES_SCOPE}", (old, book_id)).fetchone()
@@ -288,11 +293,13 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
             rej(rel.model_dump(), "relation evidence_quote not found verbatim in evidence units")
             continue
         first = min(ev, key=lambda u: ordinal[u])
+        when = rel.period.strip()[:20]
         conn.execute("INSERT INTO relation_notes(book_id, scene_id, a_id, b_id, relation_zh, a_is, b_is, kind, "
-                     "evidence_unit_ids_json, evidence_quote, first_ordinal, run_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                     (book_id, sid, rel.a_ref, rel.b_ref, rel.relation.strip()[:20], rel.a_is.strip()[:12] or None,
-                      rel.b_is.strip()[:12] or None, rel.kind, json.dumps(ev), rel.evidence_quote[:300], ordinal[first],
-                      run_id, utcnow()))
+                     "evidence_unit_ids_json, evidence_quote, first_ordinal, run_id, created_at, period) "
+                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (book_id, sid, rel.a_ref, rel.b_ref, repo.at_period(rel.relation.strip()[:20], when),
+                      repo.at_period(rel.a_is.strip()[:12], when) or None, repo.at_period(rel.b_is.strip()[:12], when) or None,
+                      rel.kind, json.dumps(ev), rel.evidence_quote[:300], ordinal[first], run_id, utcnow(), when or None))
         stats["relation_notes"] += 1
 
     stats["group_members"] = 0

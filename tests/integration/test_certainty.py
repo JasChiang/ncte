@@ -63,3 +63,54 @@ def test_a_guessed_relation_reaches_the_translator_marked(conn, cfg, fixtures):
     ctx = memory_context(conn, book.id, scene=scene, batch_rows=rows)
     rels = [r for c in ctx["characters"] for r in c.get("relations", [])]
     assert rels and all(r.get("certainty") == "inferred" for r in rels), json.dumps(rels, ensure_ascii=False)
+
+
+def test_what_held_in_another_time_says_so_everywhere(conn, cfg, fixtures):
+    """A reincarnation story: 「前世の宿敵」 and 「the subordinate of a past life」 are not the story's present. A fact or
+    relation read with its time shows it in every later task; 「母親」 of the past life is not merged with this one's."""
+    from ..scripted import known, memory_update, uid
+
+    def read(payload, req):
+        out = memory_update(payload, req)
+        kaito, mina = known(payload, "カイト"), known(payload, "ミナ")
+        hand = uid(payload, "カイトは銀の鍵をミナに手渡した")
+        if hand and kaito and mina:
+            out["facts"] = [{"subject_ref": kaito, "predicate": "是", "object": "敵國的將軍", "fact_type": "objective",
+                             "certainty": "explicit", "evidence_unit_ids": [hand], "evidence_quote": "カイトは銀の鍵",
+                             "source_viewpoint": None, "retracts_fact_ids": [], "period": "前世"}]
+            out["relations"] = [{"a_ref": kaito, "b_ref": mina, "relation": "宿敵", "a_is": "宿敵", "b_is": "宿敵",
+                                 "kind": "feeling", "evidence_unit_ids": [hand], "evidence_quote": "カイトは銀の鍵",
+                                 "period": "前世"}]
+        return out
+
+    fake = FakeLLM(responders={**RESPONDERS, "memory_update": read})
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    f = conn.execute("SELECT * FROM facts WHERE book_id=? AND period='前世'", (book.id,)).fetchone()
+    assert f is not None and qualified_fact(f, "是敵國的將軍", {}) == "〔前世〕是敵國的將軍"
+    n = conn.execute("SELECT * FROM relation_notes WHERE book_id=? AND period='前世'", (book.id,)).fetchone()
+    assert n["relation_zh"] == "前世：宿敵" and n["a_is"] == "前世：宿敵"
+    later = [json.dumps(p, ensure_ascii=False) for p, c in zip(fake.payloads, fake.calls, strict=True)
+             if c.stage in ("impressions", "relations")]
+    assert any("〔前世〕" in t or "前世：宿敵" in t for t in later)
+
+
+def test_the_same_word_for_another_person_gets_a_card_of_its_own(conn, cfg, fixtures):
+    from ncte.analysis.scene import apply_scene_analysis
+    from ncte.library import import_book
+    from ncte.llm.schemas import SceneAnalysisOutput
+    from ncte.memory.repository import upsert_character
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    word = "ミナ"
+    unit = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='text' AND plain_text LIKE '%ミナ%' ORDER BY ordinal "
+                        "LIMIT 1", (book.id,)).fetchone()
+    scene = conn.execute("SELECT * FROM scenes WHERE book_id=? AND id=?", (book.id, unit["scene_id"])).fetchone()
+    mother = upsert_character(conn, book.id, word, name_zh=None, aliases=[], unit_id=unit["id"], ordinal=0, origin="t")[0]
+    out = SceneAnalysisOutput.model_validate({
+        "pov": None, "location": None, "time": None, "participants": [], "utterances": [], "actions": [], "props": [],
+        "uncertainties": [], "new_characters": [{"temp_id": "new_1", "name_ja": word, "aliases_ja": [],
+                                                 "proposed_name_zh": "", "evidence_unit_ids": [unit["id"]],
+                                                 "other_person": True, "period": "前世"}]})
+    apply_scene_analysis(conn, book.id, scene, out)
+    cards = {r[0]: r[1] for r in conn.execute("SELECT canonical_name, id FROM characters WHERE book_id=?", (book.id,))}
+    assert cards[word] == mother and f"{word}（前世）" in cards

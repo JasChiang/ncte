@@ -203,6 +203,7 @@ def select_facts(rows: list[Any], batch_text: str, present: list[dict[str, Any]]
     return [{"subject": names.get(f["subject"], f["subject"]), "predicate": nm(f["predicate"]), "object": nm(f["object"]),
              "type": f["fact_type"], "certainty": f["certainty"],
              **({"viewpoint": nm(f["source_viewpoint"])} if f["source_viewpoint"] else {}),
+             **({"period": f["period"]} if "period" in f.keys() and f["period"] else {}),
              "source": match_text(f["evidence_quote"] or "")[:90]} for _, _, f in keep]
 
 
