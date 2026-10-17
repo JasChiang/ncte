@@ -35,13 +35,13 @@ def test_a_window_keeps_its_breaks_and_shows_the_unfinished_scene_again(monkeypa
 
 
 def test_the_program_drops_breaks_it_cannot_accept():
-    rows = _rows(["　地の文。"] * 6 + ["「まだ続く", "続きの台詞」"] + ["　眺めていた時――", "「おい！」"] + ["　地の文。"] * 6,
-                 sep=(15,))
+    rows = _rows(["　地の文。"] * 6 + ["「まだ続く", "続きの台詞」"] + ["　地の文。"] * 6 + ["◇", "　翌朝。"] + ["　地の文。"] * 4,
+                 sep=(14,))
     got = sw.cut_chapter(rows, lambda pl: SceneWindowsOutput.model_validate({"breaks": [
-        {"unit_id": u, "reason": "t"} for u in ("u0", "u2", "u7", "u9", "u15")]}), title="", known=True, max_units=80)[0]
-    # u0 is the first paragraph, u2 leaves a 2-paragraph scene, u7 is inside a quote, u9 follows a sentence that runs
-    # on; u15 is a separator
-    assert [i for i, _ in got] == [15]
+        {"unit_id": u, "reason": "t"} for u in ("u0", "u2", "u7", "u15")]}), title="", known=True, max_units=80)[0]
+    # u0 is the first paragraph, u2 leaves a 2-paragraph scene, u7 is inside a quote; u15 (after the separator) moves
+    # onto the separator, which opens the scene
+    assert [i for i, _ in got] == [14]
 
 
 def test_an_unanswered_window_keeps_the_author_marks_as_unsure():

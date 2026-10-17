@@ -25,7 +25,6 @@ END_CHARS = 20  # and the ending of a longer one: whether it runs on into the ne
 WINDOW_CHARS = 9000  # what one window shows, about
 WINDOW_PARAGRAPHS = 220
 MIN_SCENE = 3  # paragraphs: a break closer than this to the one before is dropped (not after a separator)
-_RUNS_ON = ("―", "—", "、", "，", "─")
 
 
 def marks(r: sqlite3.Row, prev: sqlite3.Row | None) -> list[str]:
@@ -64,22 +63,25 @@ def payload(rows: list[sqlite3.Row], start: int, end: int, *, title: str, known:
             p["marks"] = m
         paras.append(p)
     return {"task": "scene_windows", "chapter": {"title": title, "known": known}, "starts_scene": starts_scene,
-            "reaches_chapter_end": end >= len(rows), "scene_size": [MIN_SCENE * 4, max_units], "paragraphs": paras}
+            "reaches_chapter_end": end >= len(rows), "scene_size": [MIN_SCENE, max_units], "paragraphs": paras}
 
 
 def accepted(rows: list[sqlite3.Row], start: int, end: int, breaks: list[WindowBreak]) -> list[tuple[int, WindowBreak]]:
     """The breaks the program keeps, by position: inside the window and not its first paragraph, not inside a quote
-    that runs over paragraphs, not right after a paragraph whose sentence runs on, and not leaving a scene of one or
-    two paragraphs (unless the author put a separator there)."""
+    that runs over paragraphs, and not leaving a scene of one or two paragraphs (unless the author put a separator
+    there). A break on the paragraph right after a separator moves onto the separator (the separator opens the scene).
+    A sentence that runs on (「…時――」) is the model's to weigh: it sees each paragraph's ending, and 「――」 that ends
+    one beat and opens the next is a real change of scene."""
     pos = {rows[i]["id"]: i for i in range(start + 1, end)}
     quotes = find_quotes([UnitText(r["id"], clean(r["plain_text"]), r["ordinal"]) for r in rows[start:end]])
     inside = {q.unit_id for q in quotes if q.continuation_of is not None}
     out: list[tuple[int, WindowBreak]] = []
     for b in sorted((b for b in breaks if b.unit_id in pos), key=lambda b: pos[b.unit_id]):
         i = pos[b.unit_id]
+        if i - 1 > start and rows[i - 1]["is_separator"]:
+            i -= 1
         sep = bool(rows[i]["is_separator"])
-        runs_on = clean(rows[i - 1]["plain_text"]).rstrip(" 　").endswith(_RUNS_ON)
-        if b.unit_id in inside or (runs_on and not sep) or (out and out[-1][0] == i):
+        if b.unit_id in inside or (out and out[-1][0] == i):
             continue
         if not sep and i - (out[-1][0] if out else start) < MIN_SCENE:
             continue
