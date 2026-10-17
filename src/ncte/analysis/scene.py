@@ -127,18 +127,24 @@ def segmentation(conn: sqlite3.Connection, book_id: str) -> str:
     return scheme
 
 
+def ensure_chapters(conn: sqlite3.Connection, book_id: str) -> None:
+    """Chapters from the TOC for a book that has none yet (imported before chapters came from the TOC, too)."""
+    if conn.execute("SELECT 1 FROM chapters WHERE book_id=? LIMIT 1", (book_id,)).fetchone() is not None:
+        return
+    from ..epub.chapters import chapter_starts, save_chapters
+    from ..epub.parser import load_epub
+
+    path = conn.execute("SELECT stored_path FROM books WHERE id=?", (book_id,)).fetchone()
+    starts = chapter_starts(conn, book_id, load_epub(path[0])) if path and path[0] and Path(path[0]).exists() else []
+    save_chapters(conn, book_id, starts, "toc" if starts else "none")
+
+
 def chapter_starts_for(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row]) -> dict[str, bool] | None:
     """First unit of each chapter → whether the model has cut it (None: the book is cut the old way). Chapters come
     from the TOC; a book without one is a single chapter until the model finds its chapters."""
     if segmentation(conn, book_id) != "chapters":
         return None
-    if conn.execute("SELECT 1 FROM chapters WHERE book_id=? LIMIT 1", (book_id,)).fetchone() is None:
-        from ..epub.chapters import chapter_starts, save_chapters
-        from ..epub.parser import load_epub
-
-        path = conn.execute("SELECT stored_path FROM books WHERE id=?", (book_id,)).fetchone()
-        starts = chapter_starts(conn, book_id, load_epub(path[0])) if path and path[0] and Path(path[0]).exists() else []
-        save_chapters(conn, book_id, starts, "toc" if starts else "none")
+    ensure_chapters(conn, book_id)
     decided = {r[0] for r in conn.execute("SELECT unit_id FROM scene_breaks WHERE book_id=? AND origin='chapter'",
                                           (book_id,))}
     out: dict[str, bool] = {}
@@ -322,6 +328,8 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
         extra["established_self_forms"] = forms
     kin = _relations_so_far(conn, book_id, scene["start_ordinal"])
     extra.update(story_so_far(conn, book_id, scene))
+    if "kind" in scene.keys() and scene["kind"] and scene["kind"] != "present":
+        extra["scene_kind"] = scene["kind"]  # flashback / parallel / summary / other, as the scene was cut
     return {
         **extra,
         "task": "scene_analyze", "scene_id": scene["id"],

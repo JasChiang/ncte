@@ -86,6 +86,13 @@ def default_scenes(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     return {"breaks": []}
 
 
+def default_scene_windows(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+    """The author's separators and blank lines, as the program cut before."""
+    return {"first_kind": "present", "breaks": [
+        {"unit_id": p["unit_id"], "kind": "present", "sure": True, "new_chapter": False, "reason": "marker"}
+        for p in payload["paragraphs"][1:] if {"separator", "blank"} & set(p.get("marks", []))]}
+
+
 def default_reader(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     """A reader who finds nothing amiss."""
     return {"issues": []}
@@ -130,6 +137,7 @@ DEFAULTS: dict[str, Responder] = {
     "review": default_review,
     "verify": default_verify,
     "scenes": default_scenes,
+    "scene_windows": default_scene_windows,
     "reader": default_reader,
     "proofread": default_proofread,
     "house_style": default_house_style,

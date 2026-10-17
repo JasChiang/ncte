@@ -292,6 +292,24 @@ class SceneBreaksOutput(_M):
     breaks: list[SceneBreak]
 
 
+# present: the story's now · flashback: a remembered past told as scenes · parallel: elsewhere at the same time ·
+# summary: time passing told in brief (「それから数週間、」) · other: a dream, a letter, an in-story text
+SceneKind = Literal["present", "flashback", "parallel", "summary", "other"]
+
+
+class WindowBreak(_M):
+    unit_id: str  # the first paragraph of a new scene
+    kind: SceneKind = "present"  # of the scene it starts
+    sure: bool = True  # false: a judgement call someone may want to look at
+    new_chapter: bool = False  # only when the book has no table of contents
+    reason: str = ""
+
+
+class SceneWindowsOutput(_M):
+    first_kind: SceneKind = "present"  # of the scene the window starts with, when it starts one
+    breaks: list[WindowBreak]
+
+
 # ------------------------------------------------------------ reader's look (ADR-038)
 class ReaderIssue(_M):
     unit_id: str
@@ -385,6 +403,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "review": ReviewOutput,
     "verify": VerifyOutput,
     "scenes": SceneBreaksOutput,
+    "scene_windows": SceneWindowsOutput,
     "reader": ReaderOutput,
     "proofread": ProofreadOutput,
     "house_style": HouseStyleOutput,

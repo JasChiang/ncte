@@ -1,10 +1,21 @@
-"""ADR-036: the model chooses where scenes begin inside long stretches the author did not divide."""
+"""ADR-036: the model chooses where scenes begin inside long stretches the author did not divide. This is the cut of a
+book read before chapters came from the TOC (``segmentation`` "files"); new books are cut by chapter
+(tests/integration/test_scene_windows.py)."""
+
+import pytest
 
 from ncte.analysis import scene_breaks as sb
 from ncte.llm.fake import FakeLLM
 
 from ..helpers import run_book
 from ..scripted import RESPONDERS
+
+
+@pytest.fixture(autouse=True)
+def _files_cut(monkeypatch):
+    import ncte.analysis.scene as scene
+
+    monkeypatch.setattr(scene, "segmentation", lambda conn, book_id: "files")
 
 
 def _rows(texts):

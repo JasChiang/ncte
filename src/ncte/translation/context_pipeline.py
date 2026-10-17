@@ -119,9 +119,13 @@ class ContextOrchestrator(Orchestrator):
         ``recut``: choose again for a book already read or divided; scenes whose range changes lose what reading them
         left in memory (``segment_book``) and are read again."""
         from ..analysis import scene_breaks as sb
-        from ..analysis.scene import segment_book
+        from ..analysis.scene import segment_book, segmentation
         from ..llm.schemas import SceneBreaksOutput
 
+        with self.lock:
+            scheme = segmentation(self.conn, self.book.id)
+        if scheme == "chapters":
+            return self.cut_chapters(recut=recut)
         max_chars = self.cfg.translation.scene_max_chars
         with self.lock:
             if recut:
@@ -168,6 +172,72 @@ class ContextOrchestrator(Orchestrator):
         with self.lock:
             segment_book(self.conn, self.cfg, self.book.id)
         self.log(f"scene breaks: {stats}")
+        return stats
+
+    def cut_chapters(self, *, recut: bool = False) -> dict[str, int]:
+        """Each chapter the run reaches, cut into scenes by the model in overlapping windows (``scene_windows``);
+        book matter (cover, TOC, afterword) keeps the program's cut. A book without a TOC gets its chapters from the
+        breaks the model marks as a new chapter."""
+        from ..analysis import scene_windows as sw
+        from ..analysis.scene import segment_book
+        from ..epub.chapters import save_chapters
+        from ..llm.schemas import SceneWindowsOutput
+
+        end = self.sample_end()
+        with self.lock:
+            if self.conn.execute("SELECT 1 FROM chapters WHERE book_id=? LIMIT 1", (self.book.id,)).fetchone() is None:
+                segment_book(self.conn, self.cfg, self.book.id)  # imported before chapters came from the TOC
+            if recut:
+                with Transaction(self.conn):
+                    self.conn.execute("DELETE FROM scene_breaks WHERE book_id=?", (self.book.id,))
+            chapters = self.conn.execute("SELECT * FROM chapters WHERE book_id=? ORDER BY seq", (self.book.id,)).fetchall()
+            decided = {r[0] for r in self.conn.execute("SELECT unit_id FROM scene_breaks WHERE book_id=? AND "
+                                                       "origin='chapter'", (self.book.id,))}
+            story: set[str] | None = None
+            if self.cfg.context.skip_book_matter:
+                from ..epub.matter import story_hrefs
+
+                story = story_hrefs(self.conn, self.book.id)
+        prompt = load_prompt("scene_windows")
+        stats = {"chapters": 0, "windows": 0, "breaks": 0, "unsure": 0, "found_chapters": 0}
+        for ch in chapters:
+            if end is not None and ch["start_ordinal"] > end:
+                break
+            with self.lock:
+                rows = sw.chapter_rows(self.conn, self.book.id, ch)
+            if not rows or rows[0]["id"] in decided or (story is not None and not {r["resource_href"] for r in rows} & story):
+                continue
+
+            def ask(pl: dict[str, Any], label: str = ch["label"]) -> SceneWindowsOutput | None:
+                stats["windows"] += 1
+                try:
+                    out = self._llm("scene_windows", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]])
+                except FatalAPIError:
+                    raise
+                except LLMError as exc:
+                    self._finding(None, "scene_windows_failed", "low", f"{label}: {exc}"[:300])
+                    return None
+                assert isinstance(out, SceneWindowsOutput)
+                return out
+
+            breaks, first_kind = sw.cut_chapter(rows, ask, title=ch["label"], known=ch["source"] == "toc",
+                                                max_units=self.cfg.memory.max_scene_units)
+            with self.lock:
+                found = sw.save(self.conn, self.book.id, rows, breaks, first_kind)
+                if found and ch["source"] == "none":  # chapters the model found in a book without a TOC
+                    starts = [(rows[0]["ordinal"], ch["label"])] + [
+                        (r["ordinal"], "") for r in rows if r["id"] in set(found)]
+                    with Transaction(self.conn):
+                        save_chapters(self.conn, self.book.id, starts, "model")
+                        self.conn.executemany("UPDATE scene_breaks SET origin='chapter' WHERE book_id=? AND unit_id=?",
+                                              [(self.book.id, u) for u in found])
+            stats["chapters"] += 1
+            stats["breaks"] += len(breaks)
+            stats["unsure"] += sum(not b.sure for _, b in breaks)
+            stats["found_chapters"] += len(found)
+        with self.lock:
+            segment_book(self.conn, self.cfg, self.book.id)
+        self.log(f"scenes cut by chapter: {stats}")
         return stats
 
     def create_extra_jobs(self) -> None:
