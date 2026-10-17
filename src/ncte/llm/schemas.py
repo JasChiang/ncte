@@ -363,6 +363,20 @@ class ConfirmOutput(_M):
     checks: list[FlagCheck]
 
 
+# ------------------------------------------------------------ after a fix: did it fix what was found?
+class FixCheck(_M):
+    unit_id: str
+    # fixed: the issue is gone · issue_invalid: the source shows the issue was not an error · still_wrong: the new text
+    # still has it · undecided: the source does not settle it
+    verdict: Literal["fixed", "issue_invalid", "still_wrong", "undecided"]
+    new_error: str = ""  # an error the new text has that the old one did not (empty: none)
+    reason: str
+
+
+class FixCheckOutput(_M):
+    checks: list[FixCheck]
+
+
 SCHEMAS: dict[str, type[BaseModel]] = {
     "translate": TranslationBatchOutput,
     "scene_analyze": SceneAnalysisOutput,
@@ -377,6 +391,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "relations": RelationsOutput,
     "confirm": ConfirmOutput,
     "impressions": ImpressionsOutput,
+    "fix_check": FixCheckOutput,
 }
 
 

@@ -19,6 +19,7 @@ from typing import Any
 
 from ..llm.schemas import RelationsOutput  # noqa: F401  (re-exported for callers)
 from ..memory.db import Transaction, utcnow
+from ..memory.repository import qualified_fact
 from ..series import SERIES_SCOPE
 
 MAX_PAIRS = 40
@@ -238,7 +239,9 @@ def requests(pairs: list[dict[str, Any]], chars: dict[str, sqlite3.Row], *, rech
                 subj = cref.get(f["subject"]) or (chars[f["subject"]]["display_name_zh"] if f["subject"] in chars else f["subject"])
                 via = p["via"].get(("facts", f["id"]))
                 facts.append({"ref": r, "at": f["first_revealed_ordinal"], "quote": f["evidence_quote"],
-                              "text": (f"〔關於群體「{via}」〕" if via else "") + f"{subj} {f['predicate']} {f['object']}"})
+                              "text": (f"〔關於群體「{via}」〕" if via else "")
+                              + qualified_fact(f, f"{subj} {f['predicate']} {f['object']}",
+                                               {**{k: _label(chars, k) for k in chars}, **cref})})
             passages = []
             for g in p.get("passages", [])[:MAX_PASSAGES + PAIR_PASSAGES]:  # the group's first, then the pair's
                 r = f"u{len(ev) + 1}"

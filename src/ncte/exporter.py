@@ -24,6 +24,7 @@ class ExportOutcome:
     validation: ValidationReport
     report_path: Path
     stats: dict[str, Any]
+    acceptance: dict[str, Any] | None = None  # whether the book is done, apart from whether it exports
 
 
 def default_output_path(cfg: Config, book: Book, lang: str) -> Path:
@@ -67,7 +68,13 @@ def export_book(conn: sqlite3.Connection, cfg: Config, book: Book, *, output: Pa
         "unsafe_units_kept_original": len(unsafe), "human_edits": sum(1 for t in best.values() if t["status"] == "human"),
         "needs_review": sum(1 for t in best.values() if t["status"] == "needs_review"),
     }
+    from .reports.acceptance import acceptance
+
+    context = conn.execute("SELECT 1 FROM runs WHERE book_id=? AND mode='context' LIMIT 1", (book.id,)).fetchone()
+    accept = acceptance(conn, book.id, proofread=bool(context) and cfg.context.proofread,
+                        reader=bool(context) and cfg.context.reader_pass, validation_ok=validation.ok)
     report = {
+        "acceptance": accept,
         "book_id": book.id, "title": book.title, "output": str(out), "exported_at": utcnow(), "language": lang,
         "stats": stats, "modified_files": result.modified_files, "validation": validation.to_dict(),
         "untranslated_unit_ids": missing, "unsafe_units": unsafe,
@@ -78,4 +85,4 @@ def export_book(conn: sqlite3.Connection, cfg: Config, book: Book, *, output: Pa
     rdir.mkdir(parents=True, exist_ok=True)
     rpath = rdir / f"export-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}.json"
     rpath.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-    return ExportOutcome(result, validation, rpath, stats)
+    return ExportOutcome(result, validation, rpath, stats, accept)

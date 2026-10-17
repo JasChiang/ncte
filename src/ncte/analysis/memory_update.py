@@ -53,10 +53,38 @@ def build_memory_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
              "status": u["status"]}
             for u in conn.execute("SELECT * FROM utterances WHERE book_id=? AND scene_id=?", (book_id, scene["id"]))]
     text = " ".join(clean(r["plain_text"]) for r in rows)
-    return {"task": "memory_update", "scene_id": scene["id"], "units": units,
-            "known_characters": [{"character_id": cid, **v} for cid, v in views.items()],
-            "scene": {"utterances": utts, **json.loads(scene["state_json"] or "{}")},
-            "glossary": [g for g in glossary if str(g.get("ja", "")) in text]}
+    out = {"task": "memory_update", "scene_id": scene["id"], "units": units,
+           "known_characters": [{"character_id": cid, **v} for cid, v in views.items()],
+           "scene": {"utterances": utts, **json.loads(scene["state_json"] or "{}")},
+           "glossary": [g for g in glossary if str(g.get("ja", "")) in text]}
+    if known := known_facts(conn, book_id, scene, views, names, text):
+        out["known_facts"] = known
+    return out
+
+
+KNOWN_FACTS = 30  # earlier facts shown to a scene's memory update (the latest about the people in it)
+
+
+def known_facts(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, views: dict[str, dict[str, Any]],
+                names: dict[str, str], text: str) -> list[dict[str, Any]]:
+    """Earlier facts about the people (and things) of this scene, with their ids: a scene that changes, corrects or
+    refutes one can say which (``retracts_fact_ids``) — without them the model could only guess ids."""
+    from ..memory import visibility as vis
+
+    here = {cid for cid, v in views.items() if any(n and n in text for n in [v["name_ja"], *v.get("aliases_ja", [])])}
+    here |= {r[0] for r in conn.execute("SELECT DISTINCT speaker_id_nullable FROM utterances WHERE book_id=? AND scene_id=? "
+                                        "AND speaker_id_nullable IS NOT NULL", (book_id, scene["id"]))}
+    rows = [f for f in vis.visible_facts(conn, book_id, scene["start_ordinal"])
+            if f["subject"] in here or f["object_ref"] in here or (not f["subject"].startswith("c_") and f["subject"] in text)]
+    out = []
+    for f in rows[-KNOWN_FACTS:]:
+        item: dict[str, Any] = {"fact_id": f["id"], "subject": names.get(f["subject"], f["subject"]),
+                                "predicate": f["predicate"], "object": f["object"], "fact_type": f["fact_type"],
+                                "certainty": f["certainty"]}
+        if f["source_viewpoint"]:
+            item["source_viewpoint"] = names.get(f["source_viewpoint"], f["source_viewpoint"])
+        out.append(item)
+    return out
 
 
 def forget_scene(conn: sqlite3.Connection, book_id: str, sid: str, *, summaries: bool = True) -> None:
@@ -127,6 +155,12 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
                 r = None
             if r is None:
                 rej({"retracts": old}, "retracted fact unknown or not earlier")
+                continue
+            if r["fact_type"] == "character_belief" and not (
+                    f.fact_type == "character_belief" and f.source_viewpoint == r["source_viewpoint"]):
+                # what someone believed stays part of the story once the truth is out (the misunderstanding happened);
+                # only that person's own change of mind ends it
+                rej({"retracts": old, "by": f.predicate}, "a belief is ended only by the same person's new belief")
                 continue
             conn.execute("UPDATE facts SET retracted_by=?, retracted_at_ordinal=?, revision=revision+1 WHERE id=?",
                          (fid, ordinal[first], old))

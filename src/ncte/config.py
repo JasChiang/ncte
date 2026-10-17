@@ -73,6 +73,9 @@ class TranslationConfig(_Strict):
 class ReviewConfig(_Strict):
     automatic_review: Literal["off", "flagged_only", "all"] = "flagged_only"
     maximum_review_passes: int = Field(1, ge=0, le=1)
+    # a fix made after review / proofreading / the reader's look is checked against the source and the issue it was
+    # meant to fix; off: a fix is kept but stays unverified (never counted as fixed)
+    fix_check: bool = True
 
 
 class MemoryConfig(_Strict):

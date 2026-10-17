@@ -28,4 +28,5 @@ EPUBCheck 測試會在找到 `epubcheck`（PATH）、`EPUBCHECK_JAR` 或 `worksp
 - `analysis/` 場景切分、對話偵測、說話者歸屬、記憶更新驗證、定名提案（naming）
 - `memory/` SQLite migrations、repository、檢索（FTS5）、可見性、實體卡（entities）、稱呼表（address）、系列風格（style）
 - `gui/` 本機網頁介面（`ncte gui`：伺服器、讀取模型、寫入動作、靜態網頁）
-- `qa/` 程式 QA 規則；`reports/` 成本／QA／HTML；`eval/` A/B 評測
+- `qa/` 程式 QA 規則；`reports/` 成本／QA／HTML／可驗收（acceptance：做完 ≠ 可匯出 ≠ 品質合格）；`eval/` A/B 評測
+- 審稿、對照校稿、讀者檢查之後的修正一律經 `fix_check` 對照原文；沒有真的送到模型的段落不算看過（ADR-055）

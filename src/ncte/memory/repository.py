@@ -264,6 +264,23 @@ def character_basics(conn: sqlite3.Connection, character_id: str, hz: tuple[floa
     return out
 
 
+def qualified_fact(f: Any, text: str, names: dict[str, str]) -> str:
+    """``text`` (a fact as a task reads it) with whose view it is and how sure, so that a belief or a guess is never
+    passed on as a plain fact: 「〔米娜認為〕海斗是她哥哥（推測）」, not 「海斗是她哥哥」."""
+    pre = ""
+    if f["fact_type"] == "character_belief":
+        who = f["source_viewpoint"]
+        pre = f"〔{names.get(who, who) if who else '某個角色'}認為〕"
+    elif f["fact_type"] == "narrator_claim":
+        pre = "〔敘述者的說法〕"
+    return pre + text + ("" if f["certainty"] == "explicit" else "（推測）")
+
+
+def relation_guess(r: Any) -> str:
+    """「（推測）」 after a relation read from the story rather than stated in it (none for older rows without one)."""
+    return "（推測）" if r["certainty"] == "inferred" else ""
+
+
 def pair_relations(conn: sqlite3.Connection, book_id: str, a: str, b: str, names: dict[str, str]) -> list[str]:
     """How two people are related, as read (「席爾法德是艾恩的祖父」), for tasks that render how one addresses the other."""
     out = []
@@ -271,9 +288,9 @@ def pair_relations(conn: sqlite3.Connection, book_id: str, a: str, b: str, names
                           "AND until_ordinal IS NULL", (book_id, a, b, b, a)):
         for x, y, role in ((r["a_id"], r["b_id"], r["a_is"]), (r["b_id"], r["a_id"], r["b_is"])):
             if role:
-                out.append(f"{names.get(x, '?')}是{names.get(y, '?')}的{role}")
+                out.append(f"{names.get(x, '?')}是{names.get(y, '?')}的{role}{relation_guess(r)}")
         if not (r["a_is"] or r["b_is"]):
-            out.append(f"{names.get(r['a_id'], '?')}與{names.get(r['b_id'], '?')}：{r['relation_zh']}")
+            out.append(f"{names.get(r['a_id'], '?')}與{names.get(r['b_id'], '?')}：{r['relation_zh']}{relation_guess(r)}")
     return list(dict.fromkeys(out))[:4]
 
 

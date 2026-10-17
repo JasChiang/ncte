@@ -24,8 +24,11 @@ CHUNK_UNITS = 60  # paragraphs per request: source and translation side by side
 
 def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = None) -> list[list[dict[str, Any]]]:
     """Consecutive translated story paragraphs, chapter by chapter, each with its source and who says its lines."""
+    from ..memory.visibility import form_positions, visible_names
+
     best = latest_texts(conn, book_id)
-    names = {r["id"]: r["display_name_zh"] or r["canonical_name"] for r in conn.execute("SELECT * FROM characters")}
+    forms_at = form_positions(conn, book_id)
+    names_at: dict[str, dict[str, str]] = {}  # a speaker is named as known there, never by a later reveal
     said: dict[str, set[str]] = {}
     guessed: set[tuple[str, str]] = set()  # (unit, speaker) read as theirs, not stated in the text
     for u in conn.execute("SELECT unit_id, speaker_id_nullable sp, status FROM utterances WHERE book_id=? AND sp IS NOT "
@@ -47,8 +50,15 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
         href = r["resource_href"]
         # the source as written: 《》 may be a reading (漢字《かな》) or the author's own brackets (「…、《亡雄の旅団》」);
         # stripping it would make the translation look like it added words
-        item: dict[str, Any] = {"unit_id": r["id"], "ja": r["plain_text"], "zh": PH_RE.sub("", t["text"])}
-        if who := sorted(names.get(x, "?") + ("（推測）" if (r["id"], x) in guessed else "") for x in said.get(r["id"], ())):
+        item: dict[str, Any] = {"unit_id": r["id"], "ja": r["plain_text"], "zh": PH_RE.sub("", t["text"]),
+                                "_tid": t["id"], "_at": r["ordinal"]}  # the version checked, where (program only)
+        if r["id"] in said:
+            key = r["scene_id"] or str(r["ordinal"])
+            if (names := names_at.get(key)) is None:  # once per scene, as known at its end (as its translation was)
+                end = conn.execute("SELECT MAX(ordinal) FROM units WHERE book_id=? AND scene_id=?",
+                                   (book_id, r["scene_id"])).fetchone()[0] if r["scene_id"] else None
+                names = names_at[key] = visible_names(conn, book_id, end or r["ordinal"], forms_at)
+            who = sorted(names.get(x, "?") + ("（推測）" if (r["id"], x) in guessed else "") for x in said[r["id"]])
             item["speaker"] = "、".join(who)
             item["_who"] = sorted(said[r["id"]])
         cur.append(item)
@@ -60,9 +70,11 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
 def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> list[dict[str, str]]:
     """The people who speak in this stretch (and anyone named in it): name, gender, way of speaking."""
     from ..memory.style import load_style
+    from ..memory.visibility import character_view
 
     ids = {x for p in part for x in p.get("_who", [])}
     text = "".join(p["ja"] for p in part)
+    start = min((p["_at"] for p in part if "_at" in p), default=None)
     habits = load_style(conn, book_id).voices  # the house style's speech habits (ADR-053), by Japanese name
     out = []
     for c in conn.execute("SELECT c.*, g.gender, i.voice FROM characters c LEFT JOIN character_gender g ON "
@@ -71,7 +83,12 @@ def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> 
         forms = [c["canonical_name"], *json.loads(c["aliases_json"] or "[]")]
         if c["id"] not in ids and not any(f and len(f) >= 2 and f in text for f in forms):
             continue
-        item = {"name": c["display_name_zh"] or c["canonical_name"], "ja": c["canonical_name"],
+        # the card as known where the stretch begins: 「神祕少女」, not the name a later chapter reveals
+        view = character_view(conn, book_id, c, start) if start is not None else None
+        if start is not None and view is None:
+            view = character_view(conn, book_id, c, max(p["_at"] for p in part))
+        item = {"name": (view["name_zh"] or view["name_ja"]) if view else c["display_name_zh"] or c["canonical_name"],
+                "ja": view["name_ja"] if view else c["canonical_name"],
                 **{k: v for k, v in character_basics(conn, c["id"]).items() if k != "aliases_ja"}}
         if c["voice"]:
             item["voice"] = c["voice"]

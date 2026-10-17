@@ -67,11 +67,15 @@ def request(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, Any], dic
     best = latest_texts(conn, book_id)
     chars, refs, items = main_characters(conn, book_id), {}, []
     for k, c in enumerate(chars, 1):
-        said = [(r[0], r[1]) for r in conn.execute("SELECT quote_text, unit_id FROM utterances WHERE "
-                                                   "speaker_id_nullable=? AND book_id=? ORDER BY id", (c["id"], book_id))]
-        lines: list[dict[str, str]] = []
+        rows = conn.execute("SELECT quote_text, unit_id, status FROM utterances WHERE speaker_id_nullable=? AND "
+                            "book_id=? ORDER BY id", (c["id"], book_id)).fetchall()
+        said = [(r[0], r[1]) for r in rows]
+        guessed = {(r[0], r[1]) for r in rows if r[2] == "inferred"}  # read as his, not stated: never a habit alone
+        lines: list[dict[str, Any]] = []
         for q, uid in _pick(said):
-            line = {"ja": match_text(q)[:80]}
+            line: dict[str, Any] = {"ja": match_text(q)[:80]}
+            if (q, uid) in guessed:
+                line["guess"] = True
             if (t := best.get(uid)) is not None:
                 line["zh"] = PH_RE.sub("", t["text"]).strip()[:120]  # the paragraph as translated now
             lines.append(line)

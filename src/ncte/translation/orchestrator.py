@@ -539,11 +539,14 @@ class Orchestrator:
                 counts["failed"] += 1
         return counts
 
-    def _finding(self, unit_id: str | None, typ: str, sev: str, evidence: str) -> None:
+    def _finding(self, unit_id: str | None, typ: str, sev: str, evidence: str,
+                 translation_id: int | None = None) -> int | None:
+        """Record a finding; ``translation_id`` is the version of the unit's text it is about (when known)."""
         with self.lock:
-            self.conn.execute(
-                "INSERT INTO qa_findings(run_id, book_id, unit_id, type, severity, evidence, created_at) "
-                "VALUES (?,?,?,?,?,?,?)", (self.run_id, self.book.id, unit_id, typ, sev, evidence, utcnow()))
+            return self.conn.execute(
+                "INSERT INTO qa_findings(run_id, book_id, unit_id, type, severity, evidence, created_at, translation_id) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (self.run_id, self.book.id, unit_id, typ, sev, evidence, utcnow(), translation_id)).lastrowid
 
     # ------------------------------------------------------------ budget
     def check_budget(self, est: float) -> None:
@@ -693,7 +696,7 @@ class Orchestrator:
         from .review import review_scope
 
         stats = review_scope(self, unit_ids)
-        if stats["reviewed"]:
+        if stats["actually_reviewed"] or stats["blocked"] or stats["failed"]:
             self.log(f"  review: {stats}")
 
     def run_meta(self) -> None:

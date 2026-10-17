@@ -32,6 +32,7 @@ translation:
 review:
   automatic_review: "flagged_only"   # off | flagged_only | all
   maximum_review_passes: 1
+  fix_check: true                    # a fix after review/proofreading/reader is checked against the source; false = kept but unverified
 memory:
   fts_enabled: true
   vector_rag_enabled: false

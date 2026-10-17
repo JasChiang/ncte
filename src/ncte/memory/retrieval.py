@@ -92,11 +92,14 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
     for r in conn.execute("SELECT * FROM relations WHERE book_id=? AND since_ordinal<=? AND (until_ordinal IS NULL OR "
                           "until_ordinal>?)", (book_id, horizon, horizon)):  # begun and not yet replaced
         if r["a_id"] in ids and r["b_id"] in ids:
+            sure = {"certainty": "inferred"} if r["certainty"] == "inferred" else {}  # read from the story, not stated
             for card in present:
                 if card["character_id"] == r["a_id"]:
-                    card.setdefault("relations", []).append({"with": names.get(r["b_id"]), "is": r["a_is"] or r["relation_zh"]})
+                    card.setdefault("relations", []).append({"with": names.get(r["b_id"]), "is": r["a_is"] or r["relation_zh"],
+                                                             **sure})
                 elif card["character_id"] == r["b_id"]:
-                    card.setdefault("relations", []).append({"with": names.get(r["a_id"]), "is": r["b_is"] or r["relation_zh"]})
+                    card.setdefault("relations", []).append({"with": names.get(r["a_id"]), "is": r["b_is"] or r["relation_zh"],
+                                                             **sure})
     batch_ids = {r["id"] for r in batch_rows}
     utts = []
     for u in conn.execute("SELECT * FROM utterances WHERE book_id=? AND scene_id=? ORDER BY unit_id, quote_index",
@@ -142,7 +145,7 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
     batch_speakers = {u["speaker_id_nullable"] for u in conn.execute(
         f"SELECT speaker_id_nullable FROM utterances WHERE unit_id IN ({','.join('?' * len(batch_ids))}) AND "
         "speaker_id_nullable IS NOT NULL", list(batch_ids))}
-    all_names = {c["id"]: (c["display_name_zh"] or c["canonical_name"]) for c in chars}
+    all_names = names  # the names known here: a name revealed later never reaches a form of address
     out: dict[str, Any] = {
         "characters": present,
         "scene": {"scene_id": scene["id"], "pov": state.get("pov"), "location": state.get("location"),

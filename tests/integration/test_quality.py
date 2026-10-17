@@ -186,7 +186,7 @@ def test_reports(conn, cfg, fixtures, seeded):
     book, rid, s = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={"translate": defective,
                                                                              "review": review_responder}))
     cost = cost_report(conn, run_id=rid)
-    assert set(cost["by_stage"]) == {"translate", "review"}
+    assert set(cost["by_stage"]) == {"translate", "review", "fix_check"}  # each fix is checked against the source
     assert cost["metrics"]["usd_per_10k_ja_chars"] > 0 and cost["totals"]["cost_reported_usd"] > 0
     qa = qa_report(conn, book_id=book.id, run_id=rid)
     html = render_html("t", cost, qa)
@@ -204,7 +204,7 @@ def test_review_command_on_existing_translations(tmp_path, fixtures):
     assert runner.invoke(app, ["-w", str(ws), "translate", epub, "--fake"]).exit_code == 0
     r = runner.invoke(app, ["-w", str(ws), "review", epub, "--scope", "all", "--fake"])
     assert r.exit_code == 0, r.output
-    assert "review: {'reviewed':" in r.output
+    assert "review: {'actually_reviewed':" in r.output
 
 
 def test_recheck_keeps_reviewer_decisions(conn, cfg, fixtures, seeded):

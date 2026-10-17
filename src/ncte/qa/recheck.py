@@ -64,7 +64,13 @@ def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
             if t["status"] == "human":
                 continue
             high = worst(f) in ("high", "error")
-            if t["status"] == "needs_review" and not high:
+            # the rules see words, not meaning: an open reviewer's issue or an unsettled fix on this text keeps it
+            # waiting for review whatever the rules say now
+            semantic = conn.execute(
+                "SELECT 1 FROM qa_findings WHERE unit_id=? AND status='open' AND severity IN ('high','medium') AND "
+                "(type LIKE 'review:%' OR type LIKE 'fix\\_%' ESCAPE '\\') AND (translation_id IS NULL OR translation_id=?) "
+                "LIMIT 1", (uid, t["id"])).fetchone() is not None
+            if t["status"] == "needs_review" and not high and not semantic:
                 conn.execute("UPDATE translations SET status='succeeded' WHERE id=?", (t["id"],))
                 stats["cleared"] += 1
             elif t["status"] == "succeeded" and high:

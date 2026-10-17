@@ -4,6 +4,9 @@
   『…』 on its own — a voice that is not quite speech: a monster, a thought heard, a crowd — counts as a quote too)
 * explicit dialogue-tag detection («「…」とミナは言った», «ミナが口を開いた。「…」»)
 * adjacent action narration («「…」\\n　カイトは頭をかいた。») → *action* evidence (inferred only)
+* laughing, smiling (笑った, 微笑んだ, 苦笑した) say how a line is said only when the quotative と ties them to it
+  («「…」とカイトは笑った»); a paragraph of its own («「君は犯人だ」\\n　カイトは笑った。») is someone's reaction —
+  the listener's as often as the speaker's — so it is action evidence, never a dialogue tag
 * speech profiles computed only from explicit / human-verified examples
 """
 
@@ -25,8 +28,10 @@ RUBY = RUBY_NOTATION  # readings only; the author's own 《》 brackets are text
 SPEECH_VERBS = (
     "言っ", "言う", "言い", "言われ", "呟", "つぶや", "答え", "応え", "叫", "告げ", "返し", "返す", "返事", "尋ね", "訊",
     "囁", "ささや", "怒鳴", "続け", "口を開", "口にし", "問い", "問う", "ぼや", "漏らし", "促し", "命じ", "話し",
-    "謝っ", "頼ん", "言葉を", "声をかけ", "声を上げ", "笑っ", "微笑", "苦笑",
+    "謝っ", "頼ん", "言葉を", "声をかけ", "声を上げ",
 )
+# how a line is said, not that it is said: a tag only right after the quote with と
+MANNER_VERBS = ("笑っ", "微笑", "苦笑")
 # 「続け」 after a verb stem is 「使い続け」 (keep doing), not 「…と続けた」 (went on saying)
 _VERB_ALT = "|".join(r"(?<![いきしちにひみりぎじびぴえけせてねへめれげぜでべぺ])続け" if v == "続け" else re.escape(v)
                      for v in SPEECH_VERBS)
@@ -153,6 +158,8 @@ def detect_tags(units: list[UnitText], quotes: list[Quote], aliases: dict[str, s
     names = pat.pattern
     # «「…」とミナは言った»: the name must be the subject (「と小林に声をかけた」 — 小林 is spoken to)
     after_tag = re.compile(rf"^[、，\s　]*と?[、\s　]*({names})(?:は|が|も|(?=[^にをへとの]))[^。「」]{{0,24}}?(?:{_VERB_ALT})")
+    manner = "|".join(re.escape(v) for v in MANNER_VERBS)
+    after_manner = re.compile(rf"^[、，\s　]*と[、\s　]*({names})(?:は|が|も|(?=[^にをへとの]))[^。「」]{{0,24}}?(?:{manner})")
     narr_tag = re.compile(rf"^[\s　]*({names})(?:は|が|も)[^。「」]{{0,24}}?(?:{_VERB_ALT})")
     narr_action = re.compile(rf"^[\s　]*({names})(?:は|が)")
     before_tag = re.compile(rf"({names})(?:は|が)[^。「」]{{0,24}}?(?:{_VERB_ALT})[^。「」]{{0,6}}。?[\s　]*$")
@@ -172,7 +179,7 @@ def detect_tags(units: list[UnitText], quotes: list[Quote], aliases: dict[str, s
         nxt_q = [x for x in q_by_unit.get(u.id, []) if x.start >= q.end]
         if nxt_q:
             rest = rest[: nxt_q[0].start - q.end]
-        m = after_tag.match(rest)
+        m = after_tag.match(rest) or after_manner.match(rest)
         if m:
             add(q, aliases[m.group(1)], "dialogue_tag", u.id, rest)
             continue

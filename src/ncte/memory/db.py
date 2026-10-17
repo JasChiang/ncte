@@ -581,6 +581,9 @@ CREATE TABLE group_members (
 ALTER TABLE group_members ADD COLUMN scene_id TEXT;
 ALTER TABLE group_members ADD COLUMN origin TEXT NOT NULL DEFAULT 'verify';
 """),
+    (22, "the translation a review / proofreading / reader finding was made on (a finding is settled for that version only)", """
+ALTER TABLE qa_findings ADD COLUMN translation_id INTEGER;
+"""),
 ]
 
 

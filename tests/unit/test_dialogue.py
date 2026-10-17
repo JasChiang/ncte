@@ -64,6 +64,20 @@ def test_disputed_tag_yields_to_the_model_as_an_inference():
     assert (res(ev[("u0", 0)], llm).speaker_id, res(ev[("u0", 0)], llm).status) == ("c_kaito", "inferred")
 
 
+def test_laughing_after_a_line_is_a_reaction_not_a_speech_tag():
+    """「君は犯人だ」 then 「カイトは笑った」: Kaito laughed; that does not say Kaito said the line."""
+    _, _, ev = ev_for(["「君は犯人だ」", "　カイトは笑った。"])
+    assert [(e.character_id, e.kind) for e in ev[("u0", 0)]] == [("c_kaito", "action")]
+    r = res(ev[("u0", 0)], LlmClaim(None, "unknown", []))
+    assert (r.speaker_id, r.status) == (None, "unknown")  # the model's "cannot tell" stands
+    for before in ("カイトは苦笑した。", "ミナは微笑んだ。"):  # before the line: no tag either
+        _, _, ev = ev_for([before, "「そうかもね」"])
+        assert all(e.kind != "dialogue_tag" for e in ev.get(("u1", 0), []))
+    # tied to the line by the quotative と, laughing is how it was said
+    _, _, ev = ev_for(["「君は犯人だ」とカイトは笑った。"])
+    assert [(e.character_id, e.kind) for e in ev[("u0", 0)]] == [("c_kaito", "dialogue_tag")]
+
+
 def test_action_is_not_explicit():
     _, qs, ev = ev_for(["「悪い悪い」", "　カイトは頭をかいた。"])
     assert [(e.character_id, e.kind) for e in ev[("u0", 0)]] == [("c_kaito", "action")]

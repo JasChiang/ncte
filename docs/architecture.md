@@ -34,12 +34,15 @@ translate (context, read first — default)
   6. reader pass: Chinese only, what a reader cannot follow goes back to the translator (ADR-038)
 
 translator: strict JSON → Pydantic → ID alignment → qa/rules → retry → split → fail(keep JA)
-review (flagged only, ≤1 pass) → retranslate with feedback → QA
+review (flagged only, ≤1 pass) → retranslate with feedback + current text → QA → fix_check against the source
+  (fixed / issue_invalid settle the issue; still_wrong / undecided / unchecked stay open, new text needs_review;
+   a new error → the fix is rejected, the old text stays; ADR-055). Proofreading and the reader's look use the same path.
+  Units refused or failed are counted blocked / failed, never reviewed; their findings stay.
 DbRecorder: every request (hash, model, prompt version, usage, cost, generation id, status)
 budget pre-check before each request; Ctrl+C → checkpoint; resume re-queues jobs
 
 export ──► epub/reassemble (rebuild only validated text nodes; other files byte-for-byte; mimetype first)
-       ──► epub/validate (internal + EPUBCheck) ──► reports (cost / QA / HTML)
+       ──► epub/validate (internal + EPUBCheck) ──► reports (cost / QA / HTML / acceptance: done ≠ exported)
 eval   ──► eval/runner (A/B/C/D in fresh workspaces) ──► eval/metrics (annotation-based)
 gui    ──► gui/server (127.0.0.1, token) ── data (reads; source quotes with their translation) · actions (edits)
                                          · manage (upload, export, key)
@@ -57,7 +60,7 @@ gui    ──► gui/server (127.0.0.1, token) ── data (reads; source quotes
 |---|---|---|
 | explicit | 程式偵測的發話標記、explicit 引號的續段、逐字證據支持的事實 | 是 |
 | human_verified | `ncte speaker-set`、`ncte edit`、`ncte glossary set` | 是（最高優先） |
-| inferred | 動作敘述、LLM 推測、LLM 推翻程式標記（ADR-031）、覆核後的答案 | 否（只作為翻譯提示，標註為推測） |
+| inferred | 動作敘述（含台詞旁另起一段的笑、微笑、苦笑）、LLM 推測、LLM 推翻程式標記（ADR-031）、覆核後的答案 | 否（只作為翻譯提示，標註為推測） |
 | unknown | 無證據或證據衝突 | 否；`speaker_id = NULL` |
 | contradicted | 後續事實撤回（`facts.retracted_by`） | 撤回點之後不可見 |
 

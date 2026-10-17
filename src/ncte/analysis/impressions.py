@@ -15,7 +15,7 @@ from typing import Any
 from ..epub.units import match_text
 from ..llm.schemas import ImpressionsOutput
 from ..memory.db import Transaction, utcnow
-from ..memory.repository import character_basics
+from ..memory.repository import character_basics, qualified_fact, relation_guess
 from ..series import SERIES_SCOPE
 
 MAIN = 12
@@ -53,11 +53,12 @@ def requests(conn: sqlite3.Connection, book_id: str) -> list[tuple[dict[str, Any
                                   "NULL ORDER BY first_revealed_ordinal LIMIT 8", (book_id, c["id"], c["id"])):
                 r = f"f{len(ev) + 1}"
                 ev[r] = ("fact", f["first_revealed_ordinal"])
-                facts.append({"ref": r, "text": f"{f['predicate']} {f['object']}"})
+                facts.append({"ref": r, "text": qualified_fact(f, f"{f['predicate']} {f['object']}", names)})
             calls = [f"→{names.get(a['addressee_id'], '?')}：{a['form_ja']}" for a in conn.execute(
                 "SELECT addressee_id, form_ja FROM address_terms WHERE book_id=? AND speaker_id=? ORDER BY uses DESC LIMIT 6",
                 (book_id, c["id"]))]
             rels = [f"{r['a_is'] if r['a_id'] == c['id'] else r['b_is']}（對{names.get(r['b_id'] if r['a_id'] == c['id'] else r['a_id'], '?')}）"
+                    f"{relation_guess(r)}"
                     for r in conn.execute("SELECT * FROM relations WHERE book_id=? AND (a_id=? OR b_id=?) LIMIT 6",
                                           (book_id, c["id"], c["id"]))]
             items.append({"ref": f"c{k}", "name": names[c["id"]], "narrator": bool(c["is_narrator"]),

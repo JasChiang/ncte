@@ -398,6 +398,10 @@ def export_cmd(epub: Annotated[str, typer.Argument(help="EPUB path or book id")]
     for w in v.warnings[:20]:
         typer.echo(f"  ! {w}")
     typer.echo(f"  report: {out.report_path}")
+    if out.acceptance is not None:  # exported is not the same as done: say what is still missing
+        from .reports.acceptance import summary
+
+        typer.echo(f"  {summary(out.acceptance)}")
     if not v.ok:
         raise typer.Exit(1)
 

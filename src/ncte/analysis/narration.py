@@ -93,8 +93,8 @@ def for_scene(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row,
     if st.get("person") in ("first", "third") and st.get("check") != "conflict":
         out["person"] = st["person"]
         for key in ("narrator", "focal"):
-            if st.get(key):
-                out[key] = (names or {}).get(st[key], st[key])
+            if st.get(key) and (names is None or st[key] in names):  # not yet known by any name here: left out
+                out[key] = names.get(st[key], st[key]) if names is not None else st[key]
         if st["person"] == "first" and st.get("self_forms"):
             out["self_forms"] = st["self_forms"]
     else:

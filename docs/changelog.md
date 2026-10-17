@@ -645,3 +645,18 @@ open workspace/eval/<timestamp>/report.html
   - 角色印象：推測說話者的台詞標 `guess`；一兩句口吻明顯不同可能是說話者判斷錯，不要寫進口吻。
 - 驗證（OpenRouter）：體例兩次都改成「老身」，理由是「老夫」性別不合；重讀神出場的場景，主角的吐槽不再被判給神（改為未定、交給覆核）。花費約 US$0.04。
 - 測試 385 passed。
+
+## 翻譯品質、提示詞與架構審查（2026-10-17）
+- 審查報告：`docs/audit-2026-10-17.md`（問題清單、提示詞生效條件、提案與付費 A/B 方案）。決策：ADR-055、ADR-056。
+- 修正（皆有先在 `f46353d` 失敗、修正後通過的測試）：
+  - 修正驗收：重譯帶現行譯文；新步驟 `fix_check`（`prompts/fix_check/v1.md`）對照原文判定 fixed／issue_invalid／still_wrong／undecided／新錯；只結案送修的問題；`review.fix_check` 開關（關閉時記為未驗證）。`tests/integration/test_fix_check.py`
+  - 單元級結果：審稿 `actually_reviewed／blocked／failed／skipped／resolved／pending`；被擋段落不清問題；校稿與讀者檢查只算真的讀到的，有被擋或失敗時 job 為 `partial`。`ncte recheck` 不再把有未結語義問題的譯文改成 succeeded。
+  - 說話者：笑、微笑、苦笑另起一段只算動作線索，模型的「無法確定」不再被蓋成 explicit，也不進口吻範例庫。`tests/unit/test_dialogue.py`
+  - 可見性：稱呼表、敘述視角、校稿說話者與人物卡改用此處可見的名字。`tests/integration/test_spoilers.py`
+  - 確定程度：事實與關係傳到關係、印象、定名、翻譯人物卡時保留觀點與推測標記；體例的推測台詞標 `guess`。`tests/integration/test_certainty.py`
+  - 記憶撤回：記憶整理拿到 `known_facts`；角色的認知不會被別的事實撤回。`tests/integration/test_retractions.py`
+  - 可驗收報告：`reports/acceptance.py`，`ncte export` 印出一行，報告 JSON 有 `acceptance`。
+  - migration 22：`qa_findings.translation_id`（只加欄位，舊資料為 NULL＝不限版本）。`tests/unit/test_db.py`
+- 提示詞（同一主版本 v1 內修改，舊譯文與記憶不失效、不自動重做）：memory_update（wordplay 拿掉錯誤的品牌對照，改成原則；known_facts 與撤回規則）、translate（review_feedback 以現行譯文為底；第三人稱場景照原文保留第一人稱；代名詞既有譯法是預設）、house_style（不因性別規定說法、保留原文刻意的反差；guess 台詞不定習慣）、proofread（原文本身變口吻不算錯）、naming（代名詞為預設譯法）。新增 fix_check。
+- 驗證：`pytest` 403 passed（EPUBCheck 5.1.0 可用時全部執行，0 skipped；沒有 EPUBCheck 時 400 passed、3 skipped）；`ruff check src tests`、`mypy src` 無錯誤。沒有金鑰，**未做任何線上實測**；提示詞修改的效果需依報告第五節 A/B 驗證。
+- 重現：`pytest tests/integration/test_fix_check.py tests/integration/test_spoilers.py tests/integration/test_certainty.py tests/integration/test_retractions.py tests/unit/test_dialogue.py`；EPUBCheck：`EPUBCHECK_JAR=…/epubcheck.jar pytest tests/integration/test_roundtrip.py`。

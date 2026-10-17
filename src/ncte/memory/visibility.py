@@ -143,3 +143,13 @@ def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
     if g := gender_view(conn, c["id"], hz):
         out["gender"] = g[0] if g[1] == "explicit" else f"{g[0]} (inferred)"
     return out
+
+
+def visible_names(conn: sqlite3.Connection, book_id: str, upto: int,
+                  forms_at: FormPositions | None = None) -> dict[str, str]:
+    """character id → the name a task may show at ``upto`` (Chinese if there is one): every place that names a character
+    to the model (speakers, who a line is said to, forms of address, whose eyes the scene is told through) uses this,
+    so a name revealed later in the book (「神祕少女」 → 「蘇菲」) never comes back through a side door."""
+    forms_at = form_positions(conn, book_id) if forms_at is None else forms_at
+    return {c["id"]: v["name_zh"] or v["name_ja"] for c in visible_characters(conn, book_id, upto)
+            if (v := character_view(conn, book_id, c, upto, forms_at)) is not None}

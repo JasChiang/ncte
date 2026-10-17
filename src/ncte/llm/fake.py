@@ -116,6 +116,12 @@ def default_confirm(payload: dict[str, Any], req: Any) -> dict[str, Any]:
                        for i in payload.get("items", [])]}
 
 
+def default_fix_check(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+    """A checker that accepts a changed text and cannot settle an unchanged one."""
+    return {"checks": [{"unit_id": i["unit_id"], "verdict": "fixed" if i["after"] != i["before"] else "undecided",
+                        "new_error": "", "reason": "fake"} for i in payload.get("items", [])]}
+
+
 DEFAULTS: dict[str, Responder] = {
     "translate": default_translate,
     "scene_analyze": default_scene_analyze,
@@ -130,6 +136,7 @@ DEFAULTS: dict[str, Responder] = {
     "relations": default_relations,
     "confirm": default_confirm,
     "impressions": default_impressions,
+    "fix_check": default_fix_check,
 }
 
 

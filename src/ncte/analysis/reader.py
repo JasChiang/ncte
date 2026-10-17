@@ -1,8 +1,8 @@
 """A reader's look at the translation (ADR-038).
 
 After a volume is translated, the model reads the Chinese alone, as a reader who knows no Japanese, and points at
-what such a reader would stumble on: a reference left unexplained (水野 §92: 「たかぎ」 is also a clothing chain, kept
-in kana with no word of it), a joke on sound or writing that does not come across, heavy translationese, a voice or
+what such a reader would stumble on: a reference left unexplained (a surname the story plays on because it sounds
+like a real store chain, kept in kana with no word of it), a joke on sound or writing that does not come across, heavy translationese, a voice or
 你／妳 that changes, a contradiction. Each point goes back to the translator with the source and the context, which
 decides: render it differently, add a translator's note, or keep it. The program supplies hints (kana kept in the
 translation, a source that talks about words) and checks the answers.
@@ -39,7 +39,7 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
             out.append(cur)
             cur = []
         href = r["resource_href"]
-        item: dict[str, Any] = {"unit_id": r["id"], "zh": PH_RE.sub("", t["text"])}
+        item: dict[str, Any] = {"unit_id": r["id"], "zh": PH_RE.sub("", t["text"]), "_tid": t["id"]}
         look = hint(r, t["text"])
         if look:
             item["look"] = look

@@ -439,7 +439,7 @@ class ContextOrchestrator(Orchestrator):
         """Pass 4 (ADR-038): read the Chinese like a reader; what a reader cannot follow goes back to the translator."""
         from ..analysis import reader
         from ..llm.schemas import ReaderOutput
-        from .review import _retranslate_with_feedback
+        from .review import _retranslate_with_feedback, new_stats
 
         job = self._job("reader", self.book.id)
         if record_job and (job is None or job["status"] not in ("pending", "running")):
@@ -448,32 +448,40 @@ class ContextOrchestrator(Orchestrator):
             parts = reader.chunks(self.conn, self.book.id, set(self.opts.unit_ids) if self.opts.unit_ids else None)
             cast = reader.characters(self.conn, self.book.id)
         prompt = load_prompt("reader")
-        stats = {"read": 0, "issues": 0, "retranslated": 0, "fixed": 0, "still_flagged": 0}
+        stats = new_stats(read=0, blocked=0, failed=0)
         for part in parts:
             blocked: list[str] = []
             try:  # 120 paragraphs at a time: the content filter may refuse a part; it is then read in halves
                 parsed = call_in_parts(lambda pl: self._llm("reader", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
-                                       {"task": "reader", "paragraphs": part, "characters": cast}, "paragraphs", blocked)
+                                       {"task": "reader", "paragraphs": [{k: v for k, v in p.items() if not k.startswith("_")}
+                                                                         for p in part], "characters": cast},
+                                       "paragraphs", blocked)
             except FatalAPIError:
                 raise
             except LLMError as exc:
                 self._finding(None, "reader_failed", "low", str(exc)[:300])
+                stats["failed"] += len(part)
                 continue
+            tids = {p["unit_id"]: p["_tid"] for p in part}
             for uid in blocked:
-                self._finding(uid, "reader_blocked", "low", "the content filter refused this passage in the reader's look")
+                self._finding(uid, "reader_blocked", "low", "the content filter refused this passage in the reader's look",
+                              translation_id=tids.get(uid))
+            stats["blocked"] += len(blocked)
             if parsed is None:
                 continue
             assert isinstance(parsed, ReaderOutput)
-            stats["read"] += len(part)
-            valid = {p["unit_id"] for p in part}
-            feedback: dict[str, list[dict[str, str]]] = {}
+            valid = {p["unit_id"] for p in part} - set(blocked)  # what the reader really read
+            stats["read"] += len(valid)
+            feedback: dict[str, list[dict[str, Any]]] = {}
             for it in parsed.issues:
                 if it.unit_id not in valid or it.severity == "low" or not it.problem.strip():
                     continue
                 stats["issues"] += 1
-                self._finding(it.unit_id, f"review:reader_{it.kind}", it.severity, it.problem[:400])
+                fid = self._finding(it.unit_id, f"review:reader_{it.kind}", it.severity, it.problem[:400],
+                                    translation_id=tids[it.unit_id])
                 feedback.setdefault(it.unit_id, []).append(
-                    {"issue_type": f"reader_{it.kind}", "evidence": it.problem, "suggestion": reader.FIX_NOTE})
+                    {"issue_type": f"reader_{it.kind}", "evidence": it.problem, "suggestion": reader.FIX_NOTE,
+                     "finding_id": fid})
             if not feedback:
                 continue
             with self.lock:
@@ -485,8 +493,9 @@ class ContextOrchestrator(Orchestrator):
                     by_scene.setdefault(rows[uid]["scene_id"] or "", []).append(rows[uid])
             for group in by_scene.values():  # one scene at a time: the translation keeps that scene's memory
                 _retranslate_with_feedback(self, group, {r["id"]: feedback[r["id"]] for r in group}, stats)
-        if record_job:
-            self._set_job("reader", self.book.id, "succeeded", None, stats)
+        if record_job:  # a stretch refused or failed was not read: the pass is partial, not done
+            self._set_job("reader", self.book.id, "partial" if stats["blocked"] or stats["failed"] else "succeeded",
+                          None, stats)
         self.log(f"reader's look: {stats}")
         return stats
 
@@ -494,7 +503,7 @@ class ContextOrchestrator(Orchestrator):
         """Pass 3b (ADR-051): every paragraph against its source; real errors go back to the translator."""
         from ..analysis import proofread
         from ..llm.schemas import ProofreadOutput
-        from .review import _retranslate_with_feedback
+        from .review import _retranslate_with_feedback, new_stats
 
         job = self._job("proofread", self.book.id)
         if record_job and (job is None or job["status"] not in ("pending", "running")):
@@ -502,7 +511,7 @@ class ContextOrchestrator(Orchestrator):
         with self.lock:
             parts = proofread.chunks(self.conn, self.book.id, set(self.opts.unit_ids) if self.opts.unit_ids else None)
         prompt = load_prompt("proofread")
-        stats = {"checked": 0, "issues": 0, "retranslated": 0, "fixed": 0, "still_flagged": 0}
+        stats = new_stats(checked=0, blocked=0, failed=0)
         for part in parts:
             with self.lock:
                 cast = proofread.cast(self.conn, self.book.id, part)
@@ -515,24 +524,29 @@ class ContextOrchestrator(Orchestrator):
                 raise
             except LLMError as exc:
                 self._finding(None, "proofread_failed", "low", str(exc)[:300])
+                stats["failed"] += len(part)
                 continue
+            tids = {p["unit_id"]: p["_tid"] for p in part}
             for uid in blocked:
-                self._finding(uid, "proofread_blocked", "low", "the content filter refused this passage in proofreading")
+                self._finding(uid, "proofread_blocked", "low", "the content filter refused this passage in proofreading",
+                              translation_id=tids.get(uid))
+            stats["blocked"] += len(blocked)
             if parsed is None:
                 continue
             assert isinstance(parsed, ProofreadOutput)
-            stats["checked"] += len(part)
-            valid = {p["unit_id"] for p in part}
-            feedback: dict[str, list[dict[str, str]]] = {}
+            valid = {p["unit_id"] for p in part} - set(blocked)  # what was really checked against the source
+            stats["checked"] += len(valid)
+            feedback: dict[str, list[dict[str, Any]]] = {}
             for it in parsed.issues:
                 if it.unit_id not in valid or it.severity == "low" or not it.problem.strip():
                     continue  # a small slip is not worth a retranslation
                 stats["issues"] += 1
-                self._finding(it.unit_id, f"review:proofread_{it.kind}", it.severity,
-                              f"{it.problem[:300]}" + (f" → {it.fix[:160]}" if it.fix.strip() else ""))
+                fid = self._finding(it.unit_id, f"review:proofread_{it.kind}", it.severity,
+                                    f"{it.problem[:300]}" + (f" → {it.fix[:160]}" if it.fix.strip() else ""),
+                                    translation_id=tids[it.unit_id])
                 feedback.setdefault(it.unit_id, []).append(
                     {"issue_type": f"proofread_{it.kind}", "evidence": f"{it.problem}（譯文：{it.quote}）",
-                     "suggestion": f"{it.fix}\n{proofread.FIX_NOTE}"})
+                     "suggestion": f"{it.fix}\n{proofread.FIX_NOTE}", "finding_id": fid})
             if not feedback:
                 continue
             with self.lock:
@@ -544,8 +558,9 @@ class ContextOrchestrator(Orchestrator):
                     by_scene.setdefault(rows[uid]["scene_id"] or "", []).append(rows[uid])
             for group in by_scene.values():  # one scene at a time: the translation keeps that scene's memory
                 _retranslate_with_feedback(self, group, {r["id"]: feedback[r["id"]] for r in group}, stats)
-        if record_job:
-            self._set_job("proofread", self.book.id, "succeeded", None, stats)
+        if record_job:  # a stretch refused or failed was not checked: the pass is partial, not done
+            self._set_job("proofread", self.book.id, "partial" if stats["blocked"] or stats["failed"] else "succeeded",
+                          None, stats)
         self.log(f"proofreading: {stats}")
         return stats
 
@@ -866,8 +881,10 @@ class ContextOrchestrator(Orchestrator):
         from ..analysis.narration import for_scene
 
         with self.lock:  # ADR-040: whose voice tells this scene (the read pass's judgement, else the whole book's)
-            zh_names = {r["id"]: r["display_name_zh"] or r["canonical_name"] for r in self.conn.execute(
-                "SELECT id, canonical_name, display_name_zh FROM characters WHERE book_id=?", (self.book.id,))}
+            from ..memory.visibility import visible_names
+
+            # named as known at this point of the story (the focal 「神祕少女」 is not called by a name revealed later)
+            zh_names = visible_names(self.conn, self.book.id, batch.rows[-1]["ordinal"])
             who = for_scene(self.conn, self.book.id, scene, zh_names)
         if who is not None:
             ctx["narration"] = who
