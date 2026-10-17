@@ -49,7 +49,7 @@ def build_memory_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         if g[0] in views and g[1] in names:  # a group card shows who it is known to be made of
             views[g[0]].setdefault("members", []).append(names[g[1]])
     utts = [{"unit_id": u["unit_id"], "quote_index": u["quote_index"],
-             "speaker": names.get(u["speaker_id_nullable"]) if u["speaker_id_nullable"] else None,
+             "speaker": u["speaker_id_nullable"],  # an id like known_characters' (the model writes speaker_ref with it)
              "status": u["status"]}
             for u in conn.execute("SELECT * FROM utterances WHERE book_id=? AND scene_id=?", (book_id, scene["id"]))]
     text = " ".join(clean(r["plain_text"]) for r in rows)
@@ -63,7 +63,7 @@ def build_memory_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     return out
 
 
-KNOWN_FACTS = 30  # earlier facts shown to a scene's memory update (the latest about the people in it)
+KNOWN_FACTS = 30  # earlier facts shown to a scene's memory update: the most related to it, in story order
 
 
 def known_facts(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, views: dict[str, dict[str, Any]],
@@ -75,10 +75,17 @@ def known_facts(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, view
     here = {cid for cid, v in views.items() if any(n and n in text for n in [v["name_ja"], *v.get("aliases_ja", [])])}
     here |= {r[0] for r in conn.execute("SELECT DISTINCT speaker_id_nullable FROM utterances WHERE book_id=? AND scene_id=? "
                                         "AND speaker_id_nullable IS NOT NULL", (book_id, scene["id"]))}
-    rows = [f for f in vis.visible_facts(conn, book_id, scene["start_ordinal"])
-            if f["subject"] in here or f["object_ref"] in here or (not f["subject"].startswith("c_") and f["subject"] in text)]
+    from ..memory.retrieval import WORLD_EXTRA, _grams, fact_overlap
+
+    grams = _grams(text)
+    scored = []
+    for i, f in enumerate(vis.visible_facts(conn, book_id, scene["start_ordinal"])):
+        about = f["subject"] in here or f["object_ref"] in here or (not f["subject"].startswith("c_") and f["subject"] in text)
+        overlap = fact_overlap(f, grams)
+        if about or overlap >= 1.0 + WORLD_EXTRA:  # the world's facts too, when this scene takes them up
+            scored.append((overlap + (1.0 if about else 0.0) + i * 1e-4, i, f))  # ties: the later fact
     out = []
-    for f in rows[-KNOWN_FACTS:]:
+    for _, _, f in sorted(sorted(scored, key=lambda x: -x[0])[:KNOWN_FACTS], key=lambda x: x[1]):
         item: dict[str, Any] = {"fact_id": f["id"], "subject": names.get(f["subject"], f["subject"]),
                                 "predicate": f["predicate"], "object": f["object"], "fact_type": f["fact_type"],
                                 "certainty": f["certainty"]}

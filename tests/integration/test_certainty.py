@@ -31,6 +31,10 @@ def test_later_steps_see_beliefs_and_guesses_marked(conn, cfg, fixtures):
     imp = [f["text"] for st, p in sent if st == "impressions" for c in p["characters"] for f in c["facts"]]
     late = [t for t in imp if "常常遲到" in t]
     assert late and all(t.startswith("〔ミナ認為〕") and t.endswith("（推測）") for t in late)
+    # a fact on its subject's own card reads as before; on another's card it says whose it is (雷德：…)
+    cards = [c for st, p in sent if st == "impressions" for c in p["characters"]]
+    late_cards = {c["name"]: f["text"] for c in cards for f in c["facts"] if "常常遲到" in f["text"]}
+    assert list(late_cards) == ["海斗"] and "：" not in late_cards["海斗"]  # on his own card, no name before it
     # a line put to someone only by how it sounds is marked for the house style, which must not make it a habit
     # (「俺様に任せろ」 is ミナ imitating him); one placed by the action beside it is not a guess
     hs = [p for st, p in sent if st == "house_style"]

@@ -626,9 +626,10 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         for item, reason in bad:
             rej(item, reason)
         for pr in parsed.props:
-            if pr.name_ja and pr.name_ja in scene_text:
+            name = re.sub(r"[（(].*?[）)]", "", pr.name_ja or "").strip()  # 「魔剣（魔法で生成された大剣）」: the name
+            if name and name in scene_text:
                 holder = ref_map.get(pr.holder_ref) if pr.holder_ref else None
-                props.append({"name_ja": pr.name_ja, "holder": holder,
+                props.append({"name_ja": name, "holder": holder,
                               "evidence_unit_ids": [u for u in pr.evidence_unit_ids if u in unit_text]})
             else:
                 rej(pr.model_dump(), "prop not found in scene text")

@@ -167,6 +167,15 @@ def _grams(text: str) -> set[str]:
     return {t[i:i + 2] for i in range(len(t) - 1) if _KEY.search(t[i:i + 2])}
 
 
+WORLD_EXTRA = 0.5  # how much more a fact about no one present must share with the text to be given
+
+
+def fact_overlap(f: Any, grams: set[str]) -> float:
+    """How much a fact's source sentence shares with a text (meaningful bigrams, scaled by the sentence's length)."""
+    qg = _grams(match_text(f["evidence_quote"] or ""))
+    return len(grams & qg) / (len(qg) ** .5) if qg else 0.0
+
+
 def select_facts(rows: list[Any], batch_text: str, present: list[dict[str, Any]], names: dict[str, str], *,
                  limit: int = 8, min_score: float = 1.0) -> list[dict[str, Any]]:
     """The facts most related to *this batch* (not every fact about whoever is present): overlap between the
@@ -177,12 +186,12 @@ def select_facts(rows: list[Any], batch_text: str, present: list[dict[str, Any]]
     present_ids = {p["character_id"] for p in present}
     scored = []
     for i, f in enumerate(rows):
-        if not (f["subject"] in present_ids or f["subject"] in batch_text
-                or any(p["name_ja"] in (f["subject"] + f["object"]) for p in present)):
+        about = (f["subject"] in present_ids or f["subject"] in batch_text
+                 or any(p["name_ja"] in (f["subject"] + f["object"]) for p in present))
+        overlap = fact_overlap(f, bg)
+        # a fact about the world (アルテイン vanished from the books) counts when the batch talks about the same thing
+        if not about and overlap < min_score + WORLD_EXTRA:
             continue
-        quote = match_text(f["evidence_quote"] or "")
-        qg = _grams(quote)
-        overlap = len(bg & qg) / (len(qg) ** .5) if qg else 0.0
         score = overlap + (1.5 if f["subject"] in named else 0) + i / max(1, len(rows)) * .3  # later facts: closer
         if score >= min_score:
             scored.append((score, i, f))

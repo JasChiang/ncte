@@ -159,3 +159,16 @@ def test_facts_are_chosen_by_relevance_and_carry_their_source():
     got = select_facts(rows, "ミナは銀の鍵を握りしめた", present, {"c_000000000001": "海斗"})
     assert [f["predicate"] for f in got] == ["把銀之鑰交給"]  # the fishing fact has nothing to do with this batch
     assert got[0]["source"] == "カイトは銀の鍵をミナに手渡した" and got[0]["subject"] == "海斗"
+
+
+def test_a_fact_about_the_world_is_given_where_the_text_takes_it_up():
+    """「アルテインは歴史書から消えていた」 is about no one present; a later batch about the vanished kingdom needs it."""
+    from ncte.memory.retrieval import select_facts
+
+    rows = [{"subject": "アルテイン", "predicate": "從史書中", "object": "消失", "fact_type": "objective",
+             "certainty": "explicit", "source_viewpoint": None, "evidence_quote": "アルテイン王国の名は歴史書から消えていた"},
+            {"subject": "王都", "predicate": "有", "object": "市場", "fact_type": "objective",
+             "certainty": "explicit", "source_viewpoint": None, "evidence_quote": "王都には大きな市場がある"}]
+    present = [{"character_id": "c_000000000001", "name_ja": "カイト", "aliases_ja": []}]
+    got = select_facts(rows, "なぜアルテイン王国の名が歴史書に残っていないのか", present, {})
+    assert [f["subject"] for f in got] == ["アルテイン"]
