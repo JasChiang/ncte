@@ -10,6 +10,7 @@ They go into the series style (``memory.style``) unless a person has set it, and
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from collections import Counter
@@ -57,6 +58,21 @@ def _pick(said: list[tuple[str, str]]) -> list[tuple[str, str]]:
     return [said[i] for i in sorted(idx)]
 
 
+def well_placed(conn: sqlite3.Connection, utterance_id: str, character_id: str) -> bool:
+    """The reading put this line to this character on strong evidence (a tag, the action beside it, an answer to
+    the name, knowledge only they have, a quote that runs on), not on how it sounds."""
+    from ..llm.schemas import STRONG_EVIDENCE
+
+    for (ev,) in conn.execute("SELECT evidence_json FROM speaker_hypotheses WHERE utterance_id=? AND "
+                              "candidate_character_id=?", (utterance_id, character_id)):
+        try:
+            if set(json.loads(ev).get("evidence_types") or []) & STRONG_EVIDENCE:
+                return True
+        except (ValueError, AttributeError):
+            continue
+    return False
+
+
 def request(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, Any], dict[str, str]]:
     """Characters with lines spread through the book (with the current translation of each line's paragraph when there
     is one), the forms of address, and the names already chosen: a habit's rendering keeps to what the book already
@@ -67,10 +83,13 @@ def request(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, Any], dic
     best = latest_texts(conn, book_id)
     chars, refs, items = main_characters(conn, book_id), {}, []
     for k, c in enumerate(chars, 1):
-        rows = conn.execute("SELECT quote_text, unit_id, status FROM utterances WHERE speaker_id_nullable=? AND "
+        rows = conn.execute("SELECT id, quote_text, unit_id, status FROM utterances WHERE speaker_id_nullable=? AND "
                             "book_id=? ORDER BY id", (c["id"], book_id)).fetchall()
-        said = [(r[0], r[1]) for r in rows]
-        guessed = {(r[0], r[1]) for r in rows if r[2] == "inferred"}  # read as his, not stated: never a habit alone
+        said = [(r[1], r[2]) for r in rows]
+        # read as his on weak grounds only (the way he talks, a pronoun): never a habit alone — the habit would be
+        # proved by itself. A line he is placed in by what the text shows (the action beside it, answering to his
+        # name) counts: in a light novel few lines carry a tag (2 of 49 in one prologue), and none would count.
+        guessed = {(r[1], r[2]) for r in rows if r[3] == "inferred" and not well_placed(conn, r[0], c["id"])}
         lines: list[dict[str, Any]] = []
         for q, uid in _pick(said):
             line: dict[str, Any] = {"ja": match_text(q)[:80]}

@@ -494,3 +494,36 @@ def test_scene_the_filter_refuses_is_read_in_parts(conn, cfg, fixtures):
     assert any("頭をかいた" in t for t in blocked)
     read = [p for p in fake.payloads if p.get("task") == "scene_analyze"]
     assert any(len(p["units"]) < max(len(q["units"]) for q in read) for p in read)  # it was read in parts
+
+
+def test_a_scene_is_read_knowing_the_story_so_far(conn, cfg, fixtures):
+    """An untagged line opening a scene, or a promise remembered from an earlier scene, needs what came before: the
+    read step gets the last summaries and the end of the scene before (context only, never evidence)."""
+    fake = FakeLLM(responders=RESPONDERS)
+    run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    read = [p for p in fake.payloads if p.get("task") == "scene_analyze"]
+    assert len(read) >= 2
+    assert "previous_scene_end" not in read[0] and "story_so_far" not in read[0]
+    later = [p for p in read[1:] if "previous_scene_end" in p]
+    assert later and all(p["previous_scene_end"] for p in later)
+    assert any(p.get("story_so_far") for p in read[1:])
+    for p in later:  # the end of another scene, not this one's
+        assert not set(p["previous_scene_end"]) & {u["source"] for u in p["units"]}
+
+
+def test_story_context_the_filter_refuses_is_left_out(conn, cfg, fixtures):
+    """The story so far may be what a content filter refuses: the scene is then read without it, not lost."""
+    from ncte.errors import ContentBlockedError
+
+    class ContextFilter(FakeLLM):
+        def complete(self, req):
+            if req.stage == "scene_analyze" and '"previous_scene_end"' in req.messages[-1]["content"]:
+                raise ContentBlockedError("HTTP 403 content filter: fake PROHIBITED_CONTENT")
+            return super().complete(req)
+
+    fake = ContextFilter(responders=RESPONDERS)
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    assert s.status == "completed"
+    assert not conn.execute("SELECT 1 FROM qa_findings WHERE run_id=? AND type='read_blocked'", (rid,)).fetchall()
+    assert not conn.execute("SELECT 1 FROM jobs WHERE run_id=? AND stage='scene_analyze' AND status='failed'",
+                            (rid,)).fetchall()

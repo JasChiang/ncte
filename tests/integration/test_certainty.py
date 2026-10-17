@@ -31,12 +31,15 @@ def test_later_steps_see_beliefs_and_guesses_marked(conn, cfg, fixtures):
     imp = [f["text"] for st, p in sent if st == "impressions" for c in p["characters"] for f in c["facts"]]
     late = [t for t in imp if "常常遲到" in t]
     assert late and all(t.startswith("〔ミナ認為〕") and t.endswith("（推測）") for t in late)
-    # a line read as someone's (not stated) is marked for the house style, which must not make it a habit
+    # a line put to someone only by how it sounds is marked for the house style, which must not make it a habit
+    # (「俺様に任せろ」 is ミナ imitating him); one placed by the action beside it is not a guess
     hs = [p for st, p in sent if st == "house_style"]
     assert hs
     kaito = next(c for c in hs[0]["characters"] if c["ja"] == "カイト")
-    guessed = [x for x in kaito["lines"] if "悪い悪い" in x["ja"]]
-    assert guessed and guessed[0].get("guess") is True
+    by_voice = [x for x in kaito["lines"] if "俺様に任せろ" in x["ja"]]
+    by_action = [x for x in kaito["lines"] if "悪い悪い" in x["ja"]]
+    assert by_voice and by_voice[0].get("guess") is True
+    assert by_action and "guess" not in by_action[0]
 
 
 def test_a_guessed_relation_reaches_the_translator_marked(conn, cfg, fixtures):

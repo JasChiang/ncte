@@ -265,6 +265,7 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
     if forms := established_self_forms(conn, book_id, scene["seq"]):
         extra["established_self_forms"] = forms
     kin = _relations_so_far(conn, book_id, scene["start_ordinal"])
+    extra.update(story_so_far(conn, book_id, scene))
     return {
         **extra,
         "task": "scene_analyze", "scene_id": scene["id"],
@@ -276,6 +277,36 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
                              if (v := vis.character_view(conn, book_id, c, scene["start_ordinal"] - 1, forms_at))],
         "glossary": [g for g in glossary if str(g.get("ja", "")) in scene_text],
     }
+
+
+STORY_SUMMARIES = 3  # the last scene summaries before this scene
+PREVIOUS_END_CHARS = 400  # and the last paragraphs of the scene before, up to this many characters
+
+
+def story_so_far(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row) -> dict[str, Any]:
+    """What a reader knows on reaching this scene: the summaries of the last scenes read and how the scene before
+    ends. Without them an untagged 「『賢者』が死んだ？」 opening a scene, or a promise remembered from an earlier
+    scene (who said 「決着をつけよう」), was a guess. Only scenes already read; context, never evidence. A paragraph
+    the content filter refused is left out (it would get this scene refused as well)."""
+    out: dict[str, Any] = {}
+    if summaries := [r["summary"] for r in vis.visible_summaries(conn, book_id, scene["start_ordinal"])][-STORY_SUMMARIES:]:
+        out["story_so_far"] = summaries
+    prev = conn.execute("SELECT id FROM scenes WHERE book_id=? AND seq<? AND version>0 ORDER BY seq DESC LIMIT 1",
+                        (book_id, scene["seq"])).fetchone()
+    if prev is not None:
+        tail: list[str] = []
+        used = 0
+        # a paragraph the content filter refused there would get this scene refused too
+        for r in conn.execute("SELECT plain_text FROM units u WHERE book_id=? AND scene_id=? AND kind='text' AND NOT "
+                              "EXISTS (SELECT 1 FROM qa_findings f WHERE f.unit_id=u.id AND f.type='read_blocked') "
+                              "ORDER BY ordinal DESC", (book_id, prev[0])):
+            if tail and used + len(r[0]) > PREVIOUS_END_CHARS:
+                break
+            tail.insert(0, r[0])
+            used += len(r[0])
+        if tail:
+            out["previous_scene_end"] = tail
+    return out
 
 
 def _relations_so_far(conn: sqlite3.Connection, book_id: str, before: int) -> dict[str, list[str]]:
