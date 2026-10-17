@@ -251,3 +251,28 @@ def test_a_step_model_must_exist_and_cannot_be_the_translator(conn, cfg, tmp_pat
     cfg.openrouter.stage_models = {"translate": "fake/model"}
     with pytest.raises(Exception, match="translating model"):
         run_book(conn, cfg, small_book(tmp_path, LINES[1:]), FakeLLM())
+
+
+def test_the_fix_check_knows_who_speaks_to_whom(conn, cfg, fixtures):
+    """A 你／妳 fix cannot be judged from the source alone: the check gets each line's speaker and listener, and the
+    cards of those people."""
+    from ..scripted import RESPONDERS
+
+    seen: list = []
+
+    def proofread(payload, req):
+        return {"issues": [{"unit_id": p["unit_id"], "kind": "speaker", "severity": "high", "quote": p["zh"][:3],
+                            "problem": "對象弄錯", "fix": "改"} for p in payload["paragraphs"] if "カイト、遅いですよ" in p["ja"]]}
+
+    def check(payload, req):
+        seen.append(payload)
+        return {"checks": [{"unit_id": i["unit_id"], "verdict": "undecided", "new_error": "", "reason": "t"}
+                           for i in payload["items"]]}
+
+    cfg.context.reader_pass = False
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "proofread": proofread, "fix_check": check}),
+             mode="context")
+    assert seen
+    item = seen[0]["items"][0]
+    assert item["lines"] and item["lines"][0].startswith("米娜")  # ミナ says it (explicit tag in the fixture)
+    assert any(c["ja"] == "ミナ" for c in seen[0]["characters"])

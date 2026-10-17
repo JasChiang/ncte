@@ -661,3 +661,4 @@ open workspace/eval/<timestamp>/report.html
 - 驗證：`pytest` 403 passed（EPUBCheck 5.1.0 可用時全部執行，0 skipped；沒有 EPUBCheck 時 400 passed、3 skipped）；`ruff check src tests`、`mypy src` 無錯誤。沒有金鑰，**未做任何線上實測**；提示詞修改的效果需依報告第五節 A/B 驗證。
 - 重現：`pytest tests/integration/test_fix_check.py tests/integration/test_spoilers.py tests/integration/test_certainty.py tests/integration/test_retractions.py tests/unit/test_dialogue.py`；EPUBCheck：`EPUBCHECK_JAR=…/epubcheck.jar pytest tests/integration/test_roundtrip.py`。
 - 步驟可用另一個模型（`openrouter.stage_models`）：判斷對錯的步驟（`fix_check`、對照校稿、審稿…）可以不和翻譯模型共用盲點。開始時向 `/models` 確認模型存在（不存在就停止，不會自動替換），估價與記帳用該模型自己的價格，它不收的參數（例如 temperature）不送；結構化輸出模式各自獨立。讀與翻譯維持同一個模型，`translate` 不能換。預設不變。測試 405 passed（含 EPUBCheck）。
+- 測試前複查：fix_check 附台詞的說話者與對象、相關人物的性別；可驗收只算現行譯文的修正問題；網頁顯示修正結果的中文標籤；relations／impressions／naming 提示詞說明〔某人認為〕與（推測）標記，impressions 的 voice 不寫後期身分；review 不把依場合調整的第二人稱算成不一致；memory_update 不送程式內部欄位；fix_check 預設推理 high。詳見 `docs/audit-2026-10-17.md` 第七節。

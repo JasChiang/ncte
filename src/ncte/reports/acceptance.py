@@ -43,7 +43,7 @@ def acceptance(conn: sqlite3.Connection, book_id: str, *, proofread: bool = True
                                                                          and best[f["unit_id"]]["id"] == f["translation_id"])}
     checks["no_open_serious_findings"] = _check({f["unit_id"] for f in current if f["severity"] in ("high", "error")
                                                  and f["type"] not in FIX_OPEN + NOT_SEEN})
-    checks["fixes_checked"] = _check({f["unit_id"] for f in open_rows if f["type"] in FIX_OPEN})
+    checks["fixes_checked"] = _check({f["unit_id"] for f in current if f["type"] in FIX_OPEN})
     checks["all_seen"] = _check({f["unit_id"] for f in current if f["type"] in NOT_SEEN}
                                 | {r[0] for r in conn.execute(
                                     "SELECT j.target_id FROM jobs j WHERE j.book_id=? AND j.stage='review' AND "

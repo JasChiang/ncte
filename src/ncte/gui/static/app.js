@@ -147,7 +147,10 @@ async function settingsView() {
 const RUNSTATUS = {completed: "完成", completed_with_failures: "完成（有段落失敗，可再試一次）", running: "進行中",
   interrupted: "已暫停", running_elsewhere: "另一個程序正在翻譯", budget_exhausted: "達到預算上限", awaiting_names: "等你決定譯法", stopped_fatal: "停止（連線或帳戶問題）", created: "準備中"};
 const FINDING = {read_blocked: "內容過濾擋下，這段沒有讀到（說話者與記憶只靠程式）", reader_blocked: "內容過濾擋下，讀者檢查沒看到這段",
-  review_blocked: "內容過濾擋下，審稿沒看到這段", content_blocked: "內容過濾擋下，保留日文原文", second_person_gender: "對女性用了「你」",
+  review_blocked: "內容過濾擋下，審稿沒看到這段", proofread_blocked: "內容過濾擋下，對照校稿沒看到這段",
+  fix_still_wrong: "修正後對照原文，仍有同樣的問題", fix_regressed: "修正帶出新的錯，沒有採用（書裡仍是原譯文）",
+  fix_undecided: "修正後對照原文，無法確定是否修好", fix_unchecked: "修正沒有對照原文確認（檢查失敗或被擋）",
+  fix_unverified: "修正沒有對照原文確認（已關閉修正驗收）", fix_check_failed: "修正驗收的請求失敗", content_blocked: "內容過濾擋下，保留日文原文", second_person_gender: "對女性用了「你」",
   narration_first_person: "第三人稱的敘述出現「我」", narrator_self_form: "敘述者自稱和全書不一致", offensive_term: "可能是貶稱",
   latin_word: "原文沒有的英文單字", possible_added_name: "可能補了原文沒有的人名", glossary_mismatch: "譯名和名詞表不一致",
   quote_mismatch: "引號和原文不對應", untranslated: "沒有翻譯", japanese_residue: "殘留日文", non_taiwan_glyph: "簡體或日文字形",

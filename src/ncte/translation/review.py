@@ -191,6 +191,37 @@ def _speakers(conn: sqlite3.Connection, unit_id: str) -> list[str]:
                                   "c.id=u.speaker_id_nullable WHERE u.unit_id=? ORDER BY u.quote_index", (unit_id,))]
 
 
+def _people(conn: sqlite3.Connection, unit_id: str) -> set[str]:
+    """Who speaks a line of the unit and who it is said to."""
+    out: set[str] = set()
+    for r in conn.execute("SELECT speaker_id_nullable, addressee_ids_json FROM utterances WHERE unit_id=?", (unit_id,)):
+        out |= {r[0]} if r[0] else set()
+        out |= set(json.loads(r[1] or "[]"))
+    return out
+
+
+def _lines(conn: sqlite3.Connection, unit_id: str) -> list[str]:
+    """Each line of the unit as read: 「speaker → listener」, an inference marked （推測）."""
+    from ..memory.visibility import visible_names
+
+    rows = conn.execute("SELECT u.speaker_id_nullable sp, u.status, u.addressee_ids_json to_ FROM utterances u "
+                        "WHERE u.unit_id=? ORDER BY u.quote_index", (unit_id,)).fetchall()
+    if not rows:
+        return []
+    unit = conn.execute("SELECT book_id, scene_id, ordinal FROM units WHERE id=?", (unit_id,)).fetchone()
+    # named as known at the end of the scene, as the scene was translated (a name may come a line after the quote)
+    end = conn.execute("SELECT MAX(ordinal) FROM units WHERE book_id=? AND scene_id=?",
+                       (unit["book_id"], unit["scene_id"])).fetchone()[0] if unit["scene_id"] else None
+    names = visible_names(conn, unit["book_id"], end or unit["ordinal"])
+    out = []
+    for r in rows:
+        who = names.get(r["sp"], "？") if r["sp"] else "？"
+        to = "、".join(names.get(x, "？") for x in json.loads(r["to_"] or "[]"))
+        guess = "" if r["status"] in ("explicit", "human_verified") else "（推測）"
+        out.append(f"{who}{guess}" + (f" → {to}（推測）" if to else ""))
+    return out
+
+
 def _surroundings(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row],
                   reach: int = REVIEW_CONTEXT) -> list[dict[str, Any]]:
     """The paragraphs around the reviewed ones (source, current translation, speakers), within reach of each."""
@@ -355,17 +386,30 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
     out: dict[str, FixCheck] = {}
     if not fixes:
         return out
+    from ..analysis import proofread
+
     prompt = load_prompt("fix_check")
     conn: sqlite3.Connection = orch.conn
     for i in range(0, len(fixes), FIX_CHECK_BATCH):
         chunk = fixes[i:i + FIX_CHECK_BATCH]
         with orch.lock:
-            items = [{"unit_id": r["id"], "source": r["source_text"], "before": before, "after": after,
-                      "issues": [f"{x.get('issue_type', '')}: {x.get('evidence', '')} → {x.get('suggestion', '')}"[:500]
-                                 for x in issues],
-                      "around": [a["source"] for a in _surroundings(conn, orch.book.id, [r], reach=2)]}
-                     for r, before, after, issues in chunk]
-        payload = {"task": "fix_check", "items": items}
+            items = []
+            for r, before, after, issues in chunk:
+                item: dict[str, Any] = {
+                    "unit_id": r["id"], "source": r["source_text"], "before": before, "after": after,
+                    "issues": [f"{x.get('issue_type', '')}: {x.get('evidence', '')} → {x.get('suggestion', '')}"[:500]
+                               for x in issues],
+                    "around": [a["source"] for a in _surroundings(conn, orch.book.id, [r], reach=2)]}
+                if lines := _lines(conn, r["id"]):  # 你／妳 and who-did-what issues need who speaks to whom
+                    item["lines"] = lines
+                items.append(item)
+            # the people of these lines, as known there (name, gender, narrator): the same cards proofreading reads
+            who = {x for r, *_ in chunk for x in _people(conn, r["id"])}
+            cast = proofread.cast(conn, orch.book.id, [{"ja": r["plain_text"], "_who": sorted(who), "_at": r["ordinal"]}
+                                                       for r, *_ in chunk])
+        payload: dict[str, Any] = {"task": "fix_check", "items": items}
+        if cast:
+            payload["characters"] = [{k: v for k, v in c.items() if k in ("name", "ja", "gender", "narrator")} for c in cast]
         est = orch._estimate(payload, 200 * len(items), "fix_check")
         orch.check_budget(est)  # out of budget: the run stops; the new texts stay needs_review and the issues open
 

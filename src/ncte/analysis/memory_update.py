@@ -55,7 +55,8 @@ def build_memory_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     text = " ".join(clean(r["plain_text"]) for r in rows)
     out = {"task": "memory_update", "scene_id": scene["id"], "units": units,
            "known_characters": [{"character_id": cid, **v} for cid, v in views.items()],
-           "scene": {"utterances": utts, **json.loads(scene["state_json"] or "{}")},
+           "scene": {"utterances": utts, **{k: v for k, v in json.loads(scene["state_json"] or "{}").items()
+                                            if k not in ("run_id", "analysis", "quotes")}},
            "glossary": [g for g in glossary if str(g.get("ja", "")) in text]}
     if known := known_facts(conn, book_id, scene, views, names, text):
         out["known_facts"] = known
