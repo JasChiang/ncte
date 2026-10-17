@@ -52,18 +52,23 @@ def chapter_starts(conn: sqlite3.Connection, book_id: str, pkg: EpubPackage) -> 
     """(first paragraph's ordinal, TOC label) per chapter, in reading order. An anchor is the element itself, an
     element around it, or the first paragraph after it; an entry whose file has no paragraphs is dropped."""
     at: dict[tuple[str, str], int] = {}
-    first: dict[str, int] = {}
-    for r in conn.execute("SELECT resource_href, xpath, ordinal FROM units WHERE book_id=? AND spine_index IS NOT NULL "
-                          "AND kind IN ('text','heading')", (book_id,)):
-        at[(r[0], r[1])] = r[2]
-        first[r[0]] = min(first.get(r[0], r[2]), r[2])
+    first: dict[str, int] = {}  # a file's first unit of any kind (a chapter's title page may be only an image)
+    body: list[int] = []
+    for r in conn.execute("SELECT resource_href, xpath, ordinal, kind FROM units WHERE book_id=? AND spine_index IS NOT "
+                          "NULL ORDER BY ordinal", (book_id,)):
+        first.setdefault(r[0], r[2])
+        if r[3] in ("text", "heading"):
+            at[(r[0], r[1])] = r[2]
+            body.append(r[2])
     starts: dict[int, str] = {}
     for e in toc_entries(pkg):
         if e.href not in first:
             continue
         o = _anchor(pkg, e, at) if e.fragment else None
-        o = first[e.href] if o is None else o
-        starts.setdefault(o, e.label)
+        if o is None:  # the file's start, or the first paragraph after it when the file has no text
+            o = next((b for b in body if b >= first[e.href]), None)
+        if o is not None:
+            starts.setdefault(o, e.label)
     return sorted(starts.items())
 
 

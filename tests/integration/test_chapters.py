@@ -72,3 +72,16 @@ def test_a_chapter_is_read_and_translated_with_the_recap_of_the_one_before(conn,
     tr = next(p for p in fake.payloads if p.get("task") == "translate" and "review_feedback" not in p
               and any("夜になった" in u["source"] for u in p["units"]))
     assert tr["memory"]["previous_chapter_summary"] == ["摘要：朝が来た"] and tr["memory"]["this_chapter_so_far"] == []
+
+
+def test_a_chapter_whose_title_page_is_only_an_image_starts_at_the_text_after_it(conn, cfg, tmp_path):
+    """Some books give each chapter a title page that is only a picture (no text): the TOC points at it, and the
+    chapter starts at the first paragraph after it — not dropped."""
+    spec = BookSpec("扉の本", UID.format(4), [Doc("t1", "Text/t1.xhtml", "扉", '<div class="img"></div>', in_toc=False),
+                                             Doc("a", "Text/a.xhtml", "a", paras(["　一章の本文。"]), in_toc=False),
+                                             Doc("t2", "Text/t2.xhtml", "扉", '<div class="img"></div>', in_toc=False),
+                                             Doc("b", "Text/b.xhtml", "b", paras(["　二章の本文。"]), in_toc=False)],
+                    extra_files={"OEBPS/Text/nav.xhtml": _nav([("t1.xhtml", "制服ピンポン"), ("t2.xhtml", "未来フィッシング")])})
+    book, _ = import_book(conn, cfg, write_book(spec, tmp_path / "img.epub"))
+    assert [(label, t) for label, _, t in chapters(conn, book)] == [("制服ピンポン", "　一章の本文。"),
+                                                                    ("未来フィッシング", "　二章の本文。")]
