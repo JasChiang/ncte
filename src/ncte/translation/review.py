@@ -83,7 +83,7 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
     if not targets:
         return stats
     prompt = load_prompt("review")
-    model = cfg.openrouter.review_model or orch.model
+    model = orch.model_for("review")
     for i in range(0, len(targets), REVIEW_BATCH):
         chunk = targets[i:i + REVIEW_BATCH]
         items = []
@@ -114,11 +114,11 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
         for key in ("address_terms", "style"):
             if ctx.get(key):
                 payload[key] = ctx[key]
-        est = orch._estimate(payload, sum(len(x["source"]) for x in items) // 2)
+        est = orch._estimate(payload, sum(len(x["source"]) for x in items) // 2, "review")
         orch.check_budget(est)
         def ask(pl: dict[str, Any], est: float = est) -> Any:
             return call_structured(orch.client, orch.recorder, stage="review", model=model, prompt=prompt, payload=pl,
-                                   mode=orch.translator.mode, cfg=cfg, unit_ids=[x["unit_id"] for x in pl["items"]],
+                                   mode=orch.mode_for(model), cfg=cfg, unit_ids=[x["unit_id"] for x in pl["items"]],
                                    est_cost=est, on_downgrade=orch._note)[0]
 
         blocked: list[str] = []
@@ -366,12 +366,12 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
                       "around": [a["source"] for a in _surroundings(conn, orch.book.id, [r], reach=2)]}
                      for r, before, after, issues in chunk]
         payload = {"task": "fix_check", "items": items}
-        est = orch._estimate(payload, 200 * len(items))
+        est = orch._estimate(payload, 200 * len(items), "fix_check")
         orch.check_budget(est)  # out of budget: the run stops; the new texts stay needs_review and the issues open
 
         def ask(pl: dict[str, Any], est: float = est) -> Any:
-            return call_structured(orch.client, orch.recorder, stage="fix_check", model=orch.cfg.openrouter.review_model
-                                   or orch.model, prompt=prompt, payload=pl, mode=orch.translator.mode, cfg=orch.cfg,
+            return call_structured(orch.client, orch.recorder, stage="fix_check", model=orch.model_for("fix_check"),
+                                   prompt=prompt, payload=pl, mode=orch.mode_for(orch.model_for("fix_check")), cfg=orch.cfg,
                                    unit_ids=[x["unit_id"] for x in pl["items"]], est_cost=est, on_downgrade=orch._note)[0]
 
         blocked: list[str] = []

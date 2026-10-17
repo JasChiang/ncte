@@ -229,3 +229,25 @@ def test_rechecking_the_rules_does_not_settle_an_unsettled_fix(conn, cfg, tmp_pa
     assert latest_texts(conn, book.id)[uid]["status"] == "needs_review"
     recheck_book(conn, book.id)  # the program's rules find nothing wrong with 「她來了。」
     assert latest_texts(conn, book.id)[uid]["status"] == "needs_review"
+
+
+def test_a_judging_step_can_use_another_model(conn, cfg, tmp_path):
+    cfg.openrouter.stage_models = {"fix_check": "fake/model"}
+    cfg.review.automatic_review = "all"
+    fake = FakeLLM(responders={"translate": translator(RIGHT), "review": negation_review})
+    run_book(conn, cfg, small_book(tmp_path), fake)
+    used = {c.stage: c.model for c in fake.calls}
+    assert used["fix_check"] == "fake/model" and used["translate"] == used["review"] == cfg.openrouter.model
+    rows = conn.execute("SELECT stage, model FROM llm_requests WHERE stage='fix_check'").fetchall()
+    assert rows and all(r["model"] == "fake/model" for r in rows)  # recorded (and priced) as that model
+
+
+def test_a_step_model_must_exist_and_cannot_be_the_translator(conn, cfg, tmp_path):
+    import pytest
+
+    cfg.openrouter.stage_models = {"proofread": "nobody/no-such-model"}
+    _, _, s = run_book(conn, cfg, small_book(tmp_path), FakeLLM())
+    assert s.status != "completed"  # never a silent substitute
+    cfg.openrouter.stage_models = {"translate": "fake/model"}
+    with pytest.raises(Exception, match="translating model"):
+        run_book(conn, cfg, small_book(tmp_path, LINES[1:]), FakeLLM())

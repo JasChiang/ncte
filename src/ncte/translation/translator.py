@@ -153,6 +153,10 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": for_model(json.dumps(ids.encode(payload), ensure_ascii=False))}]
     current: StructuredMode = mode
+    from ..llm.base import MODEL_PARAMS
+
+    known = MODEL_PARAMS.get(model)  # a step model that takes no temperature is sent none
+    temperature = cfg.openrouter.temperature if known is None or not known or "temperature" in known else None
     max_tokens = cfg.openrouter.max_output_tokens
     auto_cap = max_tokens is None
     if auto_cap:
@@ -160,7 +164,7 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
     while True:
         req = LLMRequest(stage=stage, model=model, messages=messages, schema_name=f"ncte_{stage.split(':')[0]}",
                          json_schema=strict_json_schema(schema_model) if current == "json_schema" else None,
-                         structured_mode=current, temperature=cfg.openrouter.temperature,
+                         structured_mode=current, temperature=temperature,
                          max_tokens=max_tokens, prompt_version=prompt.version_id,
                          extra={"reasoning": rp} if (rp := reasoning_param(reasoning_setting(cfg, stage))) else {},
                          id_codes=ids.to_long, cached_prefix_chars=len(shared))

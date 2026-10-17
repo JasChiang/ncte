@@ -762,16 +762,18 @@ class ContextOrchestrator(Orchestrator):
     def _llm(self, stage: str, prompt: Any, payload: dict[str, Any], unit_ids: list[str]) -> Any:
         assert self.translator is not None and self.pricing is not None
         out_chars = sum(len(u.get("source", "")) for u in payload.get("units", []))
-        est = self._estimate(payload, out_chars)
+        est = self._estimate(payload, out_chars, stage)
         self.check_budget(est)
         correction = None
+        model = self.model_for(stage)
         for attempt in range(2):
             try:
                 parsed, _rid, mode = call_structured(
-                    self.client, self.recorder, stage=stage, model=self.model, prompt=prompt, payload=payload,
-                    mode=self.translator.mode, cfg=self.cfg, unit_ids=unit_ids, est_cost=est, correction=correction,
+                    self.client, self.recorder, stage=stage, model=model, prompt=prompt, payload=payload,
+                    mode=self.mode_for(model), cfg=self.cfg, unit_ids=unit_ids, est_cost=est, correction=correction,
                     on_downgrade=self._note)
-                self.translator.mode = mode
+                if model == self.model:
+                    self.translator.mode = mode
                 return parsed
             except ModelOutputError as exc:
                 if attempt == 1:

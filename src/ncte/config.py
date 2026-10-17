@@ -50,6 +50,10 @@ class OpenRouterConfig(_Strict):
     # per step (scenes, scene_analyze, memory_update, verify, naming, relations, translate, review, reader…):
     # "low" | "medium" | "high" | "default" (the model's own) | "max:N" (at most N reasoning tokens)
     stage_reasoning: dict[str, str] = Field(default_factory=dict)
+    # per step, another model (checked against /models at start, priced on its own): a step that judges whether
+    # something is wrong (fix_check, proofread, review…) need not share the translator's blind spots. Reading and
+    # translating keep the run's model (one voice, one set of notes); "translate" here is refused.
+    stage_models: dict[str, str] = Field(default_factory=dict)
     max_output_tokens: int | None = None
     app_title: str = "NCTE"
 
@@ -200,6 +204,20 @@ def reasoning_setting(cfg: Config, stage: str) -> str | None:
     None = send nothing (the model's default)."""
     value = cfg.openrouter.stage_reasoning.get(stage.split(":")[0], cfg.openrouter.reasoning_effort)
     return None if value in (None, "", "default") else value
+
+
+JUDGING_STAGES = ("fix_check", "review", "proofread", "reader", "confirm", "verify")
+
+
+def stage_model(cfg: Config, stage: str, default: str) -> str:
+    """The model a step's requests use: ``stage_models``, else ``review_model`` for review and its fix check, else the
+    run's model."""
+    stage = stage.split(":")[0]
+    if m := cfg.openrouter.stage_models.get(stage):
+        return m
+    if stage in ("review", "fix_check") and cfg.openrouter.review_model:
+        return cfg.openrouter.review_model
+    return default
 
 
 def reasoning_param(setting: str | None) -> dict[str, Any] | None:

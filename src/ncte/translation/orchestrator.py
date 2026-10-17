@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from ..config import Config
+from ..config import Config, stage_model
 from ..errors import (
     BudgetExceededError,
     FatalAPIError,
@@ -188,6 +188,7 @@ class DbRecorder:
                  pricing: Pricing, *, reuse: bool = True):
         self.conn, self.lock, self.run_id, self.book_id, self.pricing = conn, lock, run_id, book_id, pricing
         self.reuse = reuse
+        self.models: dict[str, Pricing] = {}  # step models other than the run's (``stage_models``)
 
     def start(self, req: LLMRequest, unit_ids: list[str], est_cost: float) -> int:
         with self.lock:
@@ -206,7 +207,8 @@ class DbRecorder:
             u = resp.usage or {}
             pt, ct = int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
             if pt or ct:
-                cost, status = self.pricing.cost(pt, ct), "estimated_from_tokens"
+                pricing = self.models.get(resp.model, self.pricing)
+                cost, status = pricing.cost(pt, ct), "estimated_from_tokens"
             else:
                 status = "unknown"
         req_status = "succeeded" if parse_status in ("strict", "repaired_fence") else f"invalid_output:{parse_status}"
@@ -320,6 +322,7 @@ class Orchestrator:
         self.notes: list[str] = []
         self.prompt = load_prompt("translate")
         self.pricing: Pricing | None = None
+        self.stage_pricing: dict[str, Pricing] = {}  # other models some steps use (``openrouter.stage_models``)
         self.translator: Translator | None = None
         self.model = opts.model
         self._stop_reason: str | None = None
@@ -367,6 +370,8 @@ class Orchestrator:
                        f"Pydantic validation (no native schema guarantee)")
         recorder = DbRecorder(self.conn, self.lock, self.run_id, self.book.id, self.pricing)
         self.recorder = recorder
+        self.stage_pricing = self._step_models()
+        recorder.models = self.stage_pricing
         self.translator = Translator(self.client, self.cfg, recorder, model=self.model, structured_mode=mode,
                                      estimate=self._estimate, prompt=self.prompt, on_downgrade=self._note)
         self.reload_glossary()
@@ -380,10 +385,40 @@ class Orchestrator:
             self.link_revealed = link_revealed(self.conn, self.book.id)
             self.volume = volume_of(self.conn, self.book.id)
 
-    def _estimate(self, payload: dict[str, Any], out_chars: int) -> float:
+    def _estimate(self, payload: dict[str, Any], out_chars: int, stage: str | None = None) -> float:
         assert self.pricing is not None
         text = self.prompt.text + json.dumps(payload, ensure_ascii=False)
-        return estimate_request_cost(self.pricing, text, out_chars)[2]
+        pricing = self.stage_pricing.get(self.model_for(stage), self.pricing) if stage else self.pricing
+        return estimate_request_cost(pricing, text, out_chars)[2]
+
+    def mode_for(self, model: str) -> Any:
+        """Structured-output mode to start a request with: the run's (it may have been downgraded) or the step model's."""
+        assert self.translator is not None
+        p = self.stage_pricing.get(model)
+        return self.translator.mode if p is None or model == self.model else p.structured_mode
+
+    def model_for(self, stage: str) -> str:
+        """The model this step uses (``openrouter.stage_models``; review and its fix check also ``review_model``)."""
+        return stage_model(self.cfg, stage, self.model)
+
+    def _step_models(self) -> dict[str, Pricing]:
+        """Every other model a step is set to use: it must be listed by /models (never a silent substitute); its own
+        prices estimate and record its requests, and a parameter it does not take is not sent to it."""
+        from ..llm.base import MODEL_PARAMS
+
+        if "translate" in self.cfg.openrouter.stage_models:
+            raise NCTEError("stage_models cannot change the translating model (use --model); it keeps one voice")
+        assert self.pricing is not None
+        MODEL_PARAMS[self.model] = set(self.pricing.supported_parameters)
+        out: dict[str, Pricing] = {}
+        wanted = {*self.cfg.openrouter.stage_models.values(), self.cfg.openrouter.review_model} - {None, self.model}
+        for m in sorted(x for x in wanted if x):
+            pricing, _src = resolve_pricing(self.conn, self.client, m, log=self.log)
+            pin, pout = pricing.per_million()
+            self.log(f"step model {m}: ${pin:.4f}/M input, ${pout:.4f}/M output")
+            MODEL_PARAMS[m] = set(pricing.supported_parameters)
+            out[m] = pricing
+        return out
 
     # ------------------------------------------------------------ jobs
     def target_units(self) -> list[sqlite3.Row]:

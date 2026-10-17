@@ -10,6 +10,11 @@ from typing import Any, Literal, Protocol
 StructuredMode = Literal["json_schema", "json_object", "prompt_only"]
 
 
+# model id → the parameters /models says it takes (filled when a run starts): a parameter a model does not take is
+# not sent to it (with require_parameters OpenRouter would otherwise find no endpoint)
+MODEL_PARAMS: dict[str, set[str]] = {}
+
+
 @dataclass
 class LLMRequest:
     stage: str  # translate | scene_analyze | memory_update | review | repair
