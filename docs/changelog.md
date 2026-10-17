@@ -663,3 +663,14 @@ open workspace/eval/<timestamp>/report.html
 - 步驟可用另一個模型（`openrouter.stage_models`）：判斷對錯的步驟（`fix_check`、對照校稿、審稿…）可以不和翻譯模型共用盲點。開始時向 `/models` 確認模型存在（不存在就停止，不會自動替換），估價與記帳用該模型自己的價格，它不收的參數（例如 temperature）不送；結構化輸出模式各自獨立。讀與翻譯維持同一個模型，`translate` 不能換。預設不變。測試 405 passed（含 EPUBCheck）。
 - 測試前複查：fix_check 附台詞的說話者與對象、相關人物的性別；可驗收只算現行譯文的修正問題；網頁顯示修正結果的中文標籤；relations／impressions／naming 提示詞說明〔某人認為〕與（推測）標記，impressions 的 voice 不寫後期身分；review 不把依場合調整的第二人稱算成不一致；memory_update 不送程式內部欄位；fix_check 預設推理 high。詳見 `docs/audit-2026-10-17.md` 第七節。
 - 修正驗收的模型比較（審查第五節第 1 項，準備完成、**尚未付費執行**）：`ncte eval fix-check`，40 題自製挑戰集 `src/ncte/eval/data/fix_check_v1.json`，以正式流程的提示詞與批次送出，報告仍錯被結案的比例（目標 < 5%）等指標；`--dry-run` 從 `/models` 估價並顯示餘額，`--budget-usd` 超出就不送。2026-10-17 查詢：帳戶餘額 US$0.74；估價上限每輪 gemini-3.8-flash US$0.079、claude-sonnet-5.5 US$0.19、gpt-5.6-terra US$0.23、claude-haiku-5.5 US$0.010、deepseek-v4.1-flash US$0.012、gpt-5.6-luna US$0.023。說明見 `docs/evaluation.md`。測試 `tests/eval/test_fix_check_eval.py`；全部 407 passed、3 skipped（無 EPUBCheck）。
+- 修正驗收的模型比較，第一次實測（OpenRouter，2026-10-17，`fix_check_v1`，各一輪，推理 high，共花 US$0.086，餘額 US$0.74 → 0.66）：
+
+  | 模型 | 仍錯被結案 | 誤判 fixed | 該結案有結案 | 新錯有抓到 | 完全一致 | 無法裁決 | 費用 | 時間 |
+  |---|---|---|---|---|---|---|---|---|
+  | gemini-3.8-flash | 0/18 | 0 | 22/22 | 4/4 | 40/40 | 0 | US$0.058 | 82 秒 |
+  | claude-haiku-5.5 | 0/18 | 0 | 22/22 | 4/4 | 34/40 | 0 | US$0.006 | 45 秒 |
+  | deepseek-v4.1-flash | 0/18 | 0 | 22/22 | 4/4 | 36/40 | 0 | US$0.005 | 36 秒 |
+  | gpt-5.6-luna | 0/18 | 0 | 22/22 | 4/4 | 35/40 | 0 | US$0.017 | 110 秒 |
+
+  - 不一致的全是標準答案「仍錯」被判成「改出新錯」，兩者都讓問題維持未結，流程上沒有差別；而且這幾題的 `after` 確實加了原文沒有的「終於」「輕快地」「緊緊的」「到底」等詞，模型的判斷可以成立，是題目設計不夠乾淨（之後的仍錯題 `after` 不應附帶新增內容）。
+  - 結論：四個模型都達到目標（< 5%），這份題目**太簡單，分不出模型**，不足以作為換模型的依據；正式設定不變（仍用 gemini-3.8-flash）。要比較需要更難的題目：長段落、細微的語意差、需要前後文或只能判 `undecided` 的題目。
