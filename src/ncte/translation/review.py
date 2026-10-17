@@ -69,7 +69,12 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
         done = {r[0] for r in conn.execute("SELECT target_id FROM jobs WHERE run_id=? AND stage='review'", (orch.run_id,))}
         ids = [u for u in unit_ids if u not in done]
         if cfg.review.automatic_review == "all":
-            reasons = {u: ["full review"] for u in ids}
+            from ..epub.matter import story_hrefs
+
+            story = story_hrefs(conn, orch.book.id)  # a table of contents has nothing to review line by line
+            href = {r[0]: r[1] for r in conn.execute(
+                f"SELECT id, resource_href FROM units WHERE id IN ({','.join('?' * len(ids))})", ids)} if ids else {}
+            reasons = {u: ["full review"] for u in ids if not story or href.get(u) in story}
             reasons.update(flagged_units(conn, orch.book.id, None if any_run else orch.run_id, ids))
         else:
             reasons = flagged_units(conn, orch.book.id, None if any_run else orch.run_id, ids)
@@ -226,14 +231,17 @@ def _lines(conn: sqlite3.Connection, unit_id: str) -> list[str]:
 
 def _surroundings(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row],
                   reach: int = REVIEW_CONTEXT) -> list[dict[str, Any]]:
-    """The paragraphs around the reviewed ones (source, current translation, speakers), within reach of each."""
+    """The paragraphs around the reviewed ones (source, current translation, speakers), within reach of each, each
+    saying where it is: ``before`` the first reviewed paragraph, ``after`` the last, or ``between`` two of them."""
     wanted = {r["ordinal"] for r in rows}
+    lo, hi = min(wanted, default=0), max(wanted, default=0)
     near = sorted({o for r in rows for o in range(r["ordinal"] - reach, r["ordinal"] + reach + 1)} - wanted)
     out = []
     for r in conn.execute(f"SELECT * FROM units WHERE book_id=? AND translatable=1 AND kind IN ('text','heading') AND "
                           f"ordinal IN ({','.join('?' * len(near))}) ORDER BY ordinal", (book_id, *near)) if near else []:
         tr = latest_translation(conn, r["id"], r["source_hash"])
-        item: dict[str, Any] = {"source": r["source_text"]}
+        item: dict[str, Any] = {"at": "before" if r["ordinal"] < lo else "after" if r["ordinal"] > hi else "between",
+                                "source": r["source_text"]}
         if tr is not None:
             item["translation"] = tr["text"]
         sp = _speakers(conn, r["id"])

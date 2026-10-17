@@ -64,6 +64,8 @@ def test_reviewing_the_whole_book_asks_about_one_scene_at_a_time(conn, cfg, tmp_
     n0 = len(client.payloads)
     orchestrator_for(conn, cfg, book2, rid2, opts2, client).run()
     assert asked and all(len(s) == 1 for s in asked)
+    ctx = [c for p in client.payloads[n0:] if p.get("task") == "review" for c in p["context"]]
+    assert ctx and {c["at"] for c in ctx} <= {"before", "after", "between"}  # which side of the reviewed lines
     sent = [p for p in client.payloads[n0:] if p.get("task") == "translate" and "review_feedback" in p]
     assert sent and all("scene" in p for p in sent)  # who speaks to whom, the people, the address table
 
