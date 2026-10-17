@@ -15,8 +15,8 @@ flowchart LR
 2. **讀全書**：一個場景一個場景讀，記下誰在說話、對誰說、角色與性別、誰怎麼叫誰、敘述人稱、人物關係、劇情事實，都要附原文證據。
 3. **覆核**：程式和模型意見不同的判斷、只有稱呼沒有名字的人物（「姊姊」是不是某位已知角色）、群體的成員，帶前後文再看一次；接著歸納人物關係、決定譯名。
 4. **翻譯**：一個場景一個請求，只附「讀到這裡為止」已知的資訊，不劇透。
-5. **檢查、審稿**：程式檢查殘留假名、簡體字、你／妳等，模型確認後修正；最後像只讀中文的讀者再讀一次，卡住的地方改寫或加譯註。
-6. **匯出**：重建 EPUB，用 EPUBCheck 驗證。
+5. **檢查、審稿**：程式檢查殘留假名、簡體字、你／妳等，模型確認後修正；翻完後逐段對照原文校稿，再像只讀中文的讀者讀一次，卡住的地方改寫或加譯註。每個修正都會再對照原文驗收一次：沒確認修好的不算修好，留給你看。
+6. **匯出**：重建 EPUB，用 EPUBCheck 驗證，並列出「可驗收」還缺什麼（見下方〈匯出不等於完成〉）。
 
 - **證據**：模型的判斷都要附原文證據，程式會檢查；推測的不會被當成確定的事。第一人稱的敘述者怎麼稱呼自己，讀的時候決定、全書固定。
 - **不劇透**：翻到第 3 章時，只會用到第 3 章以前揭露的資訊。身分揭曉前，角色只以當時的稱呼出現。
@@ -36,6 +36,8 @@ flowchart LR
 ![人物關係圖](docs/images/graph.png)
 
 ## 測試結果
+> 下表都是 2026-10-17 審查（[`docs/audit-2026-10-17.md`](docs/audit-2026-10-17.md)）之前跑的：當時審稿後的修正只經程式檢查、沒有對照原文驗收。數字是與正式中文版的逐句對照與人工抽查，**不是**人工標註的語義正確率；「高品質譯本」目前還沒有足夠證據，待驗證的項目見審查報告第五節。
+
 **輕小說**（版權作品，只寫類型與數字；與正式中文版對照的，是同一段落逐句比對）
 
 | 類型 | 考驗的地方 | 結果 |
@@ -142,7 +144,7 @@ ncte status ./samples/book.epub
 ncte resume --run-id <run-id>                    # 可加 --budget-usd 10 提高上限
 
 # 6. 匯出、驗證、報告
-ncte export   ./samples/book.epub --lang zh-TW   # → workspace/exports/book.zh-TW.epub
+ncte export   ./samples/book.epub --lang zh-TW   # → workspace/exports/book.zh-TW.epub（另印一行「acceptance」）
 ncte validate ./workspace/exports/book.zh-TW.epub --original ./samples/book.epub
 ncte report --run-id <run-id> --format html      # → workspace/reports/<book>/run-<id>.html
 ncte report --run-id <run-id> --reconcile        # 以 /generation 回填最終費用
@@ -220,9 +222,23 @@ ncte glossary impact ./samples/book.epub ミナ
 ncte unit ./samples/book.epub u_xxx                  # 原文、placeholder、所有譯文版本、QA 發現
 ncte edit ./samples/book.epub --unit-id u_xxx --text "還有，明天⟦1⟧一定⟦/1⟧要早點來。」"
 ncte review ./samples/book.epub --scope flagged --budget-usd 0.5
+ncte proofread ./samples/book.epub                   # 逐段對照原文校稿，真正的錯誤交回翻譯（ADR-051）
 ncte reader-check ./samples/book.epub                # 以不懂日文的讀者身分讀中文，看不懂的地方對照原文修正或加註（ADR-038）
 ```
-自動複查由設定 `review.automatic_review: off | flagged_only | all` 控制（預設只複查被程式 QA 或說話者衝突標記的單元，最多一輪）。審稿看前後各 5 段與每句說話者；提出具體修正就重翻並再經程式檢查，程式判定為錯誤的（例如殘留假名）一律修正。規則改進後可用 `ncte recheck 書.epub` 重新檢查既有譯文（不呼叫 API），再用 `ncte review 書.epub` 修正被標記的段落。
+自動複查由設定 `review.automatic_review: off | flagged_only | all` 控制（預設只複查被程式 QA 或說話者衝突標記的單元，最多一輪）。審稿看前後各 5 段與每句說話者。
+
+**修正要對照原文驗收（ADR-055）**：審稿、對照校稿、讀者檢查提出的問題交回翻譯時，會附上現行譯文，只改有問題的地方；改完再把原文、修改前後與原本的問題交給模型判斷一次：
+- 修好了，或原文顯示本來就不是錯：結案。
+- 還是錯、無法判斷、檢查失敗：問題保留，新譯文標為「待審」（`needs_review`），留給你決定。
+- 修改帶出新的錯：不採用，書裡維持原譯文。
+- 人工改過的譯文不會被機器修正蓋掉。
+
+被內容過濾擋下、或請求失敗的段落不算審過，原本的疑點不會被清掉。因此「待審」可能比以前多，那是過去被當成已修好的部分。設定 `review.fix_check: false` 可以省下這一步，但修正一律記為「未驗證」，不會算成修好。
+
+規則改進後可用 `ncte recheck 書.epub` 重新檢查既有譯文（不呼叫 API，也不會把還有未結問題的段落改成通過），再用 `ncte review 書.epub` 修正被標記的段落。
+
+### 匯出不等於完成
+匯出永遠可以做（沒翻好的段落保留日文）。`ncte export` 另外列出「可驗收」的檢查（報告 JSON 的 `acceptance`）：應翻段落都有譯文、沒有待審段落、沒有開著的嚴重問題、每個修正都對照原文驗收過、沒有被擋或失敗的段落、對照校稿與讀者檢查跑完整本、人工修改仍在、EPUB 驗證通過。全部通過只表示流程每一步都做完、沒有靜默失敗，**不代表譯文品質合格**。
 
 ### A/B 評測
 ```bash
@@ -244,7 +260,7 @@ ncte export tests/fixtures/basic.epub
 `--fake` 會改用離線 FakeLLM：**輸出不是翻譯**，只用來驗證流程。
 
 ## 運作方式（摘要）
-（context 模式另外：先依序讀完整集——每個場景做說話者／角色分析並以程式驗證、以逐字證據整理記憶——再決定名字與稱呼的譯法，最後逐場景翻譯，翻譯時只帶入「該場景之前已揭露」的記憶，並對被標記的單元做一次複查。詳見 [`docs/architecture.md`](docs/architecture.md)。）
+（context 模式另外：先依序讀完整集——每個場景做說話者／角色分析並以程式驗證、以逐字證據整理記憶——再決定名字與稱呼的譯法，最後逐場景翻譯，翻譯時只帶入「該場景之前已揭露」的記憶（人物卡、說話者、稱呼、敘述視角都用當時已知的名字），並對被標記的單元做一次複查；翻完後對照原文校稿、讀者檢查，每個修正都再對照原文驗收。詳見 [`docs/architecture.md`](docs/architecture.md)。）
 
 1. **安全匯入**：拒絕 Zip Slip、Zip Bomb、XXE、DRM 加密、fixed-layout；經 `container.xml` 找 OPF。
 2. **翻譯單元**：段落／標題等葉節點；行內 `<em>`、`<a>`、`<br/>`、外字圖等轉成 `⟦n⟧` placeholder；ruby 轉成 `漢字《かな》` 作為提示。模型永遠看不到 HTML。
@@ -253,12 +269,13 @@ ncte export tests/fixtures/basic.epub
 5. **重建**：只替換已驗證的文字節點；圖片、CSS、字型 byte-for-byte 保留；`mimetype` 置首不壓縮；匯出後自動驗證（內部檢查＋EPUBCheck）。
 
 ## 已知限制
-- 真實模型的 A/B 評測尚未執行；整本實測只有一本，其餘是抽驗。其他出版社的 EPUB 格式可能遇到新的狀況。
+- 真實模型的 A/B 評測與人工標註的語義評測尚未執行；整本實測兩本，其餘是抽驗。2026-10-17 審查後的修改（修正驗收、防劇透、推測標記）只有離線測試，還沒有線上實測。其他出版社的 EPUB 格式可能遇到新的狀況。
 - 內容審查：雲端模型可能誤擋正常段落（例如未成年角色加上可疑大人的情境）。翻譯被擋時先拿掉記憶資料、再切小重送；讀被擋時把場景對半切重讀。仍被擋的段落保留原文或只用程式分析，並列入報告。
 - Gemini 等推理模型的推理 token 以輸出價計費（翻譯的輸出約一半是推理）。試算會以同一工作區的實際花費校正；全新工作區沒有校正資料時估價偏低（一本奇幻輕小說試算上限 $4.3，實際約 $5.6）。
 - 更便宜的模型目前不建議：第二章比較中 claude-haiku-5.5 忽略角色卡的性別（你／妳錯 36 句），deepseek-v4-flash、qwen3.8-flash 會整批改寫成簡體（現在會被程式擋下重翻，但多花費用）。
 - context 模式依場景順序執行（為了讓記憶依序更新），不使用併發；baseline 可併發。先讀再翻時，第一段譯文要等整集讀完（約占總費用四成）才會出現；預算若在讀的階段用完，不會有任何譯文。
-- 說話者 `explicit` 只在程式的發話標記與 LLM 一致時成立；LLM 有異議時採用 LLM 的判斷並標為 `inferred`（ADR-031）。
+- 說話者 `explicit` 只在程式找到發話標記、而 LLM 沒有提出別的說話者時成立；LLM 有異議時採用 LLM 的判斷並標為 `inferred`（ADR-031）。台詞旁另起一段的「笑了」「苦笑」只是線索（也可能是聽者的反應），不算發話標記（ADR-056）。
+- 「這句話對誰說」一律是模型的判斷，沒有分明確與推測；只用來決定你／妳。
 - 同一角色的不同稱呼只在有原文證據（或人工連結）時才合併；名字揭曉時的合併只在揭曉位置之後可見（ADR-032），被覆核質疑的合併會列為待確認，不會自動拆開。
 - 網頁介面同時只翻一本書；翻譯中關掉 NCTE 會在下次「繼續」時從最後完成的請求接著做（中斷的那個請求可能已計費）。
 - 人工譯文永遠優先；目前沒有「撤銷人工譯文」指令，需再以 `ncte edit` 覆寫。
@@ -271,13 +288,18 @@ ncte export tests/fixtures/basic.epub
 ```
 src/ncte/  cli.py cli_memory.py config.py library.py workspace.py series.py lexicon.py exporter.py samples.py
   epub/        security parser units reassemble validate matter series_meta
-  llm/         base openrouter fake schemas prompt_loader cost
+  llm/         base openrouter fal_openrouter fake schemas prompt_loader short_ids cost
   translation/ orchestrator context_pipeline translator context_builder review rename edits cache dryrun
-  analysis/    scene dialogue speaker reference_resolution memory_update naming verify
+  analysis/    scene scene_breaks split_read dialogue speaker narration reference_resolution memory_update verify
+               relations impressions house_style naming proofread reader
   memory/      db repository retrieval visibility entities address style
   gui/         server data actions manage runner static/
-  qa/          rules recheck   reports/ (cost, qa, html)   eval/ (dataset, metrics, runner, data/ncte_eval_v1.json)
-prompts/<task>/v1.md   版本化 prompt（translate / scene_analyze / memory_update / naming / verify / review）
+  qa/          rules recheck second_person typeset
+  reports/     cost_report qa_report html_report codex acceptance
+  eval/        dataset metrics runner data/ncte_eval_v1.json
+prompts/<task>/v1.md   版本化 prompt（scenes / scene_analyze / memory_update / verify / relations / impressions / house_style /
+                       naming / translate / confirm / review / fix_check / proofread / reader）；修改後下一次執行生效（`ncte gui` 要重開），
+                       同一主版本內修改不會讓舊譯文失效
 NCTE.command           Finder 雙擊啟動網頁介面
 tests/                 unit / integration / eval（全部離線）
 scripts/make_sample_epub.py   產生自製測試 EPUB
@@ -294,6 +316,4 @@ scripts/make_sample_epub.py   產生自製測試 EPUB
 | M5 選擇性複查、人工校正、報告 | ✅ 離線測試通過 |
 | M6 A/B 評測（人工標註集、CSV/HTML 報告） | ✅ 流程可執行；真實模型的評測數據尚未產生 |
 
-之後新增：系列書（多集共用記憶、跨集防劇透）、實體卡（正式名稱／愛稱／通稱）、名詞索引、人物關係圖。
-
-之後新增：系列書（多集共用記憶、跨集防劇透）、實體卡（正式名稱／愛稱／通稱）、名詞索引、人物關係圖、敘述人稱、讀者檢查。
+之後新增：系列書（多集共用記憶、跨集防劇透）、實體卡（正式名稱／愛稱／通稱）、名詞索引、人物關係圖、敘述人稱、讀者檢查、全書對照校稿、全書體例、修正對照原文驗收與可驗收報告。
