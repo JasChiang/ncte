@@ -101,3 +101,25 @@ def test_a_book_without_a_toc_gets_its_chapters_from_the_model(conn, cfg, tmp_pa
     assert [r[0] for r in chs] == ["model", "model"]
     night = conn.execute("SELECT ordinal FROM units WHERE book_id=? AND plain_text LIKE '%第二話%'", (book.id,)).fetchone()[0]
     assert chs[1][1] == night
+
+
+def test_a_scene_too_long_for_one_read_is_read_in_even_parts(conn, cfg, tmp_path):
+    """The model may keep one long exchange as one scene (240 paragraphs were seen): it is read in even parts at
+    quiet points, each part the same kind of scene."""
+    cfg.memory.max_scene_units = 10
+    lines = [f"　地の文{i}。" if i % 5 in (0, 1) else f"「台詞{i}」" for i in range(40)]
+    body = "<section>" + paras(lines) + "</section>"
+
+    def windows(payload, req):
+        return {"first_kind": "flashback", "breaks": []}
+
+    book, _, s = run_book(conn, cfg, _book(tmp_path, body, n=3), FakeLLM(responders={**RESPONDERS, "scene_windows": windows}),
+                          mode="context")
+    assert s.status == "completed"
+    scenes = conn.execute("SELECT kind, break_reason, (SELECT COUNT(*) FROM units u WHERE u.scene_id=s.id AND u.book_id=s.book_id) n "
+                          "FROM scenes s WHERE book_id=? ORDER BY seq", (book.id,)).fetchall()
+    sizes = [r["n"] for r in scenes]
+    assert len(scenes) == 4 and max(sizes) - min(sizes) <= 6 and {r["kind"] for r in scenes} == {"flashback"}
+    starts = [conn.execute("SELECT plain_text FROM units WHERE book_id=? AND scene_id=(SELECT id FROM scenes WHERE book_id=? "
+                           "AND seq=?) ORDER BY ordinal LIMIT 1", (book.id, book.id, r)).fetchone()[0] for r in (1, 2, 3)]
+    assert all(t.startswith("　地の文") for t in starts)  # cut at narration, not inside the exchange

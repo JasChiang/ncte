@@ -47,6 +47,7 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
     inside a chapter the model's cut is the cut (the author's blank lines and separators were candidates it weighed);
     a chapter not cut yet keeps the program's provisional cut."""
     breaks = breaks or {}
+    forced = _long_scene_cuts(rows, breaks, overrides, chapters, max_units) if chapters is not None else set()
     decided = False
     scenes: list[Scene] = []
     per_spine: dict[int | None, int] = {}
@@ -62,8 +63,8 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
         elif chapters is not None and decided_chapter:
             if overrides.get(r["id"]) == "split" or breaks.get(r["id"]) == "llm":
                 reason = "manual" if overrides.get(r["id"]) == "split" else "llm"
-            elif overrides.get(r["id"]) != "merge" and len(cur.unit_ids) >= max_units * 3:  # type: ignore[union-attr]
-                reason = "max_size"  # the model's scene runs far past any limit: cut at size, as a last resort
+            elif r["id"] in forced:
+                reason = "max_size"  # the model's scene is too long to read in one request: cut evenly, at quiet points
         elif cur is None or r["resource_href"] != prev_href:
             reason = "document"
         elif overrides.get(r["id"]) == "split":
@@ -104,6 +105,40 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
 
 
 MAX_SIZE_SLACK = 30  # how far past the size limit a cut may wait for a quiet point
+LONG_SCENE = 1.5  # a scene the model cut, longer than this many times max_units, is read in even parts
+CALM_REACH = 15  # how far an even cut may move to fall at a quiet point
+
+
+def _long_scene_cuts(rows: list[sqlite3.Row], breaks: dict[str, str], overrides: dict[str, str],
+                     chapters: dict[str, bool], max_units: int) -> set[str]:
+    """Where a scene the model cut is divided because it is too long for one reading request (240 paragraphs and 136
+    lines in one request were seen): into even parts of about ``max_units``, each cut moved to the nearest point
+    between two narration paragraphs. The model's scenes are kept whole up to ``LONG_SCENE`` times the limit."""
+    spans: list[list[int]] = []
+    decided = False
+    for i, r in enumerate(rows):
+        if r["id"] in chapters:
+            decided = chapters[r["id"]]
+            spans.append([i])
+        elif decided and (breaks.get(r["id"]) == "llm" or overrides.get(r["id"]) == "split"):
+            spans.append([i])
+        elif spans and decided:
+            spans[-1].append(i)
+        elif not decided and spans:
+            spans[-1] = []  # a chapter the model has not cut: the program's own cut applies
+    out: set[str] = set()
+    for span in spans:
+        n = len(span)
+        if n <= max_units * LONG_SCENE:
+            continue
+        parts = -(-n // max_units)
+        for k in range(1, parts):
+            t = k * n // parts
+            near = sorted(range(max(1, t - CALM_REACH), min(n - 1, t + CALM_REACH) + 1), key=lambda j: abs(j - t))
+            j = next((j for j in near if _calm(rows[span[j]], rows[span[j] - 1])), t)
+            if overrides.get(rows[span[j]]["id"]) != "merge":
+                out.add(rows[span[j]]["id"])
+    return out
 
 
 def _calm(r: sqlite3.Row, prev: sqlite3.Row | None) -> bool:
@@ -178,6 +213,8 @@ def segment_book(conn: sqlite3.Connection, cfg: Config, book_id: str) -> list[Sc
         existing = {r["id"]: r for r in conn.execute("SELECT * FROM scenes WHERE book_id=?", (book_id,))}
         conn.execute("UPDATE units SET scene_id=NULL WHERE book_id=?", (book_id,))
         keep: set[str] = set()
+        kinds = {r[0]: r[1] for r in conn.execute("SELECT unit_id, kind FROM scene_breaks WHERE book_id=?", (book_id,))}
+        last_kind: str | None = None
         for s in scenes:
             old = existing.get(s.id)
             if old and old["start_unit_id"] == s.unit_ids[0] and old["end_unit_id"] == s.unit_ids[-1]:
@@ -194,8 +231,11 @@ def segment_book(conn: sqlite3.Connection, cfg: Config, book_id: str) -> list[Sc
                      s.end_ordinal, s.break_reason))
             keep.add(s.id)
             conn.executemany("UPDATE units SET scene_id=? WHERE id=?", [(s.id, u) for u in s.unit_ids])
-            conn.execute("UPDATE scenes SET kind=(SELECT kind FROM scene_breaks WHERE book_id=? AND unit_id=?) "
-                         "WHERE book_id=? AND id=?", (book_id, s.unit_ids[0], book_id, s.id))
+            k = kinds.get(s.unit_ids[0])
+            if k is None and s.break_reason == "max_size":
+                k = last_kind  # a long scene read in parts: each part is the same kind of scene (a flashback's second half)
+            conn.execute("UPDATE scenes SET kind=? WHERE book_id=? AND id=?", (k, book_id, s.id))
+            last_kind = k
         for sid in existing:
             if sid not in keep:
                 if int(existing[sid]["version"]) > 0:
