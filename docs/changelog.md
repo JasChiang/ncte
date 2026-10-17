@@ -689,3 +689,4 @@ open workspace/eval/<timestamp>/report.html
     - **成本問題（正式流程也會發生）**：題目變難後，gemini 推理 high 每批 20 題用掉 1.6–2.5 萬個推理 token，第一次撞到自動輸出上限 16,384 被截斷，加倍上限重送，等於付兩次；實際 US$0.30，是估價（US$0.079）的 3.8 倍。deepseek 也被截斷一次。估價公式（每題 200 字 ×2）沒有算到推理。
     - 本次花費 US$0.38（gemini 0.304、其他三個 0.074），餘額 US$0.64 → 0.26。正式設定未改。
 - 推理 high 的請求不再先被截斷再付一次：沒有設定輸出上限時，推理 high（含 xhigh、max）的起始上限從 16,384 提高到 32,768；`max:N` 則在答案所需之外加上 N。上限只是預留額度，實際依用量計費。影響 fix_check、relations、verify 等預設 high 的步驟。`fix-check` 評測的估價改成照輸出上限計算的真正上限（gemini 一輪 ≤ US$0.28，實際 US$0.30 是含一次重送）。`tests/unit/test_translator.py`。
+- 審查第五節第 2 項（修正是否只改錯處）準備完成、**尚未付費執行**：`ncte eval retranslate`，38 組（27 組問題成立、11 組建議錯或判斷不了），照審稿後重譯的格式送翻譯模型，另一家族的模型以 fix_check 判定，並算編輯距離與「照錯建議改」的比例；輸出供人工抽查的對照表。說明見 `docs/evaluation.md`。測試 `tests/eval/test_fix_check_eval.py`。

@@ -90,3 +90,51 @@ def test_the_comparison_runs_each_model_within_budget(cfg, tmp_path):
 
     rep = run_comparison(fs, cfg, client, ["a/one"], budget_usd=0, out_dir=tmp_path / "none", log=lambda m: None)
     assert rep["runs"] == []  # nothing the budget cannot cover is sent
+
+
+def test_a_fix_goes_back_as_a_run_sends_it_and_is_judged(cfg, tmp_path):
+    """§5.2: each wrong translation goes back with its issues and current text; the judge sees the new text."""
+    from ncte.eval.retranslate import distinct_cases, payload, run_retranslate_eval
+
+    fs = load_fix_set("fix_check_v2")
+    todo = distinct_cases(fs)
+    assert len({(c.source, c.before) for c, _ in todo}) == len(todo)
+    supported = {c.id for c, s in todo if s}
+    assert "neg-still" not in supported and "give-still" in supported  # a v1 id is not here; v2's is
+    assert not any(s for c, s in todo if c.category in ("bad_suggestion", "undecidable") or c.gold == "issue_invalid")
+
+    p = payload(fs, next(c for c, _ in todo if c.id == "who-did-still"))
+    fb = p["review_feedback"][0]
+    assert fb["current_translation"] == "她說「你掉了東西喔」，然後交給了他。"
+    assert fb["issues"][0]["issue_type"] == "mistranslation" and fb["issues"][0]["suggestion"].startswith("「妳")
+    assert p["context_before"][0]["source"].startswith("　健太は")
+    assert {c["name_ja"] for c in p["characters"]} == {"健太", "美咲"}
+    assert p["scene"]["utterances"][0]["to"] == ["美咲"]
+
+    sent: list[dict] = []
+
+    def fixer(pl, req):
+        sent.append(pl)
+        return {"translations": [{"unit_id": u["unit_id"], "translated_text": pl["review_feedback"][0]["issues"][0]
+                                  ["suggestion"] or "x", "flags": [], "notes": []} for u in pl["units"]]}
+
+    judged: list[dict] = []
+
+    def judge(pl, req):
+        judged.append(pl)
+        return {"checks": [{"unit_id": i["unit_id"], "verdict": "fixed", "new_error": "", "reason": "r"}
+                           for i in pl["items"]]}
+
+    client = FakeLLM(models=["t/one", "j/two"], responders={"translate": fixer, "fix_check": judge})
+    r = run_retranslate_eval(fs, cfg, client, model="t/one", judge="j/two", budget_usd=5, out_dir=tmp_path,
+                             log=lambda m: None)
+    assert len(sent) == len(todo) and all("review_feedback" in pl for pl in sent)
+    after = {i["unit_id"]: i["after"] for pl in judged for i in pl["items"]}
+    assert after["give-still"] == "「要不要我幫你做便當？」美咲對健太說。"  # the judge sees the new text
+    assert r["supported"]["n"] == len(supported) and r["supported"]["fixed_rate"] == 1
+    assert r["unsupported"]["kept_original"] == 0
+    assert (tmp_path / "retranslate_review.md").read_text(encoding="utf-8").count("\n") == len(todo) + 2
+
+    r = run_retranslate_eval(fs, cfg, client, model="t/one", judge="j/two", budget_usd=0, out_dir=tmp_path / "b",
+                             log=lambda m: None)
+    assert r["supported"]["n"] == 0 and set(r["failed"].values()) == {"budget"}

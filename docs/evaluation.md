@@ -79,6 +79,18 @@ ncte eval fix-check --fake --model google/gemini-3.8-flash                      
 - `false_fixed_rate`：不是「已修」卻判 `fixed` 的比例；`settle_recall`：該結案的有結案；`regressed_caught`：新錯有抓到；`new_error_on_clean`：沒有新錯卻報新錯；`undecided_rate`、`exact`、混淆表。
 - 限制：題目短、錯誤明顯，量的是「會不會放過明顯沒修好的」，不是長段落的判斷力；通過不代表真實作品上的誤判率也低。題目由開發者撰寫並標註，尚未經第二人覆核。
 
+## 修正是否只改錯處（`ncte eval retranslate`）
+審查報告第五節第 2 項。從 `fix_check_v2` 取每組不同的原文／舊譯文／問題（38 組：27 組問題成立、11 組是錯的建議或原文判斷不了），照正式流程審稿後重譯的方式送給翻譯模型（`review_feedback` 附 `current_translation` 與問題、前後文、人物與台詞的說話者／對象），一組一個請求；再由**另一家族的模型**以 `fix_check` 判定結果，並算編輯距離。
+
+```bash
+ncte eval retranslate --dry-run --judge deepseek/deepseek-v4.1-flash
+ncte eval retranslate --judge deepseek/deepseek-v4.1-flash --budget-usd 0.5   # 翻譯模型預設為設定檔的 model
+```
+- 問題成立的：`fixed_rate`（目標：改對而且沒有新錯）、各結果的數量、原封不動的數量、編輯比例中位數。
+- 建議錯或判斷不了的：應維持原譯；`followed_rate` 是照著改、改出錯的比例。
+- `retranslate_review.md`：每組舊譯文 → 新譯文與評審理由，供人工抽查。
+- 限制：沒有送場景記憶（摘要、事實、稱呼表、體例），前文只有題目自己的 `around`；量的是「翻譯模型拿到審稿意見時會不會只改錯處」，不是整個流程。翻譯費用無法事先準確估計（推理用量不定），`--budget-usd` 以實際花費為準，超過就停止送出。
+
 ## 語義挑戰集（設計，未建立）
 字詞級的 `required_any`／`forbidden` 只能抓漏譯與憑空添加，抓不到意思相反：原文「読まなければよかった」（後悔讀了），錯譯「讀了真是太好了」仍含「讀」，照樣通過。現有資料集保留作回歸測試；另建挑戰集，先 100–200 題，之後再做整章、整本。
 

@@ -465,6 +465,45 @@ def eval_fix_check(models: Annotated[list[str], typer.Option("--model", help="mo
     typer.echo(f"spent ${report['spent_usd']:.4f}; results: {out_dir}/fix_check_results.json")
 
 
+@eval_app.command("retranslate")
+def eval_retranslate(judge: Annotated[str, typer.Option("--judge", help="model that checks the fixes (not the translator's family)")],
+                     model: Annotated[str | None, typer.Option("--model", help="translator (default: the run's model)")] = None,
+                     cases: Annotated[str | None, typer.Option("--cases", help="bundled set name or JSON path")] = None,
+                     budget_usd: Annotated[float, typer.Option("--budget-usd", help="for the translations")] = 0.3,
+                     out: Annotated[str | None, typer.Option("--out")] = None,
+                     fake: Annotated[bool, typer.Option("--fake", help="FakeLLM: harness check only")] = False,
+                     dry_run: Annotated[bool, typer.Option("--dry-run", help="Count the requests (reads /models)")] = False) -> None:
+    """Does a fix change only what is wrong? Known wrong translations go back with what was found (audit §5.2)."""
+    from datetime import UTC, datetime
+
+    from .eval.fix_check import estimate, load_fix_set, pricing_for, reasoning_for
+    from .eval.retranslate import distinct_cases, run_retranslate_eval
+
+    fs = load_fix_set(cases)
+    cfg = state.cfg
+    mdl = model or cfg.openrouter.model
+    client = make_client(cfg, fake=fake, need_key=not dry_run)
+    todo = distinct_cases(fs)
+    typer.echo(f"{fs.name}: {len(todo)} fixes ({sum(s for _, s in todo)} on a real error, "
+               f"{sum(not s for _, s in todo)} on a wrong or unsettled suggestion); translator {mdl}, judge {judge}")
+    if not fake and (bal := getattr(client, "balance", None)):
+        typer.echo(f"balance: {bal() or 'not reported'}")
+    if dry_run:
+        p = pricing_for(client, [judge])[judge]
+        typer.echo(f"  {len(todo)} translate requests (one per fix), stopped at --budget-usd ${budget_usd:.2f} spent; "
+                   f"judging ≤ ${estimate(fs, p, reasoning=reasoning_for(cfg, p)):.4f} (no paid calls made)")
+        return
+    out_dir = Path(out) if out else cfg.workspace / "eval" / ("retranslate_" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S"))
+    r = run_retranslate_eval(fs, cfg, client, model=mdl, judge=judge, budget_usd=budget_usd, out_dir=out_dir, log=typer.echo)
+    s, u = r["supported"], r["unsupported"]
+    typer.echo(f"real errors ({s['n']}): fixed {s['fixed_rate']} · {s['outcomes']} · left as it was {s['kept_original']} · "
+               f"median edit {s['median_edit']}")
+    typer.echo(f"wrong/unsettled suggestions ({u['n']}): {u['outcomes']} · left as it was {u['kept_original']} · "
+               f"followed into an error {u['followed_rate']}")
+    typer.echo(f"cost ${r['translate_cost_usd'] + r['judge_cost_usd']:.4f}; {out_dir}/retranslate_results.json, "
+               "retranslate_review.md")
+
+
 @app.command()
 def recheck(epub: Annotated[str, typer.Argument()]) -> None:
     """Re-run program QA on existing translations (after rule fixes); no API calls."""
