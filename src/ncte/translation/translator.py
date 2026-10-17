@@ -129,12 +129,24 @@ AUTO_MAX_TOKENS_FLOOR = 16384
 AUTO_MAX_TOKENS_CEIL = 65536
 
 
-def auto_max_tokens(user_content: str) -> int:
+# High reasoning does not scale with the payload: a fix check of 20 short items (3,000 tokens in) thought for
+# 15,700–24,600 tokens (measured 2026-10-17), hit the 16,384 cap and was paid twice. The cap only reserves credit.
+HIGH_REASONING_FLOOR = 32768
+
+
+def auto_max_tokens(user_content: str, reasoning: str | None = None) -> int:
     """Output cap when the config sets none. Without one OpenRouter reserves credit for the model's full
     output limit (65,536 for Gemini Flash), which a key with a low spending limit cannot afford even when
     the real answer is a few thousand tokens. Output (translation + reasoning) stays well under 4× the
-    payload, which already includes the context; a truncated answer is retried once with a doubled cap."""
-    return max(AUTO_MAX_TOKENS_FLOOR, min(AUTO_MAX_TOKENS_CEIL, 4 * estimate_tokens(user_content)))
+    payload, which already includes the context, except with high reasoning (its own floor, or the reasoning
+    tokens a ``max:N`` setting allows on top); a truncated answer is retried once with a doubled cap."""
+    want = 4 * estimate_tokens(user_content)
+    floor = AUTO_MAX_TOKENS_FLOOR
+    if reasoning and reasoning.startswith("max:") and reasoning[4:].isdigit():
+        want += int(reasoning[4:])
+    elif reasoning in ("high", "xhigh", "max"):
+        floor = HIGH_REASONING_FLOOR
+    return max(floor, min(AUTO_MAX_TOKENS_CEIL, want))
 
 
 def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model: str, prompt: Prompt,
@@ -160,7 +172,7 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
     max_tokens = cfg.openrouter.max_output_tokens
     auto_cap = max_tokens is None
     if auto_cap:
-        max_tokens = auto_max_tokens(messages[-1]["content"])
+        max_tokens = auto_max_tokens(messages[-1]["content"], reasoning_setting(cfg, stage))
     while True:
         req = LLMRequest(stage=stage, model=model, messages=messages, schema_name=f"ncte_{stage.split(':')[0]}",
                          json_schema=strict_json_schema(schema_model) if current == "json_schema" else None,

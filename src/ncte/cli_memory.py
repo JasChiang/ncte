@@ -448,10 +448,11 @@ def eval_fix_check(models: Annotated[list[str], typer.Option("--model", help="mo
     if dry_run:
         total = 0.0
         for m, p in pricing_for(client, models).items():
-            est = estimate(fs, p) * repeat
+            effort = reasoning_for(cfg, p)
+            est = estimate(fs, p, reasoning=effort) * repeat
             total += est
             pin, pout = p.per_million()
-            typer.echo(f"  {m}: ${pin:.3f}/M in, ${pout:.3f}/M out, reasoning {reasoning_for(cfg, p) or 'default'}, "
+            typer.echo(f"  {m}: ${pin:.3f}/M in, ${pout:.3f}/M out, reasoning {effort or 'default'}, "
                        f"{p.structured_mode}; ≤ ${est:.4f} for {repeat} pass(es)")
         typer.echo(f"upper estimate ≈ ${total:.4f} (no paid calls made)")
         return

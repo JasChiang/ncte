@@ -21,12 +21,12 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from ..config import Config
 from ..errors import FatalAPIError, LLMError, ModelOutputError
 from ..llm.base import MODEL_PARAMS, LLMClient, LLMRequest, LLMResponse
-from ..llm.cost import Pricing, estimate_request_cost, find_model
+from ..llm.cost import Pricing, estimate_request_cost, estimate_tokens, find_model
 from ..llm.prompt_loader import load_prompt
 from ..llm.schemas import FixCheck, FixCheckOutput
 from ..translation.orchestrator import DEFAULT_STAGE_REASONING
 from ..translation.review import FIX_CHECK_BATCH, fix_outcome
-from ..translation.translator import call_structured
+from ..translation.translator import auto_max_tokens, call_structured
 
 DATA = Path(__file__).parent / "data"
 DEFAULT_FIX_SET = DATA / "fix_check_v2.json"
@@ -118,11 +118,16 @@ def reasoning_for(cfg: Config, pricing: Pricing) -> str | None:
     return cfg.openrouter.reasoning_effort
 
 
-def estimate(fs: FixSet, pricing: Pricing, seed: int = 0) -> float:
-    """Upper estimate for one pass, the way a run estimates a fix check (200 output characters per item, ×2 margin)."""
+def estimate(fs: FixSet, pricing: Pricing, seed: int = 0, reasoning: str | None = None) -> float:
+    """Upper bound for one pass: every request writes up to its output cap (reasoning included). The run's own
+    estimate (200 characters per item) missed high reasoning by 3.8× (2026-10-17); a retry after a cut-off is not
+    covered."""
     prompt = load_prompt("fix_check")
-    return sum(estimate_request_cost(pricing, prompt.text + json.dumps(p, ensure_ascii=False), 200 * len(p["items"]))[2]
-               for p in payloads(fs, seed))
+    total = 0.0
+    for p in payloads(fs, seed):
+        user = json.dumps(p, ensure_ascii=False)
+        total += pricing.cost(estimate_tokens(prompt.text + user), auto_max_tokens(user, reasoning))
+    return total
 
 
 def score(fs: FixSet, checks: dict[str, FixCheck]) -> dict[str, Any]:
@@ -249,7 +254,7 @@ def run_comparison(fs: FixSet, cfg: Config, client: LLMClient, models: list[str]
     runs: list[dict[str, Any]] = []
     for m in models:
         for k in range(repeat):
-            est = estimate(fs, prices[m], seed=k)
+            est = estimate(fs, prices[m], seed=k, reasoning=reasoning_for(cfg, prices[m]))
             if spent + est > budget_usd:
                 log(f"  {m} pass {k + 1}: estimate ${est:.4f} would pass the budget (${spent:.4f} of ${budget_usd:.2f}"
                     " spent) — skipped")

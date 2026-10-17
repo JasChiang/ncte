@@ -101,6 +101,38 @@ def test_auto_max_tokens_bounds():
     assert auto_max_tokens("あ" * 100_000) == AUTO_MAX_TOKENS_CEIL
 
 
+def test_high_reasoning_starts_with_room_to_think():
+    """A fix check of 20 short items thought for up to 24,600 tokens: under the plain floor it was cut off and paid
+    twice. High reasoning starts higher; a ``max:N`` setting adds its reasoning tokens to what the answer needs."""
+    from ncte.translation.translator import (
+        AUTO_MAX_TOKENS_CEIL,
+        AUTO_MAX_TOKENS_FLOOR,
+        HIGH_REASONING_FLOOR,
+        auto_max_tokens,
+    )
+
+    assert auto_max_tokens("短い", "medium") == AUTO_MAX_TOKENS_FLOOR
+    assert auto_max_tokens("短い", "high") == HIGH_REASONING_FLOOR
+    assert auto_max_tokens("あ" * 10_000, "high") == 40_004
+    assert auto_max_tokens("あ" * 1_000, "max:20000") == 24_004
+    assert auto_max_tokens("あ" * 100_000, "high") == AUTO_MAX_TOKENS_CEIL
+
+
+def test_a_fix_check_at_high_reasoning_is_sent_the_higher_cap(cfg):
+    from ncte.llm.fake import FakeLLM
+    from ncte.llm.prompt_loader import load_prompt
+    from ncte.translation.translator import HIGH_REASONING_FLOOR, NullRecorder, call_structured
+
+    cfg.openrouter.stage_reasoning["fix_check"] = "high"
+    client = FakeLLM()
+    payload = {"task": "fix_check", "items": [{"unit_id": "u1", "source": "あ", "before": "a", "after": "b",
+                                               "issues": ["x"], "around": []}]}
+    call_structured(client, NullRecorder(), stage="fix_check", model="google/gemini-3.8-flash",
+                    prompt=load_prompt("fix_check"), payload=payload, mode="json_schema", cfg=cfg, unit_ids=["u1"],
+                    est_cost=0.0)
+    assert client.calls[-1].max_tokens == HIGH_REASONING_FLOOR
+
+
 def test_auto_cap_is_sent_and_doubled_on_truncation():
     client = _CapClient(need=30_000)
     r = tr(client).translate(units(), {})
