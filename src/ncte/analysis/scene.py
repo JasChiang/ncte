@@ -348,13 +348,18 @@ PREVIOUS_END_CHARS = 400  # and the last paragraphs of the scene before, up to t
 
 
 def story_so_far(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row) -> dict[str, Any]:
-    """What a reader knows on reaching this scene: the summaries of the last scenes read and how the scene before
-    ends. Without them an untagged 「『賢者』が死んだ？」 opening a scene, or a promise remembered from an earlier
+    """What a reader knows on reaching this scene: the recap of the chapter before, the summaries of this chapter's
+    last scenes and how the scene before ends. Without them an untagged 「『賢者』が死んだ？」 opening a scene, or a promise remembered from an earlier
     scene (who said 「決着をつけよう」), was a guess. Only scenes already read; context, never evidence. A paragraph
     the content filter refused is left out (it would get this scene refused as well)."""
+    from ..memory.retrieval import story_so_far as so_far
+
     out: dict[str, Any] = {}
-    if summaries := [r["summary"] for r in vis.visible_summaries(conn, book_id, scene["start_ordinal"])][-STORY_SUMMARIES:]:
-        out["story_so_far"] = summaries
+    same, recap = so_far(conn, book_id, scene)
+    if recap:
+        out["previous_chapter"] = recap
+    if same[-STORY_SUMMARIES:]:
+        out["story_so_far"] = same[-STORY_SUMMARIES:]
     prev = conn.execute("SELECT id FROM scenes WHERE book_id=? AND seq<? AND version>0 ORDER BY seq DESC LIMIT 1",
                         (book_id, scene["seq"])).fetchone()
     if prev is not None:

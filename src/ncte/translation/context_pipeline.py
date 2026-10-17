@@ -41,7 +41,7 @@ CONFIRM_RULES = ("offensive_term", "narration_first_person", "narrator_self_form
                  "second_person_gender", "narrator_name_leak")
 
 
-STORY_CONTEXT = {"story_so_far", "previous_scene_end"}  # what a read request carries besides the scene itself
+STORY_CONTEXT = {"previous_chapter", "story_so_far", "previous_scene_end"}  # what a read request carries besides the scene itself
 
 class ContextOrchestrator(Orchestrator):
     def prepare(self) -> None:

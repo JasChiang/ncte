@@ -44,3 +44,31 @@ def test_a_book_without_a_toc_is_one_chapter_for_the_model_to_divide(conn, cfg, 
                     extra_files={"OEBPS/Text/nav.xhtml": _nav([])})
     book, _ = import_book(conn, cfg, write_book(spec, tmp_path / "none.epub"))
     assert [(label, src) for label, src, _ in chapters(conn, book)] == [("", "none")]
+
+
+def test_a_chapter_is_read_and_translated_with_the_recap_of_the_one_before(conn, cfg, tmp_path):
+    """The chapter before is recapped (its scene summaries) for reading and translating the next one; this chapter's
+    own summaries are "so far", never the recap."""
+    from ncte.llm.fake import FakeLLM
+
+    from ..helpers import run_book
+
+    def memory(payload, req):
+        first = payload["units"][0]["source"].strip("　")[:4]
+        return {"scene_summary": f"摘要：{first}", "facts": [], "glossary_candidates": [], "prop_states": [],
+                "name_links": [], "address_terms": [], "wordplay": []}
+
+    one = paras(["　朝が来た。", "　市場へ行った。", "　パンを買った。"])
+    two = paras(["　夜になった。", "　灯りが消えた。", "　眠った。"])
+    spec = BookSpec("前情の本", UID.format(3), [Doc("a", "Text/a.xhtml", "a", one, in_toc=False),
+                                                Doc("b", "Text/b.xhtml", "b", two, in_toc=False)],
+                    extra_files={"OEBPS/Text/nav.xhtml": _nav([("a.xhtml", "第一話"), ("b.xhtml", "第二話")])})
+    fake = FakeLLM(responders={"memory_update": memory})
+    book, _, s = run_book(conn, cfg, write_book(spec, tmp_path / "r.epub"), fake, mode="context")
+    assert s.status == "completed"
+    read = [p for p in fake.payloads if p.get("task") == "scene_analyze"]
+    night = next(p for p in read if any("夜になった" in u["source"] for u in p["units"]))
+    assert night["previous_chapter"] == ["摘要：朝が来た"] and "story_so_far" not in night
+    tr = next(p for p in fake.payloads if p.get("task") == "translate" and "review_feedback" not in p
+              and any("夜になった" in u["source"] for u in p["units"]))
+    assert tr["memory"]["previous_chapter_summary"] == ["摘要：朝が来た"] and tr["memory"]["this_chapter_so_far"] == []

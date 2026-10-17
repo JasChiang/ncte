@@ -117,10 +117,7 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
     for a in actions:
         a["subject_candidates"] = [names.get(x, x) for x in a.get("subject_candidates", [])]
         a["object_candidates"] = [names.get(x, x) for x in a.get("object_candidates", [])]
-    summaries = vis.visible_summaries(conn, book_id, horizon)
-    here = (book_id, scene_chapter(conn, scene))
-    same_ch = [s["summary"] for s in summaries if (s["book_id"], s["chapter_ref"]) == here]
-    prev_ch = [s["summary"] for s in summaries if (s["book_id"], s["chapter_ref"]) != here]
+    same_ch, prev_ch = story_so_far(conn, book_id, scene)
     present_ids = {p["character_id"] for p in present}
     batch_plain = match_text(" ".join(r["plain_text"] for r in batch_rows))
     facts = select_facts(vis.visible_facts(conn, book_id, horizon), batch_plain, present, names, limit=max_evidence)
@@ -128,7 +125,7 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
              for p in vis.visible_props(conn, book_id, horizon) if p["name_ja"] in scene_text]
     mem: dict[str, Any] = {
         "note": "Only information revealed before this scene. 'inferred'/'unknown' items are NOT facts.",
-        "previous_chapter_summary": prev_ch[-2:],
+        "previous_chapter_summary": prev_ch,
         "this_chapter_so_far": _cap(same_ch, 4),
         "facts": _cap(facts, max_evidence),
         "props": props,
@@ -198,6 +195,38 @@ def select_facts(rows: list[Any], batch_text: str, present: list[dict[str, Any]]
              "type": f["fact_type"], "certainty": f["certainty"],
              **({"viewpoint": nm(f["source_viewpoint"])} if f["source_viewpoint"] else {}),
              "source": match_text(f["evidence_quote"] or "")[:90]} for _, _, f in keep]
+
+
+RECAP_CHARS = 1200  # the previous chapter's recap: its scene summaries, the latest that fit
+
+
+def story_so_far(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row) -> tuple[list[str], list[str]]:
+    """(this chapter's scene summaries so far, the recap of the chapter before): what a reader knows on reaching
+    this scene. Chapters from the TOC (a chapter may span several files); a book cut the old way counts a file as a
+    chapter and its recap is the last two summaries before it. The first chapter's recap is the last of the book
+    (volume) before, in a series."""
+    summaries = vis.visible_summaries(conn, book_id, scene["start_ordinal"])
+    from ..epub.chapters import chapter_of
+
+    ch = chapter_of(conn, book_id, scene["start_ordinal"])
+    if ch is None:
+        here = (book_id, scene_chapter(conn, scene))
+        return ([s["summary"] for s in summaries if (s["book_id"], s["chapter_ref"]) == here],
+                [s["summary"] for s in summaries if (s["book_id"], s["chapter_ref"]) != here][-2:])
+    mine = [s for s in summaries if s["book_id"] == book_id]
+    same = [s["summary"] for s in mine if s["horizon_ordinal"] >= ch["start_ordinal"]]
+    before = [s for s in mine if s["horizon_ordinal"] < ch["start_ordinal"]]
+    if before:  # the chapter before that has summaries (book matter has none)
+        prev = chapter_of(conn, book_id, before[-1]["horizon_ordinal"])
+        recap = [s["summary"] for s in before if prev is None or s["horizon_ordinal"] >= prev["start_ordinal"]]
+    else:
+        recap = [s["summary"] for s in summaries if s["book_id"] != book_id][-2:]  # the volume before
+    kept: list[str] = []
+    for text in reversed(recap):
+        if kept and sum(map(len, kept)) + len(text) > RECAP_CHARS:
+            break
+        kept.insert(0, text)
+    return same, kept
 
 
 def scene_chapter(conn: sqlite3.Connection, scene: sqlite3.Row) -> str:
