@@ -424,6 +424,46 @@ def eval_run(dataset: Annotated[str | None, typer.Option("--dataset")] = None,
     typer.echo(f"results: {out_dir}/results.json, results.csv, report.html")
 
 
+@eval_app.command("fix-check")
+def eval_fix_check(models: Annotated[list[str], typer.Option("--model", help="model to compare (repeatable)")],
+                   cases: Annotated[str | None, typer.Option("--cases", help="case set JSON (default: bundled v1)")] = None,
+                   repeat: Annotated[int, typer.Option("--repeat", min=1, max=5)] = 1,
+                   budget_usd: Annotated[float, typer.Option("--budget-usd", help="for the whole comparison")] = 0.3,
+                   out: Annotated[str | None, typer.Option("--out")] = None,
+                   fake: Annotated[bool, typer.Option("--fake", help="FakeLLM: harness check only")] = False,
+                   dry_run: Annotated[bool, typer.Option("--dry-run", help="Only estimate (reads /models, no paid calls)")] = False) -> None:
+    """How often each model settles a fix that is still wrong (known cases, the run's fix_check prompt)."""
+    from collections import Counter
+    from datetime import UTC, datetime
+
+    from .eval.fix_check import estimate, load_fix_set, pricing_for, reasoning_for, run_comparison
+
+    fs = load_fix_set(cases)
+    cfg = state.cfg
+    client = make_client(cfg, fake=fake, need_key=not dry_run)
+    gold = Counter(c.gold for c in fs.cases)
+    typer.echo(f"{fs.name} v{fs.version}: {len(fs.cases)} cases " + ", ".join(f"{k} {v}" for k, v in sorted(gold.items())))
+    if not fake and (bal := getattr(client, "balance", None)):
+        typer.echo(f"balance: {bal() or 'not reported'}")
+    if dry_run:
+        total = 0.0
+        for m, p in pricing_for(client, models).items():
+            est = estimate(fs, p) * repeat
+            total += est
+            pin, pout = p.per_million()
+            typer.echo(f"  {m}: ${pin:.3f}/M in, ${pout:.3f}/M out, reasoning {reasoning_for(cfg, p) or 'default'}, "
+                       f"{p.structured_mode}; ≤ ${est:.4f} for {repeat} pass(es)")
+        typer.echo(f"upper estimate ≈ ${total:.4f} (no paid calls made)")
+        return
+    out_dir = Path(out) if out else cfg.workspace / "eval" / ("fix_check_" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S"))
+    report = run_comparison(fs, cfg, client, models, repeat=repeat, budget_usd=budget_usd, out_dir=out_dir, log=typer.echo)
+    for r in report["runs"]:
+        typer.echo(f"{r['model']} #{r['pass']}: false settle {r['false_settle_rate']} {r['false_settled']} · "
+                   f"false fixed {r['false_fixed_rate']} · settle recall {r['settle_recall']} · exact {r['exact']} · "
+                   f"undecided {r['undecided_rate']} · ${r['cost_usd']:.4f}")
+    typer.echo(f"spent ${report['spent_usd']:.4f}; results: {out_dir}/fix_check_results.json")
+
+
 @app.command()
 def recheck(epub: Annotated[str, typer.Argument()]) -> None:
     """Re-run program QA on existing translations (after rule fixes); no API calls."""
