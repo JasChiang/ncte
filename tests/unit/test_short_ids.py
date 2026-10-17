@@ -50,3 +50,19 @@ def test_paragraphs_are_numbered_in_reading_order():
                "context_after": [{"unit_id": u[5]}]}
     ids = ShortIds.for_payload(payload)
     assert [ids.to_short[x] for x in u] == ["P1", "P2", "P3", "P4", "P5", "P6"]
+
+
+def test_codes_the_model_writes_in_its_own_words_become_names():
+    """「C1 前世的兵服是黑色」 kept as written would point at whoever is C1 in the next request; whose view a fact is
+    (source_viewpoint) is an id like the others."""
+    C2 = "c_00000000000b"
+    ids = ShortIds.for_payload({"known_characters": [{"character_id": C, "name_ja": "レイド", "name_zh": "雷德"},
+                                                     {"character_id": C2, "name_ja": "エルリア"}]})
+    back = ids.decode({"facts": [{"subject_ref": "C1", "predicate": "C2 的兵服", "object": "C1 黑色，C2 白色",
+                                  "source_viewpoint": "C1"}],
+                       "translations": [{"unit_id": "P1", "translated_text": "C1 型戰車"}]})
+    f = back["facts"][0]
+    assert f["subject_ref"] == C and f["source_viewpoint"] == C
+    assert f["predicate"] == "エルリア 的兵服" and f["object"] == "雷德 黑色，エルリア 白色"
+    assert back["translations"][0]["translated_text"] == "C1 型戰車"  # a translation is never touched
+    assert ids.decode({"object": "C12 與 AC1"}) == {"object": "C12 與 AC1"}  # unknown code, part of a word

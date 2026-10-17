@@ -249,6 +249,12 @@ def usage_of(conn: sqlite3.Connection, r: sqlite3.Row) -> str | None:
     return row[0] if row else None
 
 
+def calls_by(conn: sqlite3.Connection, r: sqlite3.Row) -> bool:
+    """Whether a row is how the speaker *calls* the other (not one's own title, not talk about them, not a quote): what
+    counts as a way of addressing in cards, house style and relations. 「『賢者』が死んだ？」 is about her."""
+    return r["speaker_id"] != r["addressee_id"] and usage_of(conn, r) in (None, "address")
+
+
 def set_usage(conn: sqlite3.Connection, book_id: str, r: sqlite3.Row, usage: str, reason: str, origin: str = "verify",
               ) -> None:
     conn.execute("INSERT OR REPLACE INTO address_usage(book_id, speaker_id, addressee_id, form_ja, usage, reason, "

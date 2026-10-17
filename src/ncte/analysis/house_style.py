@@ -18,6 +18,7 @@ from typing import Any
 
 from ..epub.units import match_text
 from ..llm.schemas import HouseStyleOutput
+from ..memory.address import calls_by
 from ..memory.repository import character_basics
 from ..memory.style import SeriesStyle, load_style, save_style
 from .impressions import main_characters
@@ -103,9 +104,11 @@ def request(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, Any], dic
         items.append({"ref": f"c{k}", "name": c["display_name_zh"] or c["canonical_name"], "ja": c["canonical_name"],
                       **character_basics(conn, c["id"]), **({"voice": imp[0]} if imp and imp[0] else {}), "lines": lines,
                       "repeated_endings": endings([q for q, _ in said])})
-    forms = [f"{a['form_ja']}×{a['uses']}" for a in conn.execute(
-        "SELECT form_ja, SUM(uses) uses FROM address_terms WHERE book_id=? AND speaker_id!=addressee_id GROUP BY form_ja "
-        "ORDER BY uses DESC LIMIT 40", (book_id,))]
+    counted: dict[str, int] = {}
+    for a in conn.execute("SELECT * FROM address_terms WHERE book_id=?", (book_id,)):
+        if calls_by(conn, a):  # a title talked about (『賢者』が死んだ) is not a way of calling anyone
+            counted[a["form_ja"]] = counted.get(a["form_ja"], 0) + int(a["uses"] or 0)
+    forms = [f"{f}×{n}" for f, n in sorted(counted.items(), key=lambda x: -x[1])[:40]]
     names = [f"{g['source_term']}→{g['target_term']}" for g in conn.execute(
         "SELECT source_term, target_term FROM glossary WHERE book_id=? ORDER BY verified DESC, id LIMIT 80", (book_id,))]
     req: dict[str, Any] = {"task": "house_style", "characters": items, "address_forms": forms}

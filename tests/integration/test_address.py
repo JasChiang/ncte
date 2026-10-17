@@ -217,3 +217,24 @@ def test_family_name_can_name_a_relative(conn, cfg, fixtures):
     mk = lambda n: upsert_character(conn, book.id, n, name_zh=n, aliases=[], unit_id=u[0], ordinal=u[1], origin="t")[0]  # noqa: E731
     mom, hino = mk("水野の母"), mk("小林")
     assert _can_name(conn, "水野さん", mom) and not _can_name(conn, "中川", hino)
+
+
+def test_a_title_talked_about_or_ones_own_is_not_a_way_of_calling(conn, cfg, fixtures):
+    """「『賢者』が死んだ？」 is about her, 「『英雄』と呼ばれているからには」 is his own title: the second look says so,
+    and cards, house style and relations count only the calls."""
+    from ncte.analysis import house_style
+    from ncte.library import import_book
+    from ncte.memory.address import calls_by, set_usage, upsert
+    from ncte.memory.repository import upsert_character
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    hero = upsert_character(conn, book.id, "レイド", name_zh="雷德", aliases=[], unit_id="u", ordinal=1, origin="t")[0]
+    sage = upsert_character(conn, book.id, "エルリア", name_zh="艾爾莉雅", aliases=[], unit_id="u", ordinal=1, origin="t")[0]
+    ids = {"call": upsert(conn, book.id, hero, sage, "エルリア", ordinal=2, unit_id=None, origin="llm", certainty="explicit"),
+           "about": upsert(conn, book.id, hero, sage, "賢者", ordinal=3, unit_id=None, origin="llm", certainty="explicit"),
+           "own": upsert(conn, book.id, hero, hero, "英雄", ordinal=4, unit_id=None, origin="llm", certainty="explicit")}
+    row = {k: conn.execute("SELECT * FROM address_terms WHERE id=?", (v,)).fetchone() for k, v in ids.items()}
+    set_usage(conn, book.id, row["about"], "mention", "談論")
+    assert [k for k, r in row.items() if calls_by(conn, r)] == ["call"]
+    req, _ = house_style.request(conn, book.id)
+    assert req["address_forms"] == ["エルリア×1"]

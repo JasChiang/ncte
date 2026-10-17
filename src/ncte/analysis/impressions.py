@@ -14,6 +14,7 @@ from typing import Any
 
 from ..epub.units import match_text
 from ..llm.schemas import ImpressionsOutput
+from ..memory.address import calls_by
 from ..memory.db import Transaction, utcnow
 from ..memory.repository import character_basics, qualified_fact, relation_guess
 from ..series import SERIES_SCOPE
@@ -55,8 +56,8 @@ def requests(conn: sqlite3.Connection, book_id: str) -> list[tuple[dict[str, Any
                 ev[r] = ("fact", f["first_revealed_ordinal"])
                 facts.append({"ref": r, "text": qualified_fact(f, f"{f['predicate']} {f['object']}", names)})
             calls = [f"→{names.get(a['addressee_id'], '?')}：{a['form_ja']}" for a in conn.execute(
-                "SELECT addressee_id, form_ja FROM address_terms WHERE book_id=? AND speaker_id=? ORDER BY uses DESC LIMIT 6",
-                (book_id, c["id"]))]
+                "SELECT * FROM address_terms WHERE book_id=? AND speaker_id=? ORDER BY uses DESC", (book_id, c["id"]))
+                if calls_by(conn, a)][:6]
             rels = [f"{r['a_is'] if r['a_id'] == c['id'] else r['b_is']}（對{names.get(r['b_id'] if r['a_id'] == c['id'] else r['a_id'], '?')}）"
                     f"{relation_guess(r)}"
                     for r in conn.execute("SELECT * FROM relations WHERE book_id=? AND (a_id=? OR b_id=?) LIMIT 6",

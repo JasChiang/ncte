@@ -122,6 +122,7 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
                         **({"pronoun": True} if a["form_ja"] in _PRONOUNS else {}),
                         "to": "（自稱）" if a["speaker_id"] == a["addressee_id"] else who.get(a["addressee_id"], a["addressee_id"]),
                         "ja": a["form_ja"], "zh": a["form_zh"], "uses": a["uses"],
+                        **({"talked_about": True} if usage_of(conn, a) == "mention" else {}),
                         **({"same_nickname_decided": rel} if (rel := decided_variants(
                             conn, a["speaker_id"], a["addressee_id"], a["form_ja"])) else {}),
                         **({"note": a["note"]} if a["note"] else {}),

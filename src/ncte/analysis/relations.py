@@ -18,6 +18,7 @@ import sqlite3
 from typing import Any
 
 from ..llm.schemas import RelationsOutput  # noqa: F401  (re-exported for callers)
+from ..memory.address import calls_by
 from ..memory.db import Transaction, utcnow
 from ..memory.repository import qualified_fact
 from ..series import SERIES_SCOPE
@@ -64,7 +65,7 @@ def candidate_pairs(conn: sqlite3.Connection, book_id: str) -> tuple[list[dict[s
         for a, b in itertools.combinations(sorted(about), 2):
             pair(a, b)["facts"].append(f)
     for t in conn.execute("SELECT * FROM address_terms WHERE book_id=? AND speaker_id!=addressee_id", (book_id,)):
-        if t["speaker_id"] in chars and t["addressee_id"] in chars:
+        if t["speaker_id"] in chars and t["addressee_id"] in chars and calls_by(conn, t):
             pair(t["speaker_id"], t["addressee_id"])["address"].append(t)
     # a relation stated about a group (加爾德—跟班兩人：主從) is material for each member's own pair too; the model
     # decides whether it holds for that person (ADR-046)
