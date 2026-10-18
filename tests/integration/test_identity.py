@@ -327,3 +327,37 @@ def test_an_impression_in_stretches_gives_each_scene_the_voice_of_its_time(conn,
     cards = [x for x in proofread.cast(conn, book.id, part) if x.get("ja") == conn.execute(
         "SELECT canonical_name FROM characters WHERE id=?", (cid,)).fetchone()[0]]
     assert len(cards) == 1 and cards[0].get("voice") == "冷淡"
+
+
+def test_a_merge_does_not_lay_two_cards_impressions_over_each_other(conn, cfg, fixtures):
+    from ncte.library import import_book
+    from ncte.memory.db import utcnow
+    from ncte.memory.repository import impression_at, merge_characters, upsert_character
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    u = conn.execute("SELECT id FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()[0]
+    keep, drop = (upsert_character(conn, book.id, n, name_zh=n, aliases=[], unit_id=u, ordinal=0, origin="t")[0]
+                  for n in ("ソフィ", "黒髪の女性"))
+    for cid, since, voice in ((keep, 3, "溫和"), (drop, 8, "冷淡")):
+        conn.execute("INSERT INTO character_impressions(character_id, book_id, since_ordinal, personality, voice, role, "
+                     "evidence_json, revealed_ordinal, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                     (cid, book.id, since, "p", voice, "r", "[]", since, utcnow()))
+    merge_characters(conn, keep, drop)
+    assert impression_at(conn, keep, 10)["voice"] == "溫和"
+    assert conn.execute("SELECT COUNT(*) FROM character_impressions WHERE character_id=?", (keep,)).fetchone()[0] == 1
+
+
+def test_a_changed_speaker_is_no_longer_said_to_and_the_addressee_becomes_a_guess(conn, cfg, fixtures):
+    """A said it to B (stated); the speaker becomes B: B is not saying it to B, and who it is said to is now a guess."""
+    import json
+
+    from ncte.analysis.speaker import set_speaker_human
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    ids = [r[0] for r in conn.execute("SELECT id FROM characters WHERE book_id=? LIMIT 2", (book.id,))]
+    utt = conn.execute("SELECT id FROM utterances WHERE book_id=? LIMIT 1", (book.id,)).fetchone()[0]
+    conn.execute("UPDATE utterances SET speaker_id_nullable=?, addressee_ids_json=?, addressee_status='explicit' WHERE id=?",
+                 (ids[0], json.dumps([ids[1]]), utt))
+    set_speaker_human(conn, utt, ids[1])
+    row = conn.execute("SELECT addressee_ids_json, addressee_status FROM utterances WHERE id=?", (utt,)).fetchone()
+    assert json.loads(row[0]) == [] and row[1] is None

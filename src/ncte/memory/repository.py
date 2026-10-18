@@ -143,7 +143,6 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
                 "UPDATE relation_notes SET b_id=? WHERE b_id=?",
                 "UPDATE OR IGNORE relations SET a_id=? WHERE a_id=?",
                 "UPDATE OR IGNORE relations SET b_id=? WHERE b_id=?",
-                "UPDATE OR IGNORE character_impressions SET character_id=? WHERE character_id=?",
                 "UPDATE entities SET character_id=? WHERE character_id=?",
                 "UPDATE OR IGNORE group_members SET group_id=? WHERE group_id=?",
                 "UPDATE OR IGNORE group_members SET member_id=? WHERE member_id=?"):
@@ -151,7 +150,12 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
     conn.execute("DELETE FROM speech_examples WHERE character_id=?", (drop_id,))
     conn.execute("DELETE FROM group_members WHERE group_id=? OR member_id=? OR group_id=member_id", (drop_id, drop_id))
     conn.execute("DELETE FROM relations WHERE a_id=? OR b_id=?", (drop_id, drop_id))  # duplicates of kept ones
-    conn.execute("DELETE FROM character_impressions WHERE character_id=?", (drop_id,))
+    # impressions: the kept card's stretches stay; the dropped card's come over only when the kept one has none (two
+    # cards' stretches laid over each other would give a scene the wrong voice)
+    if conn.execute("SELECT 1 FROM character_impressions WHERE character_id=? LIMIT 1", (keep_id,)).fetchone():
+        conn.execute("DELETE FROM character_impressions WHERE character_id=?", (drop_id,))
+    else:
+        conn.execute("UPDATE character_impressions SET character_id=? WHERE character_id=?", (keep_id, drop_id))
     conn.execute("UPDATE characters SET is_narrator=1 WHERE id=? AND ?", (keep_id, int(drop["is_narrator"] or 0)))
     conn.execute("UPDATE prop_states SET holder_character_id=? WHERE holder_character_id=?", (keep_id, drop_id))
     _merge_address(conn, keep_id, drop_id)
@@ -302,6 +306,17 @@ def qualified_fact(f: Any, text: str, names: dict[str, str]) -> str:
 def relation_guess(r: Any) -> str:
     """「（推測）」 after a relation read from the story rather than stated in it (none for older rows without one)."""
     return "（推測）" if r["certainty"] == "inferred" else ""
+
+
+def speaker_changed_addressees(conn: sqlite3.Connection, utterance_id: str, speaker: str | None) -> None:
+    """A line's speaker was changed: the new speaker is not among the people it is said to, and who it is said to was
+    read with the old speaker in mind — an inference now."""
+    row = conn.execute("SELECT addressee_ids_json FROM utterances WHERE id=?", (utterance_id,)).fetchone()
+    if row is None:
+        return
+    to = [x for x in json.loads(row[0] or "[]") if x != speaker]
+    conn.execute("UPDATE utterances SET addressee_ids_json=?, addressee_status=? WHERE id=?",
+                 (json.dumps(to), "inferred" if to else None, utterance_id))
 
 
 def impressions_of(conn: sqlite3.Connection, character_id: str) -> list[sqlite3.Row]:

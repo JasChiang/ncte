@@ -170,3 +170,14 @@ def test_a_new_card_elsewhere_does_not_reopen_identity_questions():
     more = {**item, "candidates": {"c2": "高木", "c3": "新角色"}}
     assert fingerprint(item) == fingerprint(more)
     assert fingerprint(item) != fingerprint({**item, "called_by": ["高木：姉ちゃん"]})  # its own material changed
+
+
+def test_an_identity_left_unknown_is_asked_again_when_new_cards_come():
+    """Answered "unknown" (the right card may not exist yet): a new card is a reason to ask again. Answered with
+    someone: the cards are one already, so a new card elsewhere is not."""
+    from ncte.analysis.verify import fingerprint
+
+    item = {"ref": "i:c1", "kind": "identity", "name": "姊姊", "context": ["…"], "called_by": [], "candidates": {"c2": "高木"}}
+    more = {**item, "candidates": {"c2": "高木", "c3": "高木の姉"}}
+    assert fingerprint(item, with_candidates=True) != fingerprint(more, with_candidates=True)  # unknown: asked again
+    assert fingerprint(item) == fingerprint(more)  # answered with someone: not asked again

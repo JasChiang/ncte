@@ -86,9 +86,9 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             card["narrator"] = True
         from .repository import impression_at
 
-        # how this character talks as of this scene (ADR-045, ADR-060: the stretch in force here; never the place in the
-        # story — no reveals)
-        if imp := impression_at(conn, c["id"], scene["end_ordinal"]):
+        # how this character talks as of this scene (ADR-045, ADR-060: the stretch in force where it begins — a change
+        # inside the scene is not given to the lines before it; never the place in the story — no reveals)
+        if imp := impression_at(conn, c["id"], scene["start_ordinal"]):
             card["voice"] = imp["voice"]
             if imp.get("other_times"):
                 card["voice_other_times"] = imp["other_times"]

@@ -131,6 +131,7 @@ def set_speaker_human(conn: Any, utterance_id: str, character_id: str | None, *,
         if character_id:
             repo.add_speech_example(conn, character_id, u["unit_id"], u["id"], u["quote_text"], "human_verified")
         if u["speaker_id_nullable"] != character_id:
+            repo.speaker_changed_addressees(conn, u["id"], character_id)
             changed_units.append(u["unit_id"])
             conn.execute("INSERT INTO qa_findings(book_id, unit_id, type, severity, evidence, created_at) VALUES "
                          "(?,?,?,?,?,?)", (u["book_id"], u["unit_id"], "speaker_corrected", "high",

@@ -98,7 +98,10 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
         out = []
         for i in group:
             i["_fp"] = fingerprint(i)
-            if i["kind"] == "speaker" or answered.get(i["ref"]) != i["_fp"]:
+            i["_fp_all"] = fingerprint(i, with_candidates=True)
+            # answered "unknown": asked again once the cards it could be change (the right one may have come); answered
+            # with someone: the card's own material decides
+            if i["kind"] == "speaker" or answered.get(i["ref"]) not in (i["_fp"], i["_fp_all"]):
                 out.append(i)
         return out
 
@@ -127,11 +130,11 @@ def answer_valid(item: dict[str, Any], answer: str) -> bool:
     return answer in cands  # speaker, identity, narrator
 
 
-def fingerprint(item: dict[str, Any]) -> str:
+def fingerprint(item: dict[str, Any], *, with_candidates: bool = False) -> str:
     import hashlib
 
     seen = {k: v for k, v in item.items() if not k.startswith("_")} | {"_version": item.get("_version")}
-    if item.get("kind") in ("identity", "group", "narrator"):
+    if item.get("kind") in ("identity", "group", "narrator") and not with_candidates:
         # the card's own material, not the list of every other card (a new card elsewhere is no reason to ask again;
         # a name revealed later reaches the card through the reveal and the merge, not through this question)
         seen.pop("candidates", None)
@@ -220,8 +223,9 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
 
     for a in parsed.items:
         if (seen := by_ref.get(a.ref)) is not None and seen.get("_fp") and answer_valid(seen, a.answer.strip()):
+            fp = seen["_fp_all"] if a.answer.strip() == "unknown" and seen.get("_fp_all") else seen["_fp"]
             conn.execute("INSERT OR REPLACE INTO verify_answers(book_id, ref, fingerprint, answer, created_at) VALUES "
-                         "(?,?,?,?,?)", (book_id, a.ref, seen["_fp"], a.answer.strip()[:120], _now()))
+                         "(?,?,?,?,?)", (book_id, a.ref, fp, a.answer.strip()[:120], _now()))
         item = by_ref.get(a.ref)
         if item is None:
             stats["ignored"] += 1
@@ -251,6 +255,8 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             conn.execute("UPDATE utterances SET speaker_id_nullable=?, status=?, resolution_source='verify', "
                          "notes_json=?, updated_at=? WHERE id=?",
                          (new_id, status, json.dumps(notes, ensure_ascii=False), utcnow(), key))
+            if new_id != u["speaker_id_nullable"]:
+                repo.speaker_changed_addressees(conn, key, new_id)
             repo.remove_speech_examples_for(conn, key)
         elif kind == "g":
             if answer == item["first_answer"]:
