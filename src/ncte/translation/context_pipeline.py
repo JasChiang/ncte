@@ -29,6 +29,7 @@ from ..llm.prompt_loader import load_prompt
 from ..llm.schemas import MemoryUpdateOutput, NamingOutput, SceneAnalysisOutput, VerifyOutput
 from ..memory.db import Transaction, utcnow
 from ..memory.retrieval import memory_context
+from ..qa.rules import CONFIRM_RULES, CONFIRMED
 from .context_builder import BODY_KINDS
 from .orchestrator import Batch, Orchestrator, make_batches, scene_batches
 from .translator import call_structured
@@ -36,11 +37,7 @@ from .translator import call_structured
 VERIFY_BATCH = 25  # items per second-look request
 
 
-# rules that read words, not meaning: what they find is checked with context before it goes to review
 PART_BEFORE = 4  # paragraphs of the part before, given to a later part of a long scene
-
-CONFIRM_RULES = ("offensive_term", "narration_first_person", "narrator_self_form", "latin_word", "possible_added_name",
-                 "second_person_gender", "narrator_name_leak")
 
 
 class ContextOrchestrator(Orchestrator):
@@ -786,7 +783,12 @@ class ContextOrchestrator(Orchestrator):
         flagged = {(f["unit_id"], f["type"]) for f in found}
         with self.lock, Transaction(self.conn):
             for c in parsed.checks:
-                if c.real or (c.unit_id, c.rule) not in flagged:
+                if (c.unit_id, c.rule) not in flagged:
+                    continue
+                if c.real:  # known to be wrong now: review fixes it whatever else it finds (review.CONFIRMED)
+                    self.conn.execute("UPDATE qa_findings SET evidence=evidence || ? WHERE run_id=? AND unit_id=? AND "
+                                      "type=? AND status='open'",
+                                      (f"{CONFIRMED}{c.reason[:200]}", self.run_id, c.unit_id, c.rule))
                     continue
                 stats["dismissed"] += 1
                 self.conn.execute("UPDATE qa_findings SET status='dismissed_by_check', evidence=evidence || ? WHERE "

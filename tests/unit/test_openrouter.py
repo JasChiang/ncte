@@ -127,13 +127,21 @@ def test_list_models_without_key_and_generation():
 
 
 def test_strict_schema_shape():
+    """Every property is required except an empty-by-default one (no flags, no note): the model leaves those out
+    instead of writing 「"notes": []」 for every paragraph. A default that says something stays required."""
+    from ncte.llm.schemas import MemoryUpdateOutput
+
     s = strict_json_schema(TranslationBatchOutput)
+    item = s["properties"]["translations"]["items"]
+    assert item["required"] == ["unit_id", "translated_text"]
+    gender = strict_json_schema(MemoryUpdateOutput)["properties"]["genders"]["items"]
+    assert "certainty" in gender["required"]  # left out it would read as explicit
 
     def walk(n):
         if isinstance(n, dict):
             if n.get("type") == "object":
                 assert n["additionalProperties"] is False
-                assert set(n["required"]) == set(n["properties"])
+                assert set(n["required"]) <= set(n["properties"])
             assert "$ref" not in n
             for v in n.values():
                 walk(v)

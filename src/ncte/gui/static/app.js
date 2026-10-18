@@ -59,7 +59,7 @@ async function libraryView() {
   // first steps, shown until there is a key and a book: what to do, in order
   const step = (n, done, title, body) => `<div class="step ${done ? "done" : ""}"><span class="num">${done ? "✓" : n}</span><div><strong>${title}</strong><div class="small muted">${body}</div></div></div>`;
   const guide = k.set && hasBook ? "" : `<div class="card steps"><strong>開始使用</strong>
-      ${step(1, k.set, "設定 OpenRouter 金鑰", k.set ? "已設定。" : `NCTE 透過 OpenRouter 使用翻譯模型，費用從你的 OpenRouter 帳戶扣。<a href="#/settings">去設定</a>（一本輕小說約 US$5）。`)}
+      ${step(1, k.set, "設定 OpenRouter 金鑰", k.set ? "已設定。" : `NCTE 透過 OpenRouter 使用翻譯模型，費用從你的 OpenRouter 帳戶扣。<a href="#/settings">去設定</a>（一本輕小說約 US$8–11，依長度而定）。`)}
       ${step(2, hasBook, "加入一本日文 EPUB", "把沒有 DRM 的日文 EPUB 拖到下面的框裡。檔案只存在這台電腦。")}
       ${step(3, false, "看估價，開始翻譯", "打開書以後會先估價（費用、時間），按「開始翻譯」就會自動讀完整本再翻，中途可以暫停。")}</div>`;
   const status = v => v.translatable == null ? chip("c-unk", "找不到資料夾") : v.translatable && v.translated >= v.translatable ? chip("c-ok", "翻譯完成")
@@ -114,7 +114,7 @@ async function settingsView() {
     <div class="card"><strong>${label} 金鑰</strong>
     ${fal ? "" : `<p>NCTE 透過 <a href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter</a> 使用翻譯模型（Gemini），費用從你的 OpenRouter 帳戶扣，NCTE 不另外收費。</p>
       <ol class="small"><li>到 <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a> 登入並建立一把金鑰（以 sk-or- 開頭）。</li>
-      <li>到 <a href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener">Credits</a> 儲值；一本輕小說約 US$5。</li>
+      <li>到 <a href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener">Credits</a> 儲值；一本輕小說約 US$8–11（依長度而定）。</li>
       <li>把金鑰貼在下面，按儲存。</li></ol>`}
     <p>${k.set ? `${chip("c-ok", "已設定")} 結尾 ${esc(k.hint)}` : chip("c-warn", "尚未設定")}</p>
     <p><input type="password" id="key" size="48" placeholder="${fal ? "FAL_KEY" : "sk-or-…"}" autocomplete="off"> <button class="btn primary" id="saveKey">儲存</button></p>
@@ -152,7 +152,7 @@ const FINDING = {read_blocked: "內容過濾擋下，這段沒有讀到（說話
   fix_undecided: "修正後對照原文，無法確定是否修好", fix_unchecked: "修正沒有對照原文確認（檢查失敗或被擋）",
   fix_unverified: "修正沒有對照原文確認（已關閉修正驗收）", fix_check_failed: "修正驗收的請求失敗", content_blocked: "內容過濾擋下，保留日文原文", second_person_gender: "對女性用了「你」",
   narration_first_person: "第三人稱的敘述出現「我」", narrator_self_form: "敘述者自稱和全書不一致", offensive_term: "可能是貶稱",
-  latin_word: "原文沒有的英文單字", possible_added_name: "可能補了原文沒有的人名", glossary_mismatch: "譯名和名詞表不一致",
+  latin_word: "原文沒有的英文單字", foreign_script: "原文沒有的外文字母", possible_added_name: "可能補了原文沒有的人名", glossary_mismatch: "譯名和名詞表不一致",
   quote_mismatch: "引號和原文不對應", untranslated: "沒有翻譯", japanese_residue: "殘留日文", non_taiwan_glyph: "簡體或日文字形",
   placeholder_error: "排版標記不對", number_mismatch: "數字和原文不同", too_short: "譯文比原文短很多", too_long: "譯文比原文長很多",
   empty_translation: "譯文是空的", narrator_name_leak: "譯文寫出了敘述者的記號", cantonese: "粵語用字", ruby_notation_leak: "讀音標記留在譯文裡", name_form_substitution: "稱呼被換成另一種"};
@@ -161,7 +161,7 @@ const FINDING_HINT = {quote_mismatch: "引號的種類或數量和原文不同�
   too_long: "譯文明顯比原文長，可能加了原文沒有的內容", glossary_mismatch: "名字的寫法和名詞表的譯名不同",
   second_person_gender: "說話的對象是女性（或男性），看看「你／妳」有沒有用對", narration_first_person: "這段是第三人稱敘述，卻寫了「我」",
   narrator_self_form: "敘述者稱呼自己的方式和全書不一致", offensive_term: "這個詞可能是貶義或歧視用語，看看原文是不是這個意思",
-  latin_word: "譯文出現原文沒有的英文", possible_added_name: "譯文可能補了原文沒寫的人名", untranslated: "這段沒有翻到",
+  latin_word: "譯文出現原文沒有的英文", foreign_script: "譯文混入原文沒有的其他文字（俄文、韓文等）", possible_added_name: "譯文可能補了原文沒寫的人名", untranslated: "這段沒有翻到",
   japanese_residue: "譯文裡還留著日文", non_taiwan_glyph: "出現簡體字或日文字形", placeholder_error: "排版標記的位置不對",
   number_mismatch: "數字和原文不同", empty_translation: "譯文是空的", cantonese: "出現粵語用字",
   ruby_notation_leak: "讀音標記留在譯文裡", name_form_substitution: "原文的稱呼被換成了另一種", narrator_name_leak: "譯文寫出了敘述者的內部記號"};
@@ -208,7 +208,8 @@ async function runCard(id, o) {
     return `<div class="small" style="margin-top:6px">${esc(s.label)}　${s.done} / ${s.total}${s.failed ? `　<span class="issue">失敗 ${s.failed}</span>` : ""}<div class="bar"><i style="width:${pc}%"></i></div></div>`; }).join("");
   const exportBtns = o.translated ? `<button class="btn ${r && r.status === "completed" ? "primary big" : ""}" id="exp">匯出並下載 EPUB</button> <span id="expres" class="small"></span>` : "";
   // where the run is, in words, and about how long is left (from the share of the work done so far)
-  const WEIGHT = {read: .32, verify: .01, cast: .03, naming: .01, translate: .48, review: .02, proofread: .09, reader: .04};
+  // shares of a whole book's time (2026-10-18: read 56 min, check/cast/naming 12, translate 43, proofread 77, reader 5)
+  const WEIGHT = {read: .29, verify: .02, cast: .03, naming: .01, translate: .22, review: .01, proofread: .39, reader: .03};
   const stages = p.stages || [], cur = stages.find(s => s.done < s.total);
   const SAY = {read: s => `讀全書：第 ${s.done + 1} / ${s.total} 項（先讀完整本，這時還看不到譯文）`, verify: () => "讀完了，正在覆核有疑點的地方",
     cast: () => "整理人物關係與角色印象", naming: () => "決定名字與稱呼的譯法", translate: s => `翻譯：${s.done} / ${s.total} 批`,
@@ -216,7 +217,7 @@ async function runCard(id, o) {
   const share = stages.reduce((n, s) => n + (WEIGHT[s.key] || 0) * s.done / s.total, 0) / Math.max(.01, stages.reduce((n, s) => n + (WEIGHT[s.key] || 0), 0));
   const elapsed = r && r.started_at ? (Date.now() - Date.parse(r.started_at)) / 60000 : 0;
   const left = share > .03 && elapsed > 1 ? Math.max(1, Math.round(elapsed / share - elapsed)) : null;
-  const now = cur ? (SAY[cur.key] || (() => cur.label))(cur) : "收尾中";
+  const now = cur ? (SAY[cur.key] || (() => cur.label))(cur) : stages.length ? "收尾中" : "準備中：先把全書切成場景";
   let body;
   if (p.busy) {
     body = `<div class="run-now"><strong>翻譯中</strong><span>${esc(now)}</span></div>

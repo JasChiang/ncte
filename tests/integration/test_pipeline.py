@@ -286,6 +286,52 @@ def test_rule_flags_are_checked_with_context_before_review(conn, cfg, fixtures, 
                                               for u in p.get("units", [])))
 
 
+def test_a_rule_flag_the_check_confirms_is_fixed_even_if_review_reports_something_else(conn, cfg, fixtures,
+                                                                                      monkeypatch):
+    """「我們」 in third-person narration, confirmed real with context: review reports only a small other point (low)
+    — the confirmed flag is not cleared by that, it goes to the translator with the check's reason."""
+    import ncte.qa.rules as rules
+    import ncte.translation.translator as tr
+
+    flagged: list[str] = []
+    orig = rules.check_translation
+
+    def flag_first(**kw):
+        out = orig(**kw)
+        if not flagged and kw["kind"] == "text":
+            flagged.append(kw["unit_id"])
+            out.append(rules.Finding("narration_first_person", "high", "我 in third-person narration", kw["unit_id"]))
+        return out
+
+    monkeypatch.setattr(rules, "check_translation", flag_first)
+    monkeypatch.setattr(tr, "check_translation", flag_first)
+    fixes: list = []
+
+    def translate(payload, req):
+        from ncte.llm.fake import default_translate
+
+        if "review_feedback" in payload:
+            fixes.append(payload["review_feedback"])
+        return default_translate(payload, req)
+
+    def confirm(payload, req):
+        return {"checks": [{"unit_id": i["unit_id"], "rule": i["rule"], "real": True, "reason": "敘述是第三人稱"}
+                           for i in payload["items"]]}
+
+    def review(payload, req):
+        return {"issues": [{"unit_id": i["unit_id"], "issue_type": "style", "severity": "low", "evidence": "小地方",
+                            "suggestion": "", "needs_retranslation": False} for i in payload["items"]]}
+
+    fake = FakeLLM(responders={"translate": translate, "confirm": confirm, "review": review})
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    assert flagged and fixes
+    sent = [i for f in fixes for x in f if x["unit_id"] == flagged[0] for i in x["issues"]]
+    assert any(i["issue_type"] == "narration_first_person" and "敘述是第三人稱" in i["evidence"] for i in sent)
+    st = conn.execute("SELECT status FROM qa_findings WHERE unit_id=? AND type='narration_first_person'",
+                      (flagged[0],)).fetchone()["status"]
+    assert st != "cleared_by_review"
+
+
 def test_reader_look_and_review_are_split_when_the_filter_refuses(conn, cfg, fixtures):
     from ncte.errors import ContentBlockedError
 

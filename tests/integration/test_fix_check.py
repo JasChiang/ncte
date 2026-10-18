@@ -315,3 +315,25 @@ def test_when_the_old_text_was_right_it_stays(conn, cfg, tmp_path):
     assert best["text"] == WRONG and best["status"] == "succeeded"
     assert conn.execute("SELECT status FROM translations WHERE unit_id=? AND text=?", (uid, RIGHT)).fetchone()[0] \
         == "unneeded_fix"
+
+
+def test_a_word_rule_on_the_fix_is_judged_by_the_check_not_counted_against_it(conn, cfg, tmp_path):
+    """A word rule fires on the new text (an English word, a name the source line lacks): the check gets it with the
+    source and judges it; when it finds the fix right and no new error, the program does not overrule it."""
+    checks: list = []
+
+    def fixed(payload, req):
+        checks.append(payload)
+        return {"checks": [{"unit_id": i["unit_id"], "verdict": "fixed", "new_error": "",
+                            "reason": "原文「来なかった」是否定，改譯已是否定"} for i in payload["items"]]}
+
+    book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text="　她沒有來 again。", fix_check=fixed)
+    uid = unit_of(conn, book, "来なかった")
+    flags = checks[0]["items"][0]["program_flags"]
+    assert flags and flags[0]["rule"] == "latin_word"
+    best = latest_texts(conn, book.id)[uid]
+    assert best["text"] == "　她沒有來 again。" and best["status"] == "succeeded"
+    assert not conn.execute("SELECT 1 FROM qa_findings WHERE unit_id=? AND type LIKE 'fix_%' AND status='open'",
+                            (uid,)).fetchone()
+    assert conn.execute("SELECT status FROM qa_findings WHERE unit_id=? AND type='after_review:latin_word'",
+                        (uid,)).fetchone()["status"] == "dismissed_by_check"

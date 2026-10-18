@@ -44,7 +44,15 @@ CANTONESE_CHARS = set("嘅㗎咗佢啲喺冇嘢嚟嗰噉冚攞睇諗嬲")
 # Only sequences that do not occur inside ordinary Mandarin phrases (點解 ⊂ 重點解釋, 聽日 ⊂ 聽日本, 邊有 ⊂ 那邊有,
 # 邊度 ⊂ 那邊度過 were real-book false positives and are deliberately excluded).
 CANTONESE_WORDS = ("係咪", "唔係", "唔好", "唔使", "唔該", "而家", "乜嘢", "咁樣")
+# Cyrillic, Greek, Armenian, Hebrew, Arabic, Devanagari, Thai, Hangul: never part of a Chinese sentence unless the
+# source has them
+FOREIGN_SCRIPT_RE = re.compile("[\u0370-\u03FF\u0400-\u052F\u0530-\u058F\u0590-\u06FF\u0900-\u097F"
+                               "\u0E00-\u0E7F\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF]")
 SEVERITY_ORDER = {"error": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
+# rules that read words, not meaning: what they find is checked by the model with context before it counts
+CONFIRM_RULES = ("offensive_term", "narration_first_person", "narrator_self_form", "latin_word", "possible_added_name",
+                 "second_person_gender", "narrator_name_leak")
+CONFIRMED = " | confirmed: "  # appended to a word-rule finding the model checked with context and found real
 
 
 @dataclass
@@ -144,6 +152,12 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
                     if w.lower() not in unicodedata.normalize("NFKC", source_text).lower()})
     if latin:
         add("latin_word", "high", f"English word(s) not in the source: {', '.join(latin)[:60]}")
+
+    # letters of another script the source does not have (「最強人類」 with Cyrillic in it): leaked from the model
+    foreign = sorted({ch for ch in vis if FOREIGN_SCRIPT_RE.match(ch) and ch not in source_text})
+    if foreign:
+        add("foreign_script", "error", f"letters of another script not in the source: {''.join(foreign)[:20]} — "
+                                       f"write the sentence in Chinese only")
 
     canto = sorted({ch for ch in vis if ch in CANTONESE_CHARS} | {w for w in CANTONESE_WORDS if w in vis})
     if canto:

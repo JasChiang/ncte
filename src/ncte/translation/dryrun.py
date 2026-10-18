@@ -58,11 +58,12 @@ class DryRunPlan:
 PER_CHAR_STAGES = ("translate", "scene_analyze", "memory_update", "scene_windows", "proofread", "reader")
 PER_RUN_STAGES = ("verify", "relations", "impressions", "house_style", "naming", "confirm", "fix_check", "review")
 HIGH_MARGIN = 1.2
-# A step with no history of its own: its cost as a share of translating + reading (scene analysis and memory) in
-# sample runs — two books, 300 paragraphs each, 2026-10-18. Proofreading depends on its reasoning setting.
-SAMPLE_SHARE = {"scene_windows": 0.15, "proofread": 0.17, "proofread:high": 0.55, "reader": 0.05, "verify": 0.06,
-                "relations": 0.04, "impressions": 0.02, "house_style": 0.02, "naming": 0.02, "confirm": 0.01,
-                "fix_check": 0.04, "review": 0.0}
+# A step with no history of its own: its cost as a share of translating + reading (scene analysis and memory) in a
+# whole-book run (3,689 paragraphs, 2026-10-18; proofreading at medium from two 300-paragraph samples). Proofreading
+# depends on its reasoning setting.
+SAMPLE_SHARE = {"scene_windows": 0.06, "proofread": 0.17, "proofread:high": 0.55, "reader": 0.04, "verify": 0.04,
+                "relations": 0.05, "impressions": 0.01, "house_style": 0.01, "naming": 0.02, "confirm": 0.01,
+                "fix_check": 0.05, "review": 0.01}
 UNCALIBRATED_HIGH = 2.0  # a step counted by its sample share may cost this many times as much
 
 

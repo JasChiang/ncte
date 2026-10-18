@@ -23,7 +23,7 @@ from ..errors import FatalAPIError, LLMError, ModelOutputError
 from ..llm.prompt_loader import load_prompt
 from ..llm.schemas import FixCheck, FixCheckOutput, ReviewOutput
 from ..memory.db import Transaction, utcnow
-from ..qa.rules import worst
+from ..qa.rules import CONFIRM_RULES, CONFIRMED, Finding, worst
 from .cache import glossary_hash, latest_translation, relevant_glossary
 from .translator import BatchResult, UnitInput, call_structured
 
@@ -166,11 +166,13 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
                 to_fix.setdefault(issue.unit_id, []).append(
                     {"issue_type": issue.issue_type, "evidence": issue.evidence, "suggestion": issue.suggestion,
                      "finding_id": fid})
-        # what the program already knows is wrong (a leftover ッ) is fixed whatever severity the reviewer gave it
+        # what is already known to be wrong — a leftover ッ, or a word rule's find the model confirmed with context
+        # (「我們」 in third-person narration) — is fixed whatever the reviewer gave it, or found instead
         with orch.lock:
             for r in conn.execute(f"SELECT id, unit_id, type, evidence FROM qa_findings WHERE book_id=? AND status='open' "
-                                  f"AND severity='error' AND unit_id IN ({','.join('?' * len(valid))})",
-                                  (orch.book.id, *valid)) if valid else []:
+                                  f"AND (severity='error' OR (severity='high' AND instr(evidence, ?) > 0)) "
+                                  f"AND unit_id IN ({','.join('?' * len(valid))})",
+                                  (orch.book.id, CONFIRMED, *valid)) if valid else []:
                 to_fix.setdefault(r["unit_id"], []).append(
                     {"issue_type": r["type"], "evidence": r["evidence"] or "", "suggestion": r["evidence"] or "",
                      "finding_id": r["id"]})
@@ -429,15 +431,21 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
             stats["still_flagged"] += 1
             stats["pending"] += 1
             orch._finding(uid, "review_retranslation_failed", "high", res.failed[uid][:300])
+    checking = orch.cfg.review.fix_check
+    # what the word rules found in a new text goes to the fix check with it (it reads the source; 「村長」 in a line
+    # that names him, a title the house style asks for): the program does not overrule the check on a word
+    word_flags = {u: [f for f in ur.findings if f.type in CONFIRM_RULES and f.severity in ("high", "error")]
+                  for u, ur in res.ok.items()} if checking else {}
     checks = _check_fixes(orch, [(by_id[u], before[u], exported_text(res.ok[u].text, res.ok[u].translator_note,
-                                                                     "needs_review"), feedback[u])
-                                 for u in res.ok]) if orch.cfg.review.fix_check else {}
+                                                                     "needs_review"), feedback[u], word_flags.get(u, []))
+                                 for u in res.ok]) if checking else {}
     with orch.lock, Transaction(orch.conn):
         for uid, ur in res.ok.items():
             tid = new_tid[uid]
             fids = [i["finding_id"] for i in feedback[uid] if i.get("finding_id")]
-            outcome = fix_outcome(checks.get(uid), program_high=worst(ur.findings) == "high",
-                                  checked=orch.cfg.review.fix_check)
+            judged = word_flags.get(uid, [])
+            outcome = fix_outcome(checks.get(uid), program_high=worst(f for f in ur.findings if f not in judged) == "high",
+                                  checked=checking)
             if outcome == "issue_invalid":
                 # the old text already said what the source says: it stays, the new one is not used (least
                 # intervention — two readings the source allows are not an error to fix)
@@ -474,7 +482,9 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
                               [:400], translation_id=tid)
             for f in ur.findings:
                 if f.severity in ("high", "medium"):
-                    orch._finding(uid, f"after_review:{f.type}", f.severity, f.evidence, translation_id=tid)
+                    fid = orch._finding(uid, f"after_review:{f.type}", f.severity, f.evidence, translation_id=tid)
+                    if outcome == "fixed" and f in judged:  # the check saw it with the source and found no error
+                        orch.conn.execute("UPDATE qa_findings SET status='dismissed_by_check' WHERE id=?", (fid,))
 
 
 def fix_outcome(check: FixCheck | None, *, program_high: bool, checked: bool = True) -> str:
@@ -504,7 +514,8 @@ def _claim(x: dict[str, Any]) -> str:
     return f"{kind}: {x.get('evidence', '')} → {x.get('suggestion', '')}"[:500]
 
 
-def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[str, Any]]]]) -> dict[str, FixCheck]:
+def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[str, Any]], list[Finding]]]
+                 ) -> dict[str, FixCheck]:
     """One look per fix, against the source: did the new text fix what was found? Units the check could not answer
     for (refused, failed, left out) are missing from the result and stay open."""
     out: dict[str, FixCheck] = {}
@@ -518,11 +529,13 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
         chunk = fixes[i:i + FIX_CHECK_BATCH]
         with orch.lock:
             items = []
-            for r, before, after, issues in chunk:
+            for r, before, after, issues, flags in chunk:
                 item: dict[str, Any] = {
                     "unit_id": r["id"], "source": r["source_text"], "before": before, "after": after,
                     "issues": [_claim(x) for x in issues],
                     "around": [a["source"] for a in _surroundings(conn, orch.book.id, [r], reach=2)]}
+                if flags:
+                    item["program_flags"] = [{"rule": f.type, "evidence": f.evidence[:200]} for f in flags]
                 if lines := _lines(conn, r["id"]):  # 你／妳 and who-did-what issues need who speaks to whom
                     item["lines"] = lines
                 items.append(item)

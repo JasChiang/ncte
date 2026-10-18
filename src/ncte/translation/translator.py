@@ -149,6 +149,10 @@ def auto_max_tokens(user_content: str, reasoning: str | None = None) -> int:
     return max(floor, min(AUTO_MAX_TOKENS_CEIL, want))
 
 
+# indentation and line breaks are paid output tokens (a tenth of a scene reading's answer): one line of JSON
+COMPACT_JSON = "\n輸出的 JSON 寫成一行：不要縮排、不要換行。\n"
+
+
 def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model: str, prompt: Prompt,
                     payload: dict[str, Any], mode: StructuredMode, cfg: Config, unit_ids: list[str],
                     est_cost: float, correction: str | None = None,
@@ -157,6 +161,7 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
     schema_model = SCHEMAS[stage.split(":")[0]]
     ids = ShortIds.for_payload(payload)  # the model reads and writes P1/C1… instead of long ids
     shared, own = prompt.render_parts(payload)  # shared rules first (cached), this request's own after
+    shared += COMPACT_JSON
     system = shared + ("\n" + own if own else "")
     if correction:
         for long_id, code in ids.to_short.items():

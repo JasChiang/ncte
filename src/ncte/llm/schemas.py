@@ -452,9 +452,15 @@ SCHEMAS: dict[str, type[BaseModel]] = {
 }
 
 
+def _empty_default(prop: dict[str, Any]) -> bool:
+    """An optional property whose default is empty: ``""``, ``None``, ``False`` or a list made by ``default_factory``
+    (which leaves no ``default`` in the schema)."""
+    return "default" not in prop or prop["default"] in ("", None, False, [], {})
+
+
 def strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
-    """Inline $defs, forbid additional properties and mark every property as required
-    (the subset accepted by OpenAI-style ``strict: true`` structured outputs)."""
+    """Inline $defs and forbid additional properties; every property is required except optional ones whose default
+    is empty (see ``_empty_default``)."""
     raw = model.model_json_schema()
     defs = raw.pop("$defs", {})
 
@@ -466,7 +472,11 @@ def strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
             out = {k: fix(v) for k, v in node.items() if k not in ("title", "default")}
             if out.get("type") == "object" and "properties" in out:
                 out["additionalProperties"] = False
-                out["required"] = list(out["properties"].keys())
+                # a field that is empty unless there is something to say (no flags, no note, no verdicts asked for)
+                # may be left out: the model does not write 「"notes": []」 for every paragraph. A field whose default
+                # says something (a certainty, a kind) stays required, so leaving it out never upgrades a guess.
+                given = set(node.get("required", []))
+                out["required"] = [k for k, v in node["properties"].items() if k in given or not _empty_default(v)]
             return out
         if isinstance(node, list):
             return [fix(x) for x in node]

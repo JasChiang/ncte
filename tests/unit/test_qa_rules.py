@@ -30,6 +30,9 @@ def test_warnings():
     assert ("japanese_residue", "low") in run("藤木わしろでございます。", "我是藤木わしろ。")  # a name kept whole: a note
     assert ("untranslated", "low") in run("藤木わしろ", "藤木わしろ")  # an author's signature
     assert ("latin_word", "high") in run("唯一対等な存在だ", "是唯一對等 peer 的存在")
+    assert ("foreign_script", "error") in run("最強の人間に対して。", "對著曾被稱為最強的пель人類。")  # leaked: retried
+    assert ("foreign_script", "error") in run("ソウルの街", "首爾的서울街道")
+    assert "foreign_script" not in {t for t, _ in run("「Спасибо」と彼は言った", "他說：「Спасибо」")}  # in the source
     assert run("ＭＭＯのカイルボス", "MMO的團隊副本首領") == set()  # in the source (full width) too
     assert ("non_taiwan_glyph", "error") in run("武装竜", "武裝竜")
     assert ("quote_mismatch", "medium") in run("「あいうえお、かきくけこ」", "啊咿嗚欸喔，咖嘰咕")
