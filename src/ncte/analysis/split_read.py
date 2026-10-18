@@ -30,6 +30,41 @@ def subset_payload(payload: dict[str, Any], keep: list[str]) -> dict[str, Any]:
     return out
 
 
+QUIET_REACH = 15  # paragraphs an even cut may move to fall at a quiet point
+
+
+def even_parts(units: list[dict[str, Any]], size: int) -> list[list[str]]:
+    """A long scene's units in even consecutive parts of about ``size``, each cut moved (within QUIET_REACH) to fall
+    between two narration paragraphs and never inside a speech running over paragraphs (structure, not meaning)."""
+    from .dialogue import UnitText, clean, find_quotes
+
+    ids = [u["unit_id"] for u in units]
+    text = [clean(u.get("source", "")).strip(" 　") for u in units]
+    inside = {q.unit_id for q in find_quotes([UnitText(i, t, n) for n, (i, t) in enumerate(zip(ids, text, strict=True))])
+              if q.continuation_of is not None}
+
+    def talk(t: str) -> bool:
+        return t.startswith(("「", "『")) or "」" in t[-3:] or "』" in t[-3:]
+
+    def quiet(j: int) -> bool:
+        return ids[j] not in inside and not talk(text[j]) and not talk(text[j - 1])
+
+    def free(j: int) -> bool:  # at least not in the middle of a speech
+        return ids[j] not in inside
+
+    n = -(-len(ids) // size)
+    cuts: list[int] = []
+    for k in range(1, n):
+        t = k * len(ids) // n
+        lo = (cuts[-1] if cuts else 0) + 1
+        near = sorted(range(max(lo, t - QUIET_REACH), min(len(ids) - 1, t + QUIET_REACH) + 1), key=lambda j: abs(j - t))
+        j = next((j for j in near if quiet(j)), next((j for j in near if free(j)), t))
+        if j > lo - 1:
+            cuts.append(j)
+    edges = [0, *cuts, len(ids)]
+    return [ids[a:b] for a, b in zip(edges, edges[1:], strict=False) if b > a]
+
+
 def _replace(value: Any, mapping: dict[str, str]) -> Any:
     if isinstance(value, str):
         return mapping.get(value, value)
@@ -68,6 +103,13 @@ def merge_outputs[M: BaseModel](parts: list[M]) -> M:
                 mapping[c["temp_id"]] = first["temp_id"]
                 first["aliases_ja"] += [a for a in c["aliases_ja"] if a not in first["aliases_ja"]]
                 first["evidence_unit_ids"] += c["evidence_unit_ids"]
+                # what the later part says about the person is kept too: what each alias is (「少女」 common), who
+                # the person turns out to be, that the words name several people
+                kinds = {k["ja"] for k in first.get("alias_kinds") or []}
+                first["alias_kinds"] = [*(first.get("alias_kinds") or []),
+                                        *(k for k in c.get("alias_kinds") or [] if k["ja"] not in kinds)]
+                first["same_as_ref"] = first.get("same_as_ref") or c.get("same_as_ref")
+                first["group"] = bool(first.get("group") or c.get("group"))
                 continue
             if i:
                 mapping[c["temp_id"]] = f"{c['temp_id']}~{i}"

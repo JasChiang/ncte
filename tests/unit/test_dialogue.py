@@ -91,3 +91,9 @@ def test_an_action_says_how_sure_who_does_it_is():
                        resolution_status="explicit")
     kept, _ = validate_actions([a], {"u0": "　ミナを押した。"}, {"c_mina": "c_mina"}, {"c_mina": ["ミナ"]})
     assert kept[0]["status"] == "unknown" and kept[0]["object_candidates"] == ["c_mina"]
+
+
+def test_the_rest_of_a_speech_whose_start_has_no_speaker_keeps_the_models_answer():
+    head = Resolution(None, "unknown", "llm")
+    r = resolve(claim("c_mina", "inferred"), head)
+    assert (r.speaker_id, r.status) == ("c_mina", "inferred") and any(TO_LOOK_AT in n for n in r.notes)

@@ -66,7 +66,10 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
         return stats
     conn: sqlite3.Connection = orch.conn
     with orch.lock:
-        done = {r[0] for r in conn.execute("SELECT target_id FROM jobs WHERE run_id=? AND stage='review'", (orch.run_id,))}
+        # done in this run: finished one way or another (a review still pending or running when the run stopped is
+        # done when it resumes)
+        done = {r[0] for r in conn.execute("SELECT target_id FROM jobs WHERE run_id=? AND stage='review' AND status NOT IN "
+                                           "('pending','running')", (orch.run_id,))}
         ids = [u for u in unit_ids if u not in done]
         if cfg.review.automatic_review == "all":
             from ..epub.matter import story_hrefs

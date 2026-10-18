@@ -260,30 +260,28 @@ def forget_scene(conn: sqlite3.Connection, book_id: str, scene_id: str) -> None:
                  "NOT IN ('human','naming') AND id NOT IN (SELECT address_id FROM address_observations)")
 
 
-def follow_speakers(conn: sqlite3.Connection, book_id: str, scene_id: str) -> int:
-    """A line's speaker changed (the second look, a person): the forms of address recorded on that line go with it to
-    the new speaker. Only the data moves; the text is not searched again. Returns the observations moved."""
-    rows = conn.execute(
-        "SELECT o.utterance_id, o.address_id, a.speaker_id, a.addressee_id, a.form_ja, a.origin, a.form_zh, a.zh_origin, "
-        "a.note, ut.speaker_id_nullable sp, ut.status, ut.unit_id, ut.quote_text, u.ordinal FROM address_observations o "
-        "JOIN address_terms a ON a.id=o.address_id JOIN utterances ut ON ut.id=o.utterance_id JOIN units u ON "
-        "u.id=ut.unit_id WHERE ut.book_id=? AND ut.scene_id=? AND ut.speaker_id_nullable IS NOT NULL AND "
-        "ut.speaker_id_nullable!=a.speaker_id", (book_id, scene_id)).fetchall()
-    # a line now said by no one known (a person confirmed the speaker unknown): what it was said to contain goes
-    for r in conn.execute("SELECT o.utterance_id, o.address_id FROM address_observations o JOIN utterances ut ON "
-                          "ut.id=o.utterance_id WHERE ut.book_id=? AND ut.scene_id=? AND ut.speaker_id_nullable IS NULL",
-                          (book_id, scene_id)).fetchall():
-        conn.execute("DELETE FROM address_observations WHERE utterance_id=? AND address_id=?", (r[0], r[1]))
-        conn.execute("UPDATE address_terms SET uses=uses-1 WHERE id=?", (r[1],))
-    for r in rows:
-        conn.execute("DELETE FROM address_observations WHERE utterance_id=? AND address_id=?",
-                     (r["utterance_id"], r["address_id"]))
-        conn.execute("UPDATE address_terms SET uses=uses-1 WHERE id=?", (r["address_id"],))
-        addressee = r["sp"] if r["speaker_id"] == r["addressee_id"] else r["addressee_id"]  # one's own name moves too
-        upsert(conn, book_id, r["sp"], addressee, r["form_ja"], ordinal=r["ordinal"], unit_id=r["unit_id"],
-               origin=r["origin"], certainty="explicit" if r["status"] in ("explicit", "human_verified") else "inferred",
-               form_zh=r["form_zh"] if r["zh_origin"] in ("llm", "naming", "human") else None, quote=r["quote_text"],
-               note=r["note"], utterance_id=r["utterance_id"])
+def follow_speakers(conn: sqlite3.Connection, book_id: str, changed: dict[str, str | None]) -> int:
+    """Lines whose speaker was changed (by the second look or a person): ``changed`` maps each line to its speaker
+    before. A form recorded on that line under the old speaker goes with the line to the new speaker; a form the
+    memory model had already given to someone else stays; a line now said by no one known keeps its forms (the memory
+    model read them with the context). Only the data moves; the text is not searched. Returns the observations moved."""
+    moved = 0
+    for utt, old in changed.items():
+        line = conn.execute("SELECT ut.speaker_id_nullable sp, ut.status, ut.unit_id, ut.quote_text, u.ordinal FROM "
+                            "utterances ut JOIN units u ON u.id=ut.unit_id WHERE ut.id=?", (utt,)).fetchone()
+        if line is None or not line["sp"] or line["sp"] == old or old is None:
+            continue
+        for r in conn.execute("SELECT a.* FROM address_observations o JOIN address_terms a ON a.id=o.address_id WHERE "
+                              "o.utterance_id=? AND a.speaker_id=?", (utt, old)).fetchall():
+            conn.execute("DELETE FROM address_observations WHERE utterance_id=? AND address_id=?", (utt, r["id"]))
+            conn.execute("UPDATE address_terms SET uses=uses-1 WHERE id=?", (r["id"],))
+            addressee = line["sp"] if r["speaker_id"] == r["addressee_id"] else r["addressee_id"]  # one's own name too
+            upsert(conn, book_id, line["sp"], addressee, r["form_ja"], ordinal=line["ordinal"], unit_id=line["unit_id"],
+                   origin=r["origin"],
+                   certainty="explicit" if line["status"] in ("explicit", "human_verified") else "inferred",
+                   form_zh=r["form_zh"] if r["zh_origin"] in ("llm", "naming", "human") else None,
+                   quote=line["quote_text"], note=r["note"], utterance_id=utt)
+            moved += 1
     conn.execute("DELETE FROM address_terms WHERE uses<=0 AND origin IN ('program','llm') AND COALESCE(zh_origin,'') "
                  "NOT IN ('human','naming') AND id NOT IN (SELECT address_id FROM address_observations)")
-    return len(rows)
+    return moved

@@ -634,6 +634,16 @@ ALTER TABLE relations_by_stretch RENAME TO relations;
     (27, "a character card that names several people, as the model read it (no word pattern decides it)", """
 ALTER TABLE characters ADD COLUMN is_group INTEGER NOT NULL DEFAULT 0;
 """),
+    (28, "what the second look already answered, with the content it saw (asked again only when that changes)", """
+CREATE TABLE verify_answers (
+    book_id TEXT NOT NULL,
+    ref TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    answer TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (book_id, ref)
+);
+"""),
 ]
 
 

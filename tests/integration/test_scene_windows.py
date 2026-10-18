@@ -109,13 +109,13 @@ def test_a_scene_too_long_for_one_read_is_read_in_even_parts(conn, cfg, tmp_path
     cfg.memory.max_scene_units = 10
     lines = [f"　地の文{i}。" if i % 5 in (0, 1) else f"「台詞{i}」" for i in range(40)]
     body = "<section>" + paras(lines) + "</section>"
-    reads: list[int] = []
+    reads: list[dict] = []
 
     def windows(payload, req):
         return {"first_kind": "flashback", "breaks": []}
 
     def analyze(payload, req):
-        reads.append(len(payload["units"]))
+        reads.append(payload)
         return RESPONDERS["scene_analyze"](payload, req)
 
     book, _, s = run_book(conn, cfg, _book(tmp_path, body, n=3),
@@ -125,6 +125,11 @@ def test_a_scene_too_long_for_one_read_is_read_in_even_parts(conn, cfg, tmp_path
     scenes = conn.execute("SELECT kind FROM scenes s WHERE book_id=? AND EXISTS (SELECT 1 FROM units u WHERE "
                           "u.scene_id=s.id AND u.plain_text LIKE '%台詞%')", (book.id,)).fetchall()
     assert len(scenes) == 1 and scenes[0]["kind"] == "flashback"
-    long_reads = [n for n in reads if n <= 10]
-    assert len(long_reads) >= 4 and sum(long_reads) >= 40  # read in parts of about max_scene_units
+    parts = [p for p in reads if any("台詞" in u["source"] for u in p["units"])]
+    assert len(parts) >= 4 and sum(len(p["units"]) for p in parts) == 40  # every paragraph read once, in parts
+    for p in parts[1:]:
+        first = p["units"][0]["source"]
+        assert first.startswith("　地の文")  # a part starts at narration, not inside an exchange
+        assert "previous_scene_end" not in p and p["part_before"]  # what comes right before it in this scene
+        assert p["part_before"][-1]["unit_id"] != p["units"][0]["unit_id"]
 

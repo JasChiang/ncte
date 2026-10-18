@@ -109,6 +109,9 @@ def forget_scene(conn: sqlite3.Connection, book_id: str, sid: str, *, summaries:
         conn.execute(f"DELETE FROM memory_fts WHERE kind='fact' AND ref_id IN ({ph})", old_ids)
         conn.execute(f"DELETE FROM facts WHERE id IN ({ph})", old_ids)
     conn.execute("DELETE FROM prop_states WHERE book_id=? AND scene_id=?", (book_id, sid))
+    from ..memory.address import forget_scene as forget_address
+
+    forget_address(conn, book_id, sid)  # what the scene's lines were read to contain (a re-cut scene too)
     conn.execute("DELETE FROM relation_notes WHERE book_id=? AND scene_id=?", (book_id, sid))
     conn.execute("DELETE FROM group_members WHERE book_id=? AND scene_id=? AND origin='read'", (book_id, sid))
     conn.execute("DELETE FROM memory_fts WHERE kind='summary' AND ref_id=? AND book_id=?", (sid, book_id))
@@ -263,7 +266,12 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
                                  utterance_id=ln["id"] if ln else None)
         row = conn.execute("SELECT * FROM address_terms WHERE id=?", (rid,)).fetchone()
         usage = "self" if at.speaker_ref == at.addressee_ref else at.usage
-        set_usage(conn, book_id, row, usage, at.note or "read with the scene", origin="llm")
+        # a form the speaker calls the person by anywhere is how they call them: talk about them elsewhere does not
+        # take that away
+        before = conn.execute("SELECT usage FROM address_usage WHERE speaker_id=? AND addressee_id=? AND form_ja=?",
+                              (row["speaker_id"], row["addressee_id"], row["form_ja"])).fetchone()
+        if not (before is not None and before[0] == "address" and usage == "mention"):
+            set_usage(conn, book_id, row, usage, at.note or "read with the scene", origin="llm")
         stats["address_terms"] += 1
 
     # wordplay / real-world references a Chinese reader would miss (ADR-026); re-reading replaces the scene's list

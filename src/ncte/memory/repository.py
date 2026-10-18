@@ -161,6 +161,12 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
         ids = [keep_id if x == drop_id else x for x in json.loads(row["addressee_ids_json"] or "[]")]
         conn.execute("UPDATE utterances SET addressee_ids_json=? WHERE id=?", (json.dumps(list(dict.fromkeys(ids))), row["id"]))
     for col in ("speaker_id", "addressee_id"):
+        # a person's judgment on the dropped card wins over an automatic one on the kept card
+        for h in conn.execute(f"SELECT * FROM address_usage WHERE {col}=? AND origin='human'", (drop_id,)).fetchall():
+            sp = keep_id if h["speaker_id"] == drop_id else h["speaker_id"]
+            ad = keep_id if h["addressee_id"] == drop_id else h["addressee_id"]
+            conn.execute("DELETE FROM address_usage WHERE speaker_id=? AND addressee_id=? AND form_ja=? AND origin!='human'",
+                         (sp, ad, h["form_ja"]))
         conn.execute(f"UPDATE OR IGNORE address_usage SET {col}=? WHERE {col}=?", (keep_id, drop_id))
     conn.execute("DELETE FROM address_usage WHERE speaker_id=? OR addressee_id=?", (drop_id, drop_id))  # duplicates
     g_keep = conn.execute("SELECT 1 FROM character_gender WHERE character_id=?", (keep_id,)).fetchone()

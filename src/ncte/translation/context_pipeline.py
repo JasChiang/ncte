@@ -23,7 +23,7 @@ from typing import Any
 from ..analysis.memory_update import apply_memory_update, build_memory_payload
 from ..analysis.naming import apply_naming, auto_settle, build_naming_payload, model_view, pending
 from ..analysis.scene import apply_scene_analysis, build_analysis_payload, forget_scene_cards, get_scene
-from ..analysis.split_read import MIN_PART, call_in_parts, merge_outputs, subset_payload
+from ..analysis.split_read import MIN_PART, call_in_parts, even_parts, merge_outputs, subset_payload
 from ..errors import ContentBlockedError, FatalAPIError, LLMError, ModelOutputError
 from ..llm.prompt_loader import load_prompt
 from ..llm.schemas import MemoryUpdateOutput, NamingOutput, SceneAnalysisOutput, VerifyOutput
@@ -37,6 +37,8 @@ VERIFY_BATCH = 25  # items per second-look request
 
 
 # rules that read words, not meaning: what they find is checked with context before it goes to review
+PART_BEFORE = 4  # paragraphs of the part before, given to a later part of a long scene
+
 CONFIRM_RULES = ("offensive_term", "narration_first_person", "narrator_self_form", "latin_word", "possible_added_name",
                  "second_person_gender", "narrator_name_leak")
 
@@ -298,8 +300,10 @@ class ContextOrchestrator(Orchestrator):
                                        "ORDER BY id", (self.book.id,)):
                 latest[r["target_id"]] = r
                 fails[r["target_id"]] += r["status"] == "failed"
-            due = [u for u, r in latest.items() if u in scope and r["run_id"] != self.run_id and (
-                r["status"] in ("pending", "running") or (r["status"] == "failed" and fails[u] < self.REVIEW_TRIES))]
+            # left pending or running (also by this run, resumed); failed in an earlier run, up to REVIEW_TRIES runs
+            due = [u for u, r in latest.items() if u in scope and (
+                r["status"] in ("pending", "running")
+                or (r["status"] == "failed" and r["run_id"] != self.run_id and fails[u] < self.REVIEW_TRIES))]
         if not due:
             return {}
         stats = review_scope(self, due, any_run=True)
@@ -495,7 +499,7 @@ class ContextOrchestrator(Orchestrator):
         for part in parts:
             blocked: list[str] = []
             with self.lock:
-                cast = reader.characters(self.conn, self.book.id, min(p["_at"] for p in part))
+                cast = reader.characters(self.conn, self.book.id, min(p["_at"] for p in part), max(p["_at"] for p in part))
             try:  # 120 paragraphs at a time: the content filter may refuse a part; it is then read in halves
                 parsed = call_in_parts(lambda pl: self._llm("reader", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
                                        {"task": "reader", "paragraphs": [{k: v for k, v in p.items() if not k.startswith("_")}
@@ -817,11 +821,17 @@ class ContextOrchestrator(Orchestrator):
         ids = [u["unit_id"] for u in payload["units"]]
         size = self.cfg.memory.max_scene_units
         if len(ids) > size * self.LONG_SCENE:
-            n = -(-len(ids) // size)
-            parts = [p for k in range(n)
-                     if (p := self._read_parts(stage, prompt, subset_payload(payload, ids[k * len(ids) // n:
-                                                                                      (k + 1) * len(ids) // n]),
-                                               blocked)) is not None]
+            src = {u["unit_id"]: u for u in payload["units"]}
+            parts = []
+            before: list[str] = []
+            for keep in even_parts(payload["units"], size):
+                pl = subset_payload(payload, keep)
+                if before:  # a later part: what comes right before it in this scene, not the previous scene's end
+                    pl.pop("previous_scene_end", None)
+                    pl["part_before"] = [{"unit_id": u, "source": src[u].get("source", "")} for u in before[-PART_BEFORE:]]
+                if (p := self._read_parts(stage, prompt, pl, blocked)) is not None:
+                    parts.append(p)
+                before = keep
             parsed = merge_outputs(parts) if parts else None
         else:
             parsed = self._read_parts(stage, prompt, payload, blocked)

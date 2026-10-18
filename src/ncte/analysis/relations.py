@@ -339,9 +339,10 @@ def apply(conn: sqlite3.Connection, book_id: str, results: list[tuple[RelationsO
             if not replaces:
                 continue
             target = replaces if "：" in replaces else at_period(replaces, when)
+            # a person's relation is the person's to end
             conn.execute("UPDATE relations SET until_ordinal=? WHERE rowid=(SELECT rowid FROM relations WHERE book_id=? "
-                         "AND relation_zh=? AND since_ordinal<? AND until_ordinal IS NULL AND ((a_id=? AND b_id=?) OR "
-                         "(a_id=? AND b_id=?)) ORDER BY since_ordinal DESC LIMIT 1)",
+                         "AND relation_zh=? AND since_ordinal<? AND until_ordinal IS NULL AND origin='llm' AND ((a_id=? "
+                         "AND b_id=?) OR (a_id=? AND b_id=?)) ORDER BY since_ordinal DESC LIMIT 1)",
                          (since, book_id, target, since, a, b, b, a))
         # the same relation said again while an earlier stretch of it still holds is that stretch going on, not a new one
         conn.execute("DELETE FROM relations WHERE book_id=? AND origin='llm' AND EXISTS (SELECT 1 FROM relations e WHERE "

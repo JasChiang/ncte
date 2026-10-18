@@ -92,18 +92,22 @@ def test_llm_rendering_and_validation(conn, cfg, fixtures):
 
 
 def test_forms_follow_a_line_whose_speaker_changes(conn, cfg, fixtures):
-    """A person sets the speaker: the form recorded on that line goes with the new speaker; a speaker confirmed
-    unknown takes it away. Only the data moves (the text is not searched again)."""
+    """A person sets the speaker of a line: the form recorded on that line under the old speaker goes with the new
+    one. A speaker set to unknown keeps the forms (the memory model read them with the context); a change on another
+    line of the scene touches nothing here. Only the data moves (the text is not searched again)."""
     from ncte.analysis.speaker import set_speaker_human
 
     run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
     ids = {r[1]: r[0] for r in conn.execute("SELECT id, canonical_name FROM characters")}
-    utt = conn.execute("SELECT id FROM utterances WHERE quote_text LIKE '%遅いですよ%'").fetchone()[0]
+    utt, sid = conn.execute("SELECT id, scene_id FROM utterances WHERE quote_text LIKE '%遅いですよ%'").fetchone()
+    other = conn.execute("SELECT id FROM utterances WHERE scene_id=? AND id!=? LIMIT 1", (sid, utt)).fetchone()
+    if other:
+        set_speaker_human(conn, other[0], None)
+    assert ("ミナ", "カイト", "カイト") in rows(conn)  # another line's change leaves this form alone
     set_speaker_human(conn, utt, ids["カイト"])
     assert ("カイト", "カイト", "カイト") in rows(conn) and ("ミナ", "カイト", "カイト") not in rows(conn)
     set_speaker_human(conn, utt, None)
-    assert not [k for k in rows(conn) if k[2] == "カイト"]
-
+    assert ("カイト", "カイト", "カイト") in rows(conn)  # unknown now: what was read is kept
 
 def test_cli_address_list_and_set(tmp_path, fixtures):
     from typer.testing import CliRunner
@@ -240,3 +244,23 @@ def test_a_form_the_model_says_is_talk_about_someone_is_not_a_call(conn, cfg, fi
     run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "memory_update": mem}), mode="context")
     row = conn.execute("SELECT * FROM address_terms WHERE form_ja='カイト'").fetchone()
     assert row is not None and not calls_by(conn, row)
+
+
+def test_a_persons_usage_judgment_survives_a_merge(conn, cfg, fixtures):
+    from ncte.library import import_book
+    from ncte.memory.address import calls_by, set_usage, upsert, usage_of
+    from ncte.memory.repository import merge_characters, upsert_character
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
+    mk = lambda n: upsert_character(conn, book.id, n, name_zh=n, aliases=[], unit_id=u[0], ordinal=u[1], origin="t")[0]  # noqa: E731
+    a, b, b2 = mk("甲"), mk("乙"), mk("乙'")
+    rid = upsert(conn, book.id, a, b, "乙さん", ordinal=u[1], unit_id=u[0], origin="llm", certainty="inferred")
+    row = conn.execute("SELECT * FROM address_terms WHERE id=?", (rid,)).fetchone()
+    set_usage(conn, book.id, row, "address", "t", origin="llm")
+    assert calls_by(conn, row)
+    # a person's judgment on a card merged away is kept over the model's on the kept card
+    rid2 = upsert(conn, book.id, a, b2, "乙さん", ordinal=u[1], unit_id=u[0], origin="llm", certainty="inferred")
+    set_usage(conn, book.id, conn.execute("SELECT * FROM address_terms WHERE id=?", (rid2,)).fetchone(), "mention", "人", origin="human")
+    merge_characters(conn, b, b2)
+    assert usage_of(conn, conn.execute("SELECT * FROM address_terms WHERE addressee_id=?", (b,)).fetchone()) == "mention"

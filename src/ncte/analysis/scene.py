@@ -505,21 +505,71 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     position = {t.id: i for i, t in enumerate(texts)}
     told = [_QUOTED.sub("", clean(t.text)) for t in texts]  # the paragraphs without what is said in them
 
+    # a first-person scene: the narrator's own words for themself (「と俺は言った」) name the narrator — only for the
+    # narrator the model gave for this scene, and only the self-forms the model recorded for that narrator
+    narrator_id: str | None = None
+    narrator_forms: set[str] = set()
+    if parsed is not None and parsed.narration is not None and parsed.narration.person == "first":
+        from .narration import established_self_forms
+
+        narrator_id = ref_map.get(parsed.narration.narrator_ref or "")
+        if narrator_id:
+            narrator_forms = {f.ja.strip() for f in parsed.narration.self_forms if f.ja.strip()}
+            narrator_forms |= {str(e["ja"]) for e in established_self_forms(conn, book_id, scene["seq"])
+                               if e["narrator_ref"] == narrator_id and e["ja"]}
+
     def names_for(cid: str) -> set[str]:
-        return {n for n, i in amap.items() if i == cid} | set(names_of.get(cid, []))
+        names = {n for n, i in amap.items() if i == cid} | set(names_of.get(cid, []))
+        return names | narrator_forms if cid == narrator_id else names
 
     has_quote = {q.unit_id for q in quotes}
+    # a speech running over paragraphs: its later paragraphs (and their narration, 「…決めたわ」とミナは言った) belong to
+    # the speech's first line
+    by_key = {(q.unit_id, q.index): q for q in quotes}
+    rest_of: dict[tuple[str, int], list[str]] = {}
+    for q in quotes:
+        root = q
+        while root.continuation_of and root.continuation_of in by_key:
+            root = by_key[root.continuation_of]
+        if root is not q:
+            rest_of.setdefault((root.unit_id, root.index), []).append(q.unit_id)
+
+    in_unit: dict[str, list[Quote]] = {}
+    for x in quotes:
+        in_unit.setdefault(x.unit_id, []).append(x)
+    all_names = [*amap, *(n for ns in names_of.values() for n in ns)]
+
+    def own_narration(q: Quote) -> str:
+        """The narration of the line's own paragraph that belongs to it: from the line before it (or the paragraph's
+        start) to the line after it (or the end) — 「おはよう」とミナが言い、「おう」とレドが答えた: 「とミナが言い」 is the
+        first line's, not the second's."""
+        t = texts[position[q.unit_id]].text
+        lines = sorted(in_unit[q.unit_id], key=lambda x: x.start)
+        k = lines.index(q)
+        lo = lines[k - 1].end if k else 0
+        hi = lines[k + 1].start if k + 1 < len(lines) else len(t)
+        before = t[lo:q.start]
+        if k and before.lstrip(" 　").startswith("と"):  # 「…」とミナが言い、: the quotative と ties it to the line before
+            before = ""
+        return _QUOTED.sub("", before) + "\0" + _QUOTED.sub("", t[q.end:hi])
 
     def tag_ok_for(q: Quote) -> Any:
-        # the line's own paragraph, or the paragraph before / after when it is narration only: a paragraph with a
+        # the line's own narration, or the paragraph before / after when it is narration only: a paragraph with a
         # line of its own (「…」とミナが言った) tells who says that line, not this one
         i = position[q.unit_id]
-        near = [told[j] for j in range(max(0, i - 1), min(len(texts), i + 2))
-                if j == i or texts[j].id not in has_quote]
+        near = [own_narration(q)] + [told[j] for j in (i - 1, i + 1) if 0 <= j < len(texts) and texts[j].id not in has_quote]
+        rest = rest_of.get((q.unit_id, q.index), [])
+        if rest:  # the speech's later paragraphs, and narration right after where it ends
+            last = position[rest[-1]]
+            near += [told[position[u]] for u in rest]
+            if last + 1 < len(texts) and texts[last + 1].id not in has_quote:
+                near.append(told[last + 1])
 
         def ok(tag: str, cid: str) -> bool:  # the words are there, outside quotes, and name the speaker
             words = _QUOTED.sub("", clean(tag)).strip(" 　。、")
-            return bool(words) and any(words in n for n in near) and any(nm and nm in words for nm in names_for(cid))
+            # a name, not part of a longer known name (「ミナミが言った」 does not name ミナ)
+            return bool(words) and any(words in n for n in near) and any(
+                nm and _standalone(nm, words, all_names) for nm in names_for(cid))
         return ok
 
     claims: dict[tuple[str, int], LlmClaim] = {}
@@ -628,9 +678,6 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     conn.execute("UPDATE scenes SET state_json=?, version=? WHERE book_id=? AND id=?",
                  (json.dumps(state, ensure_ascii=False), version, book_id, sid))
     repo.refresh_profiles(conn, book_id)
-    from ..memory.address import follow_speakers
-
-    stats["address_moved"] = follow_speakers(conn, book_id, sid)  # forms of address on lines whose speaker changed
     return stats
 
 

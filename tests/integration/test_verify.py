@@ -112,3 +112,23 @@ def test_program_checks_the_judged_narration():
     first = [{"kind": "text", "plain_text": "　私はそう思った。"}] * 20
     assert judged("third", third) is None and judged("first", first) is None
     assert judged("third", first) == "conflict" and judged("first", third) == "conflict"
+
+
+def test_the_second_look_does_not_ask_again_what_it_answered(conn, cfg, fixtures):
+    """Asking again until the model agrees adds no evidence: an item answered with the same content is not asked by the
+    next run; a line answered by the second look is not picked again."""
+    asked: list[list[str]] = []
+
+    def verify(payload, req):
+        asked.append([i["ref"] for i in payload["items"]])
+        return {"items": [{"ref": i["ref"], "answer": "unknown" if i["kind"] in ("speaker", "gender") else "same",
+                           "reason": "t"} for i in payload["items"]]}
+
+    fake = FakeLLM(responders={**RESPONDERS, "scene_analyze": _analyze, "memory_update": _memory, "verify": verify})
+    run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    first = {r for refs in asked for r in refs}
+    assert first
+    asked.clear()
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "scene_analyze": _analyze,
+                                                               "memory_update": _memory, "verify": verify}), mode="context")
+    assert not ({r for refs in asked for r in refs} & first)

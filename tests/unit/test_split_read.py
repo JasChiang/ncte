@@ -1,5 +1,5 @@
 from ncte.analysis.split_read import merge_outputs, subset_payload
-from ncte.llm.schemas import MemoryUpdateOutput, SceneAnalysisOutput
+from ncte.llm.schemas import AliasKind, MemoryUpdateOutput, SceneAnalysisOutput
 
 
 def _scene(chars, utts, narration=None, pov=None):
@@ -77,3 +77,29 @@ def test_same_word_another_person_or_time_is_not_merged_across_parts():
     kept = [(c.name_ja, c.other_person, c.period) for c in m.new_characters]
     assert kept == [("母親", False, ""), ("母親", True, "前世")]
     assert m.new_characters[1].evidence_unit_ids == ["u5", "u9"]  # the past-life mother, met twice
+
+
+def test_even_parts_never_cut_inside_a_speech_over_paragraphs():
+    """A long scene read in parts: the cut moves off a speech that runs over paragraphs, onto quiet narration."""
+    from ncte.analysis.split_read import even_parts
+
+    src = ["　地の文。"] * 9 + ["「長い話が始まる。"] + ["　まだ続く。"] * 4 + ["　ここで終わる」"] + ["　地の文。"] * 9
+    units = [{"unit_id": f"u{i}", "source": t} for i, t in enumerate(src)]
+    parts = even_parts(units, 12)
+    assert sum(len(p) for p in parts) == len(src) and len(parts) == 2
+    speech = {f"u{i}" for i in range(9, 15)}
+    assert all(speech <= set(p) or not (speech & set(p)) for p in parts)  # the whole speech in one part
+
+
+def test_a_later_part_keeps_what_it_says_about_the_person():
+    """Read in parts: the second part marks 「少女」 as a common word, says who she turns out to be, or that the words
+    name several people — kept when it is merged into the first part's card."""
+    a = _scene([("n1", "エレナ", "u1")], [])
+    b = _scene([("n1", "エレナ", "u5")], [])
+    b.new_characters[0].aliases_ja = ["少女"]
+    b.new_characters[0].alias_kinds = [AliasKind(ja="少女", kind="common")]
+    b.new_characters[0].same_as_ref = "c_hood"
+    b.new_characters[0].group = True
+    m = merge_outputs([a, b]).new_characters
+    assert len(m) == 1 and [(k.ja, k.kind) for k in m[0].alias_kinds] == [("少女", "common")]
+    assert m[0].same_as_ref == "c_hood" and m[0].group

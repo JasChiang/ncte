@@ -70,6 +70,9 @@ def resolve(llm: LlmClaim | None, head: Resolution | None = None,
     said = llm.speaker_ref if llm and llm.status != "unknown" else None
 
     if head is not None:  # the rest of a speech begun in an earlier paragraph
+        if said and not head.speaker_id:  # the speech's start was left unknown: the model's reading here, to look at
+            return Resolution(said, "inferred", "llm", cands, notes + [
+                f"the model answers {said} for the rest of a speech whose start has no speaker {TO_LOOK_AT}"])
         if said and head.speaker_id and said != head.speaker_id:
             return Resolution(said, "inferred", "llm", cands, notes + [
                 f"the model answers {said} for a continuation of {head.speaker_id}'s speech {TO_LOOK_AT}"])
@@ -134,6 +137,6 @@ def set_speaker_human(conn: Any, utterance_id: str, character_id: str | None, *,
     repo.refresh_profiles(conn, row["book_id"])
     from ..memory.address import follow_speakers
 
-    for scene_id in {u["scene_id"] for u in chain if u["scene_id"]}:
-        follow_speakers(conn, row["book_id"], scene_id)
+    follow_speakers(conn, row["book_id"], {u["id"]: u["speaker_id_nullable"] for u in chain
+                                           if u["speaker_id_nullable"] != character_id})
     return {"utterances": [u["id"] for u in chain], "changed_units": changed_units}

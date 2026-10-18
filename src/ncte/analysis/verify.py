@@ -44,8 +44,8 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for u in conn.execute(
             "SELECT ut.*, un.ordinal FROM utterances ut JOIN units un ON un.id=ut.unit_id WHERE ut.book_id=? AND "
-            "ut.status IN ('inferred','unknown') AND ut.notes_json LIKE '%(to look at)%' ORDER BY un.ordinal",
-            (book_id,)):
+            "ut.status IN ('inferred','unknown') AND ut.notes_json LIKE '%(to look at)%' AND ut.resolution_source!='verify' "
+            "ORDER BY un.ordinal", (book_id,)):  # answered by an earlier second look: not asked again (a re-read resets it)
         cands = sorted({h["candidate_character_id"] for h in conn.execute(
             "SELECT candidate_character_id FROM speaker_hypotheses WHERE utterance_id=?", (u["id"],))} & names.keys())
         items.append({"ref": f"q:{u['id']}", "kind": "speaker", "quote": match_text(u["quote_text"])[:120],
@@ -88,10 +88,27 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
             "SELECT plain_text FROM units WHERE book_id=? AND scene_id=? AND kind='text' ORDER BY ordinal LIMIT 40",
             (book_id, sc["id"])) if not r[0].lstrip(" 　").startswith(("「", "『"))][:12]
         items.append({"ref": f"n:{sc['id']}", "kind": "narration", "first_answer": narr["person"], "paragraphs": paras})
-    items = items[:MAX_ITEMS]
+    # the few of each other kind first, then the lines, so many lines never push the rest out
+    speakers = [i for i in items if i["kind"] == "speaker"]
+    others = [i for i in items if i["kind"] != "speaker"]
+    items = (others + speakers)[:MAX_ITEMS]
     items += narrator_items(conn, book_id, names)
     items += identity_items(conn, book_id, names)
-    return items
+    # an item answered before with the same content is not asked again (asking until the model agrees adds nothing)
+    answered = {r[0]: r[1] for r in conn.execute("SELECT ref, fingerprint FROM verify_answers WHERE book_id=?", (book_id,))}
+    out = []
+    for i in items:
+        i["_fp"] = fingerprint(i)
+        if i["kind"] == "speaker" or answered.get(i["ref"]) != i["_fp"]:
+            out.append(i)
+    return out
+
+
+def fingerprint(item: dict[str, Any]) -> str:
+    import hashlib
+
+    seen = {k: v for k, v in item.items() if not k.startswith("_")}
+    return hashlib.sha1(json.dumps(seen, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]) -> list[dict[str, Any]]:
@@ -170,8 +187,13 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
     by_ref = {i["ref"]: i for i in items}
     stats = {"speakers_changed": 0, "speakers_unknown": 0, "speakers_kept": 0, "genders_dropped": 0,
              "genders_kept": 0, "merges_doubted": 0, "ignored": 0}
-    scenes: set[str] = set()
+    changed: dict[str, str | None] = {}  # lines whose speaker the second look changed → the speaker before
+    from ..memory.db import utcnow as _now
+
     for a in parsed.items:
+        if (seen := by_ref.get(a.ref)) is not None and seen.get("_fp"):
+            conn.execute("INSERT OR REPLACE INTO verify_answers(book_id, ref, fingerprint, answer, created_at) VALUES "
+                         "(?,?,?,?,?)", (book_id, a.ref, seen["_fp"], a.answer.strip()[:120], _now()))
         item = by_ref.get(a.ref)
         if item is None:
             stats["ignored"] += 1
@@ -195,8 +217,8 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
                 stats["speakers_kept"] += 1
             else:
                 stats["speakers_changed" if new_id else "speakers_unknown"] += 1
-                if u["scene_id"]:
-                    scenes.add(u["scene_id"])
+                if new_id != u["speaker_id_nullable"]:
+                    changed[key] = u["speaker_id_nullable"]
             notes = json.loads(u["notes_json"]) + [note]
             conn.execute("UPDATE utterances SET speaker_id_nullable=?, status=?, resolution_source='verify', "
                          "notes_json=?, updated_at=? WHERE id=?",
@@ -254,8 +276,7 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
                         f"{item['name']} ← {', '.join(item['merged_forms'])}: {answer} — {a.reason[:200]}"
                         + ("（這些稱呼已不再算作此角色；合併時搬過來的台詞請人工確認）" if dropped else ""))
                 stats["merges_doubted"] += 1
-    for sid in scenes:
-        follow_speakers(conn, book_id, sid)
+    follow_speakers(conn, book_id, changed)
     repo.refresh_profiles(conn, book_id)
     return stats
 

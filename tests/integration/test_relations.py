@@ -170,3 +170,18 @@ def test_a_relation_said_again_while_it_holds_is_one_stretch(conn, cfg, fixtures
         {"relations": [rel("敵人", at[5], None), rel("同盟", at[9], "敵人"), rel("敵人", at[13], None)]}), lk)])
     got = sorted((r["relation_zh"], r["since_ordinal"], r["until_ordinal"]) for r in conn.execute("SELECT * FROM relations"))
     assert got == [("同盟", 9, None), ("敵人", 5, 9), ("敵人", 13, None)]
+
+
+def test_the_models_replacement_does_not_end_a_persons_relation(conn, cfg, fixtures):
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    a, b = _two_characters(conn, book.id)
+    conn.execute("DELETE FROM relations")
+    conn.execute("DELETE FROM relation_notes")
+    conn.execute("INSERT INTO relations(book_id, a_id, b_id, relation_zh, a_is, b_is, since_ordinal, fact_ids_json, reason, "
+                 "created_at, origin) VALUES (?,?,?,?,?,?,?,?,?,?,?)", (book.id, a, b, "朋友", "", "", 1, "[]", "", utcnow(), "human"))
+    p, lk, at = _three_notes(conn, book.id, a, b, [("宿敵", 9)])
+    parsed = relations.RelationsOutput.model_validate({"relations": [
+        {"a": p["a"], "b": p["b"], "relation": "宿敵", "a_is": "宿敵", "b_is": "宿敵", "kind": "feeling",
+         "certainty": "inferred", "facts": [at[9]], "reason": "t", "replaces": "朋友"}]})
+    relations.apply(conn, book.id, [(parsed, lk)])
+    assert conn.execute("SELECT until_ordinal FROM relations WHERE relation_zh='朋友'").fetchone()[0] is None

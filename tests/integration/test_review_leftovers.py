@@ -62,3 +62,20 @@ def test_refused_passages_are_not_asked_again_and_failures_stop(conn, cfg, fixtu
     asked.clear()
     run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "review": review}), mode="context")
     assert not asked  # failed in three runs already: left for a person
+
+
+def test_a_resumed_run_finishes_the_reviews_it_left_pending(conn, cfg, fixtures):
+    """The run stopped with reviews still pending; resuming the same run does them (they are not counted as done)."""
+    from ..helpers import resume_run
+
+    cfg.review.automatic_review = "all"
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    conn.execute("UPDATE jobs SET status='pending' WHERE run_id=? AND stage='review'", (rid,))
+    asked: list[str] = []
+
+    def review(payload, req):
+        asked.extend(i["unit_id"] for i in payload["items"])
+        return {"issues": []}
+
+    resume_run(conn, cfg, rid, FakeLLM(responders={**RESPONDERS, "review": review}))
+    assert asked and set(_review_jobs(conn, rid).values()) == {"succeeded"}

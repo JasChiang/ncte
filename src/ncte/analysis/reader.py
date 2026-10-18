@@ -57,17 +57,22 @@ def hint(unit: sqlite3.Row, text: str) -> str | None:
     return None
 
 
-def characters(conn: sqlite3.Connection, book_id: str, upto: int | None = None) -> list[dict[str, str]]:
-    """The main characters with gender and narrator, as known at ``upto`` (where the part read begins): a name or a
-    gender revealed later is not shown for an earlier stretch. None: as known after the book."""
+def characters(conn: sqlite3.Connection, book_id: str, upto: int | None = None,
+               until: int | None = None) -> list[dict[str, str]]:
+    """The main characters with gender and narrator, as known where the part read begins (``upto``); someone who first
+    appears inside the part (up to ``until``) as known where they appear. A name or a gender revealed later is not
+    shown for an earlier stretch. None: as known after the book."""
     from ..series import SERIES_SCOPE
 
     if upto is not None:
         from ..memory.visibility import character_view, visible_characters
 
         seen: list[dict[str, str]] = []
-        for c in visible_characters(conn, book_id, upto)[:40]:
-            if (v := character_view(conn, book_id, c, upto)) is not None:
+        for c in visible_characters(conn, book_id, until if until is not None else upto)[:40]:
+            v = character_view(conn, book_id, c, upto)
+            if v is None and until is not None:
+                v = character_view(conn, book_id, c, until)
+            if v is not None:
                 item: dict[str, str] = {"name": v["name_zh"] or v["name_ja"]}
                 item.update({k: v[k] for k in ("gender", "narrator") if k in v})
                 seen.append(item)
