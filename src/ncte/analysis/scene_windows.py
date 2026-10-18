@@ -79,9 +79,11 @@ def accepted(rows: list[sqlite3.Row], start: int, end: int, breaks: list[WindowB
         i = pos[b.unit_id]
         if i - 1 > start and rows[i - 1]["is_separator"]:
             i -= 1
+        elif i - 1 == start and rows[start]["is_separator"]:
+            continue  # the window starts at that separator: the scene it opens is the one already marked
         if b.unit_id in inside or (out and out[-1][0] == i):
             continue  # inside a speech that runs over paragraphs (structure), or the same paragraph twice
-        out.append((i, b))
+        out.append((i, b if rows[i]["id"] == b.unit_id else b.model_copy(update={"unit_id": rows[i]["id"]})))
     return out
 
 
@@ -102,7 +104,8 @@ def cut_chapter(rows: list[sqlite3.Row], ask: Callable[[dict[str, Any]], SceneWi
             got = accepted(rows, start, end, res.breaks)
             if start == 0:
                 first_kind = res.first_kind
-        out.extend(got)
+        have = {b.unit_id for _, b in out}
+        out.extend(x for x in got if x[1].unit_id not in have)  # overlapping windows may mark the same paragraph again
         if end >= len(rows):
             break
         if got and got[-1][0] > start:
@@ -123,7 +126,8 @@ def save(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row], breaks
                                                 first_kind, 1))
         conn.executemany("INSERT INTO scene_breaks(book_id, unit_id, reason, origin, created_at, kind, sure) "
                          "VALUES (?,?,?,?,?,?,?)",
-                         [(book_id, b.unit_id, b.reason[:200], "llm", utcnow(), b.kind, int(b.sure)) for _, b in breaks])
+                         [(book_id, b.unit_id, b.reason[:200], "llm", utcnow(), b.kind, int(b.sure))
+                          for _, b in breaks if b.unit_id != rows[0]["id"]])
     return [b.unit_id for _, b in breaks if b.new_chapter]
 
 

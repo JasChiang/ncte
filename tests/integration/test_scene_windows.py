@@ -44,6 +44,22 @@ def test_the_program_drops_breaks_it_cannot_accept():
     assert [i for i, _ in got] == [2, 14]
 
 
+def test_a_paragraph_marked_again_by_an_overlapping_window_is_one_break(monkeypatch):
+    """「翌朝」 after a separator is marked in every window that shows it: the break is stored on the separator, and
+    the next window, which starts at that separator, does not cut again one paragraph later."""
+    monkeypatch.setattr(sw, "WINDOW_PARAGRAPHS", 10)
+    rows = _rows([f"　段落{i}。" for i in range(8)] + ["◇", "　翌朝。"] + [f"　段落{i}。" for i in range(10, 25)], sep=(8,))
+
+    def ask(pl):
+        ids = [p["unit_id"] for p in pl["paragraphs"]]
+        return SceneWindowsOutput.model_validate({"breaks": [{"unit_id": u, "reason": "t"} for u in ("u9",)
+                                                             if u in ids[1:]]})
+
+    breaks, _ = sw.cut_chapter(rows, ask, title="", known=True, max_units=80)
+    ids = [b.unit_id for _, b in breaks]
+    assert ids == ["u8"] and [i for i, _ in breaks] == [8]
+
+
 def test_an_unanswered_window_keeps_the_author_marks_as_unsure():
     rows = _rows(["　地の文。"] * 12, sep=(4,), blank=(9,))
     got = sw.cut_chapter(rows, lambda pl: None, title="", known=True, max_units=80)[0]
