@@ -120,7 +120,7 @@ async function settingsView() {
     <p><input type="password" id="key" size="48" placeholder="${fal ? "FAL_KEY" : "sk-or-…"}" autocomplete="off"> <button class="btn primary" id="saveKey">儲存</button></p>
     <p class="muted small">只存在這台電腦的 ${esc(k.file)}，不會顯示在畫面上，也不會寫進紀錄。</p>
     <div id="bal"></div></div>
-    <div class="card"><strong>翻譯設定</strong><p>模型與推理程度用預設（目前測試結果最好的組合），不需要選。預算上限會依每本書的估價自動設為 2 倍，到了會先停下來問你。</p></div>
+    <div class="card"><strong>翻譯設定</strong><p>模型與推理程度用預設（目前測試結果最好的組合），不需要選。預算上限會依每本書估價的「最多」金額自動設定，到了會先停下來問你。</p></div>
     <details class="card" ${fal ? "open" : ""}><summary><strong>進階：連線方式</strong> <span class="muted small">一般不用改</span></summary>
     <p><select id="provider"><option value="openrouter" ${fal ? "" : "selected"}>直連 OpenRouter（建議）</option>
     <option value="fal" ${fal ? "selected" : ""}>透過 fal 連 OpenRouter</option></select> <button class="btn" id="saveProvider">套用</button></p>
@@ -267,7 +267,7 @@ async function runCard(id, o) {
     try { const e = await api(`book/${id}/estimate`, {});
       const lo = Math.max(5, Math.round(e.units * .025)), hi = Math.max(10, Math.round(e.units * .035));
       const t = m => m < 60 ? `${m} 分鐘` : `${(m / 60).toFixed(1)} 小時`;
-      $("#est").innerHTML = `<div><b>${e.units}</b> 段要翻譯</div><div>預估費用約 <b>${money(e.estimate_usd)}</b>${e.calibrated ? "（依你之前的實際花費校正）" : "（保守估計）"}</div>
+      $("#est").innerHTML = `<div><b>${e.units}</b> 段要翻譯</div><div>預估費用約 <b>${money(e.estimate_usd)}</b>，最多約 ${money(e.high_usd)}${e.calibrated ? "（依你之前的實際花費校正）" : "（還沒有實際花費可以校正，偏保守）"}</div>
         <div>預估時間約 <b>${t(lo)}–${t(hi)}</b></div><div class="small muted">預算上限自動設為 ${money(e.budget_usd)}，到了會先停下來問你。</div>`;
       const k = await api("settings"); $("#start").disabled = !k.set || !e.units;
     } catch (err) { $("#est").textContent = "無法估價：" + err.message; }

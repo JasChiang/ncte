@@ -16,7 +16,9 @@ from typing import Any
 from ..config import Config
 from ..errors import NCTEError
 
-BUDGET_FACTOR = 2.0  # a guard against runaway cost, not a forecast: normal variation never reaches it
+# the budget is the upper estimate (every step at its costliest rate seen, plus a margin) and a little more: a guard
+# against runaway cost, not a forecast — normal variation stays under it
+BUDGET_FACTOR = 1.1
 MIN_BUDGET_USD = 0.5
 # what the person sees, in pipeline order (context mode reads the whole book before translating)
 STAGES = [("read", "讀", ("scene_analyze", "memory_update")), ("verify", "覆核", ("verify",)),
@@ -64,10 +66,10 @@ class Runner:
         history = [ws.series_conn(r[0]) for r in ws.lib.execute("SELECT id FROM series").fetchall()]
         plan = dry_run(conn, self.cfg, book, self.options(self.cfg.openrouter.per_book_budget_usd),
                        self.client_factory(self.cfg), log=lambda m: None, history=history)
-        est = plan.calibrated_cost_usd if plan.calibrated_cost_usd else plan.cost_high_usd
-        return {"units": plan.units_to_translate, "cached": plan.units_cached, "estimate_usd": round(est, 2),
-                "calibrated": plan.calibrated_cost_usd is not None, "low_usd": round(plan.cost_low_usd, 2),
-                "high_usd": round(plan.cost_high_usd, 2), "budget_usd": budget_for(est),
+        calibrated = all(e["from"] != "token model" for e in plan.stage_estimates.values())
+        return {"units": plan.units_to_translate, "cached": plan.units_cached, "estimate_usd": round(plan.estimate_usd, 2),
+                "calibrated": calibrated, "low_usd": round(plan.estimate_usd, 2),
+                "high_usd": round(plan.estimate_high_usd, 2), "budget_usd": budget_for(plan.estimate_high_usd),
                 "model": plan.model, "reasoning_effort": plan.reasoning_effort}
 
     def start(self, ws: Any, ref: str) -> str:

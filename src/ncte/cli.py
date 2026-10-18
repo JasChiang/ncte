@@ -272,8 +272,11 @@ def translate(
             return
         typer.echo(f"DRY RUN — no paid requests were made\nbook {book.id} 「{book.title}」 mode={opts.mode}")
         for k, v in plan.to_dict().items():
-            if k not in ("notes", "calibrated_cost_usd"):
+            if k not in ("notes", "calibrated_cost_usd", "stage_estimates", "estimate_usd", "estimate_high_usd"):
                 typer.echo(f"  {k}: {v}")
+        for st, e in plan.stage_estimates.items():
+            typer.echo(f"  {st}: ${e['usd']:.4f} (high ${e['high_usd']:.4f}; {e['from']})")
+        typer.echo(f"  ➜ the whole run, every step: usually ≈ ${plan.estimate_usd:.2f}, at most ≈ ${plan.estimate_high_usd:.2f}")
         if plan.calibrated_cost_usd is not None:
             typer.echo(f"  ➜ calibrated estimate from your previous real requests: ${plan.calibrated_cost_usd:.4f} "
                        f"(reasoning_effort={plan.reasoning_effort or 'model default'})")
@@ -281,8 +284,8 @@ def translate(
             typer.echo("  (no calibration yet: run a small paid sample with the same model/reasoning effort first)")
         for n in plan.notes:
             typer.echo(f"  note: {n}")
-        if plan.cost_high_usd > opts.budget_usd:
-            typer.echo(f"  ⚠ estimated upper bound ${plan.cost_high_usd:.4f} exceeds budget ${opts.budget_usd:.2f}; "
+        if plan.estimate_high_usd > opts.budget_usd:
+            typer.echo(f"  ⚠ estimated upper bound ${plan.estimate_high_usd:.4f} exceeds budget ${opts.budget_usd:.2f}; "
                        "the run will stop at the budget and can be resumed")
         return
     _run(book, opts, fake=fake, as_json=as_json)

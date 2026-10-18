@@ -110,3 +110,26 @@ def test_reviewer_without_issues_clears_program_flag(conn, cfg, fixtures):
     assert latest_texts(conn, book.id)[uid]["status"] == "succeeded"
     st = {r[0] for r in conn.execute("SELECT status FROM qa_findings WHERE unit_id=? AND type='too_short'", (uid,))}
     assert st == {"cleared_by_review"}
+
+
+def test_the_estimate_counts_every_step_of_a_context_run(conn, cfg, fixtures):
+    """Not only translating and reading: proofreading, the reader, relations, the fix check … each from earlier runs
+    when there are any (here the fixture is too small to count), else by its share in sample runs; the upper estimate
+    is above the usual one."""
+    from ncte.llm.fake import FakeLLM
+    from ncte.translation.dryrun import SAMPLE_SHARE, dry_run, run_rates
+    from ncte.translation.orchestrator import RunOptions
+
+    from ..helpers import run_book
+
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], FakeLLM(), mode="context")
+    plan = dry_run(conn, cfg, book, RunOptions(mode="context", model=cfg.openrouter.model, force=True), FakeLLM(),
+                   log=lambda m: None)
+    assert {"proofread", "reader", "relations", "verify", "fix_check"} <= set(plan.stage_estimates)
+    assert plan.estimate_high_usd > plan.estimate_usd > 0
+    assert plan.estimate_usd >= plan.cost_low_usd  # more than translating and reading alone
+    assert all(e["from"] in ("sample share", "token model") for e in plan.stage_estimates.values())
+    assert run_rates([conn], cfg.openrouter.model, None) == {}  # a tiny run does not set a rate
+    assert set(SAMPLE_SHARE) >= {"proofread", "proofread:high", "reader", "verify"}
+    big = run_rates([conn], cfg.openrouter.model, None, min_chars=1)
+    assert big and all(r["high"] >= r["typical"] > 0 for r in big.values())

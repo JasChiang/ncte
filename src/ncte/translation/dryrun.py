@@ -42,9 +42,28 @@ class DryRunPlan:
     calibration: dict[str, Any] = field(default_factory=dict)
     reasoning_effort: str | None = None
     notes: list[str] = field(default_factory=list)
+    # every paid step of the run, not only translating and reading: what it usually costs and an upper estimate
+    # (each step at the costliest rate seen before, plus a margin); steps with no history are counted by the share
+    # they took in sample runs
+    estimate_usd: float = 0.0
+    estimate_high_usd: float = 0.0
+    stage_estimates: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
+
+
+# What each step's cost follows: the paragraphs it reads, or the whole run (once a book: relations, the second look …;
+# the fix check and the review follow how many fixes the run makes, which grows with the book).
+PER_CHAR_STAGES = ("translate", "scene_analyze", "memory_update", "scene_windows", "proofread", "reader")
+PER_RUN_STAGES = ("verify", "relations", "impressions", "house_style", "naming", "confirm", "fix_check", "review")
+HIGH_MARGIN = 1.2
+# A step with no history of its own: its cost as a share of translating + reading (scene analysis and memory) in
+# sample runs — two books, 300 paragraphs each, 2026-10-18. Proofreading depends on its reasoning setting.
+SAMPLE_SHARE = {"scene_windows": 0.15, "proofread": 0.17, "proofread:high": 0.55, "reader": 0.05, "verify": 0.06,
+                "relations": 0.04, "impressions": 0.02, "house_style": 0.02, "naming": 0.02, "confirm": 0.01,
+                "fix_check": 0.04, "review": 0.0}
+UNCALIBRATED_HIGH = 2.0  # a step counted by its sample share may cost this many times as much
 
 
 def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions, client: LLMClient,
@@ -140,6 +159,7 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
     calibrated = None
     if all(s in calib for s in stage_chars):
         calibrated = round(sum(calib[s]["usd_per_char"] * n for s, n in stage_chars.items()), 4)
+    full = _full_estimate(cfg, opts, history or [conn], stage_chars, todo, breaks, cost_low, cost_high)
     notes = ["Estimates use a pessimistic 1 token ≈ 1 CJK character model; real usage is read from the API.",
              "Retries, splits and selective review can add requests (bounded by --budget-usd)."]
     if client.name == "fal":
@@ -161,7 +181,113 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
         cost_high_usd=round(cost_high, 6), budget_usd=opts.budget_usd,
         sample_batches=[b.unit_ids[:5] for b in batches[:3]], notes=notes, calibrated_cost_usd=calibrated,
         calibration={s: {k: v for k, v in c.items() if k != "usd_per_char"} for s, c in calib.items()},
-        reasoning_effort=cfg.openrouter.reasoning_effort)
+        reasoning_effort=cfg.openrouter.reasoning_effort, estimate_usd=full["typical"],
+        estimate_high_usd=full["high"], stage_estimates=full["stages"])
+
+
+def _full_estimate(cfg: Config, opts: RunOptions, conns: list[sqlite3.Connection], stage_chars: dict[str, int],
+                   todo: list[sqlite3.Row], breaks: int, cost_low: float, cost_high: float) -> dict[str, Any]:
+    """Every step the run will pay for: from earlier runs with the same model and reasoning where there are any
+    (usual = all their cost over all their characters, high = the costliest run's rate), else by its sample share."""
+    from .orchestrator import reasoning_label
+
+    chars = sum(len(match_text(r["plain_text"])) for r in todo)
+    want: dict[str, int] = dict(stage_chars)
+    if opts.mode == "context":
+        if breaks:
+            want["scene_windows"] = chars
+        if cfg.context.proofread:
+            want["proofread"] = chars
+        if cfg.context.reader_pass:
+            want["reader"] = chars
+        for st in PER_RUN_STAGES:
+            want[st] = chars
+    effort = {st: reasoning_label(reasoning_param(reasoning_setting(cfg, st))) for st in want}
+    rates = run_rates(conns, opts.model, cfg.openrouter.reasoning_effort, provider=cfg.openrouter.provider,
+                      per_stage=effort)
+    stages: dict[str, dict[str, Any]] = {}
+    core = ("translate", "scene_analyze", "memory_update")
+    if all(st in rates for st in core if st in want):
+        base_lo = sum(rates[st]["typical"] * want[st] for st in core if st in want)
+        base_hi = sum(rates[st]["high"] * want[st] for st in core if st in want) * HIGH_MARGIN
+    else:  # no history for this model: the token model's range for translating, reading and cutting scenes
+        base_lo, base_hi = cost_low, cost_high
+    for st, n in want.items():
+        if st in rates:
+            stages[st] = {"usd": round(rates[st]["typical"] * n, 4), "high_usd": round(rates[st]["high"] * n * HIGH_MARGIN, 4),
+                          "from": f"{rates[st]['runs']} earlier run(s)"}
+        elif st in core or (st == "scene_windows" and base_lo == cost_low):
+            continue  # in the token model's range
+        else:
+            share = SAMPLE_SHARE.get(f"{st}:{effort.get(st)}", SAMPLE_SHARE.get(st, 0.0))
+            stages[st] = {"usd": round(base_lo * share, 4), "high_usd": round(base_hi * share * UNCALIBRATED_HIGH, 4),
+                          "from": "sample share"}
+    if base_lo == cost_low and not all(st in rates for st in core if st in want):
+        stages["translate+read"] = {"usd": round(cost_low, 4), "high_usd": round(cost_high, 4), "from": "token model"}
+    return {"typical": round(sum(v["usd"] for v in stages.values()), 4),
+            "high": round(sum(v["high_usd"] for v in stages.values()), 4), "stages": stages}
+
+
+def _sizer(conn: sqlite3.Connection) -> Any:
+    """Characters of these paragraphs (cached per database)."""
+    text: dict[str, int] = {}
+
+    def size(ids: list[str]) -> int:
+        missing = [i for i in ids if i not in text]
+        for i in range(0, len(missing), 500):
+            part = missing[i:i + 500]
+            for uid, t in conn.execute(f"SELECT id, plain_text FROM units WHERE id IN ({','.join('?' * len(part))})", part):
+                text[uid] = len(match_text(t))
+        return sum(text.get(i, 0) for i in ids)
+    return size
+
+
+def run_rates(conns: list[sqlite3.Connection], model: str, effort: str | None, *, provider: str = "openrouter",
+              per_stage: dict[str, str | None] | None = None, min_chars: int = 5000,
+              recent: int = 10) -> dict[str, dict[str, Any]]:
+    """Cost per character of each step, run by run, from earlier requests with the same model and reasoning setting.
+    A step that reads paragraphs is divided by the characters it read; a once-a-run step by the characters the run
+    translated (only runs that read the book, so a proofreading-only rerun does not count as a book). Small runs are
+    left out (their fixed overhead per request makes a character look dear), and only the ``recent`` latest runs of
+    a step count (prompts change)."""
+    per: dict[str, list[tuple[str, float, float]]] = {}  # stage → [(run, cost, chars)]
+    seen: set[str] = set()  # a run is counted once (a copied workspace carries the same runs)
+    for conn in conns:
+        rows = conn.execute(
+            "SELECT run_id, stage, cost_usd, unit_ids_json, reasoning_effort FROM llm_requests WHERE model=? AND "
+            "status='succeeded' AND cost_status IN ('reported','reported_generation') AND cost_usd IS NOT NULL "
+            "AND run_id IN (SELECT id FROM runs WHERE "
+            "COALESCE(json_extract(config_json, '$.openrouter.provider'), 'openrouter') = ?)", (model, provider)).fetchall()
+        size = _sizer(conn)
+        runs: dict[str, dict[str, list[float]]] = {}
+        translated: dict[str, set[str]] = {}
+        for r in rows:
+            st = r["stage"].split(":")[0]
+            ids = json.loads(r["unit_ids_json"] or "[]")
+            if st == "translate":
+                translated.setdefault(r["run_id"], set()).update(ids)
+            if r["reasoning_effort"] != (per_stage or {}).get(st, effort):
+                continue
+            a = runs.setdefault(r["run_id"], {}).setdefault(st, [0.0, 0.0])
+            a[0] += float(r["cost_usd"])
+            a[1] += size(ids) if st in PER_CHAR_STAGES else 0
+        for run, by_stage in runs.items():
+            if run in seen:
+                continue
+            seen.add(run)
+            book = size(sorted(translated.get(run, set())))
+            read = "scene_analyze" in by_stage or "memory_update" in by_stage
+            for st, (cost, n) in by_stage.items():
+                if st in PER_CHAR_STAGES and n >= min_chars:
+                    per.setdefault(st, []).append((run, cost, n))
+                elif st not in PER_CHAR_STAGES and read and book >= min_chars:
+                    per.setdefault(st, []).append((run, cost, book))
+    out: dict[str, dict[str, Any]] = {}
+    for st, xs in per.items():
+        xs = sorted(xs)[-recent:]  # run ids begin with their start time
+        cost, n = sum(c for _, c, _ in xs), sum(k for _, _, k in xs)
+        out[st] = {"typical": cost / n, "high": max(c / k for _, c, k in xs), "runs": len(xs)}
+    return out
 
 
 def calibrate(conns: list[sqlite3.Connection], model: str, effort: str | None, *, min_requests: int = 3,

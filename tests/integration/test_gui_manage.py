@@ -87,7 +87,7 @@ def test_upload_import_translate_export_download(site, fixtures):
 
     bid = imp["book_id"]
     est = call(f"/api/book/{bid}/estimate", {})[1]
-    assert est["units"] > 0 and est["budget_usd"] == budget_for(est["estimate_usd"])
+    assert est["units"] > 0 and est["budget_usd"] == budget_for(est["high_usd"]) and est["high_usd"] >= est["estimate_usd"]
     assert call(f"/api/book/{bid}/run")[1]["run"] is None
     st, r = call(f"/api/book/{bid}/start", {})
     assert st == 200
