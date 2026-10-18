@@ -121,7 +121,7 @@ def test_the_second_look_does_not_ask_again_what_it_answered(conn, cfg, fixtures
 
     def verify(payload, req):
         asked.append([i["ref"] for i in payload["items"]])
-        return {"items": [{"ref": i["ref"], "answer": "unknown" if i["kind"] in ("speaker", "gender") else "same",
+        return {"items": [{"ref": i["ref"], "answer": "same" if i["kind"] == "merge" else "unknown",
                            "reason": "t"} for i in payload["items"]]}
 
     fake = FakeLLM(responders={**RESPONDERS, "scene_analyze": _analyze, "memory_update": _memory, "verify": verify})
@@ -132,3 +132,32 @@ def test_the_second_look_does_not_ask_again_what_it_answered(conn, cfg, fixtures
     run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "scene_analyze": _analyze,
                                                                "memory_update": _memory, "verify": verify}), mode="context")
     assert not ({r for refs in asked for r in refs} & first)
+
+
+def test_an_answer_that_cannot_be_applied_is_asked_again():
+    """An id not among the candidates, or a value the kind does not take, is not an answer."""
+    from ncte.analysis.verify import answer_valid
+
+    item = {"kind": "identity", "candidates": {"c_1": "米娜"}}
+    assert answer_valid(item, "c_1") and answer_valid(item, "unknown") and not answer_valid(item, "c_9")
+    assert not answer_valid({"kind": "narration"}, "second") and answer_valid({"kind": "gender"}, "female")
+
+
+def test_a_judgment_written_again_after_a_reread_is_asked_again(conn, cfg, fixtures):
+    """The second look dropped an inferred gender; reading the scene again writes the same guess back — it is new data
+    (a new version), so it is asked again rather than slipping through to translation."""
+    from ncte.analysis.verify import collect
+    from ncte.memory.db import utcnow
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "scene_analyze": _analyze,
+                                                                            "memory_update": _memory}), mode="context")
+    cid = conn.execute("SELECT id FROM characters WHERE canonical_name='ミナ'").fetchone()[0]
+    conn.execute("INSERT OR REPLACE INTO character_gender(character_id, gender, book_id, ordinal, evidence_quote, origin, "
+                 "updated_at, certainty) VALUES (?,?,?,?,?,?,?,?)", (cid, "female", book.id, 1, "q", "llm", "t1", "inferred"))
+    item = next(i for i in collect(conn, book.id) if i["ref"] == f"g:{cid}")
+    conn.execute("INSERT OR REPLACE INTO verify_answers(book_id, ref, fingerprint, answer, created_at) VALUES (?,?,?,?,?)",
+                 (book.id, item["ref"], item["_fp"], "unknown", utcnow()))
+    assert not [i for i in collect(conn, book.id) if i["ref"] == f"g:{cid}"]  # answered, unchanged
+    conn.execute("UPDATE character_gender SET updated_at='t2' WHERE character_id=?", (cid,))  # written again
+    assert [i for i in collect(conn, book.id) if i["ref"] == f"g:{cid}"]
+

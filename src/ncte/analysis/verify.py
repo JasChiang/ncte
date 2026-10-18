@@ -63,7 +63,8 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
         spread = hits if len(hits) <= 5 else [hits[i * (len(hits) - 1) // 4] for i in range(5)]
         items.append({"ref": f"g:{c['id']}", "kind": "gender", "character": names.get(c["id"], c["canonical_name"]),
                       "first_answer": g["gender"], "evidence": g["evidence_quote"],
-                      "samples": [match_text(r["plain_text"])[:160] for r in spread]})
+                      "samples": [match_text(r["plain_text"])[:160] for r in spread],
+                      "_version": f"{g['updated_at']}|{g['certainty']}|{g['origin']}"})  # a gender written again is new
     for link in conn.execute("SELECT * FROM entity_links WHERE book_id=? AND origin='scene_analysis' AND "
                              "status='accepted' AND form_type='official'", (book_id,)):
         c = conn.execute("SELECT * FROM characters WHERE book_id=? AND canonical_name=?",
@@ -78,7 +79,7 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
             continue
         items.append({"ref": f"m:{c['id']}", "kind": "merge", "name": c["canonical_name"], "merged_forms": others,
                       "context": _window(conn, book_id, link["revealed_ordinal"] or c["known_from_ordinal"]),
-                      "_ordinal": link["revealed_ordinal"]})
+                      "_ordinal": link["revealed_ordinal"], "_version": f"{link['id']}|{c['updated_at']}"})
     for sc in conn.execute("SELECT * FROM scenes WHERE book_id=? AND state_json LIKE '%\"check\": \"conflict\"%' "
                            "ORDER BY seq", (book_id,)):
         narr = json.loads(sc["state_json"]).get("narration") or {}
@@ -87,27 +88,49 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
         paras = [match_text(r["plain_text"])[:140] for r in conn.execute(
             "SELECT plain_text FROM units WHERE book_id=? AND scene_id=? AND kind='text' ORDER BY ordinal LIMIT 40",
             (book_id, sc["id"])) if not r[0].lstrip(" 　").startswith(("「", "『"))][:12]
-        items.append({"ref": f"n:{sc['id']}", "kind": "narration", "first_answer": narr["person"], "paragraphs": paras})
-    # the few of each other kind first, then the lines, so many lines never push the rest out
-    speakers = [i for i in items if i["kind"] == "speaker"]
-    others = [i for i in items if i["kind"] != "speaker"]
-    items = (others + speakers)[:MAX_ITEMS]
-    items += narrator_items(conn, book_id, names)
-    items += identity_items(conn, book_id, names)
-    # an item answered before with the same content is not asked again (asking until the model agrees adds nothing)
+        items.append({"ref": f"n:{sc['id']}", "kind": "narration", "first_answer": narr["person"], "paragraphs": paras,
+                      "_version": str(sc["version"])})  # a scene read again is asked again
+    # an item answered before with the same content and the same version of its data is not asked again (asking until
+    # the model agrees adds nothing); a gender written again, a scene read again, a changed card are asked again
     answered = {r[0]: r[1] for r in conn.execute("SELECT ref, fingerprint FROM verify_answers WHERE book_id=?", (book_id,))}
-    out = []
-    for i in items:
-        i["_fp"] = fingerprint(i)
-        if i["kind"] == "speaker" or answered.get(i["ref"]) != i["_fp"]:
-            out.append(i)
-    return out
+
+    def fresh(group: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out = []
+        for i in group:
+            i["_fp"] = fingerprint(i)
+            if i["kind"] == "speaker" or answered.get(i["ref"]) != i["_fp"]:
+                out.append(i)
+        return out
+
+    # the few of each other kind first, then the lines, so many lines never push the rest out
+    items = fresh([i for i in items if i["kind"] != "speaker"] + [i for i in items if i["kind"] == "speaker"])[:MAX_ITEMS]
+    items += fresh(narrator_items(conn, book_id, names))
+    items += fresh(identity_items(conn, book_id, names))
+    return items
+
+
+def answer_valid(item: dict[str, Any], answer: str) -> bool:
+    """An answer that can be applied (or a plain "unknown"): only these count as answered; an id not among the
+    candidates or a value the kind does not take is asked again next time."""
+    kind = item["kind"]
+    cands = set(item.get("candidates") or {})
+    if answer == "unknown":
+        return True
+    if kind == "gender":
+        return answer in ("female", "male")
+    if kind == "merge":
+        return answer in ("same", "different", "unsure")
+    if kind == "narration":
+        return answer in ("first", "third", "unclear")
+    if kind == "group":
+        return (answer.startswith("same:") and answer[5:] in cands) or all(x.strip() in cands for x in answer.split(","))
+    return answer in cands  # speaker, identity, narrator
 
 
 def fingerprint(item: dict[str, Any]) -> str:
     import hashlib
 
-    seen = {k: v for k, v in item.items() if not k.startswith("_")}
+    seen = {k: v for k, v in item.items() if not k.startswith("_")} | {"_version": item.get("_version")}
     return hashlib.sha1(json.dumps(seen, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -191,7 +214,7 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
     from ..memory.db import utcnow as _now
 
     for a in parsed.items:
-        if (seen := by_ref.get(a.ref)) is not None and seen.get("_fp"):
+        if (seen := by_ref.get(a.ref)) is not None and seen.get("_fp") and answer_valid(seen, a.answer.strip()):
             conn.execute("INSERT OR REPLACE INTO verify_answers(book_id, ref, fingerprint, answer, created_at) VALUES "
                          "(?,?,?,?,?)", (book_id, a.ref, seen["_fp"], a.answer.strip()[:120], _now()))
         item = by_ref.get(a.ref)

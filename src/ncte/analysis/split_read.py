@@ -55,8 +55,9 @@ def even_parts(units: list[dict[str, Any]], size: int) -> list[list[str]]:
     n = -(-len(ids) // size)
     cuts: list[int] = []
     for k in range(1, n):
-        t = k * len(ids) // n
-        lo = (cuts[-1] if cuts else 0) + 1
+        start = cuts[-1] if cuts else 0
+        t = start + (len(ids) - start) // (n - k + 1)  # even over what is left after the cuts made so far
+        lo = start + 1
         near = sorted(range(max(lo, t - QUIET_REACH), min(len(ids) - 1, t + QUIET_REACH) + 1), key=lambda j: abs(j - t))
         j = next((j for j in near if quiet(j)), next((j for j in near if free(j)), t))
         if j > lo - 1:

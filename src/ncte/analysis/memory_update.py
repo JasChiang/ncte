@@ -270,7 +270,9 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         # take that away
         before = conn.execute("SELECT usage FROM address_usage WHERE speaker_id=? AND addressee_id=? AND form_ja=?",
                               (row["speaker_id"], row["addressee_id"], row["form_ja"])).fetchone()
-        if not (before is not None and before[0] == "address" and usage == "mention"):
+        elsewhere = conn.execute("SELECT 1 FROM address_observations o JOIN utterances ut ON ut.id=o.utterance_id WHERE "
+                                 "o.address_id=? AND COALESCE(ut.scene_id,'')!=? LIMIT 1", (rid, sid)).fetchone()
+        if not (before is not None and before[0] == "address" and usage == "mention" and elsewhere):
             set_usage(conn, book_id, row, usage, at.note or "read with the scene", origin="llm")
         stats["address_terms"] += 1
 

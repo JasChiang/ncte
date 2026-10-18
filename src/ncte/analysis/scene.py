@@ -510,13 +510,14 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     narrator_id: str | None = None
     narrator_forms: set[str] = set()
     if parsed is not None and parsed.narration is not None and parsed.narration.person == "first":
-        from .narration import established_self_forms
+        from .narration import established_self_forms, settle_self_forms
 
         narrator_id = ref_map.get(parsed.narration.narrator_ref or "")
         if narrator_id:
-            narrator_forms = {f.ja.strip() for f in parsed.narration.self_forms if f.ja.strip()}
-            narrator_forms |= {str(e["ja"]) for e in established_self_forms(conn, book_id, scene["seq"])
-                               if e["narrator_ref"] == narrator_id and e["ja"]}
+            earlier = established_self_forms(conn, book_id, scene["seq"])
+            narrator_forms = {f["ja"] for f in settle_self_forms([f.model_dump() for f in parsed.narration.self_forms],
+                                                                 narrator_id, earlier, rows) if f.get("ja")}
+            narrator_forms |= {str(e["ja"]) for e in earlier if e["narrator_ref"] == narrator_id and e["ja"]}
 
     def names_for(cid: str) -> set[str]:
         names = {n for n, i in amap.items() if i == cid} | set(names_of.get(cid, []))
@@ -534,30 +535,14 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         if root is not q:
             rest_of.setdefault((root.unit_id, root.index), []).append(q.unit_id)
 
-    in_unit: dict[str, list[Quote]] = {}
-    for x in quotes:
-        in_unit.setdefault(x.unit_id, []).append(x)
     all_names = [*amap, *(n for ns in names_of.values() for n in ns)]
 
-    def own_narration(q: Quote) -> str:
-        """The narration of the line's own paragraph that belongs to it: from the line before it (or the paragraph's
-        start) to the line after it (or the end) — 「おはよう」とミナが言い、「おう」とレドが答えた: 「とミナが言い」 is the
-        first line's, not the second's."""
-        t = texts[position[q.unit_id]].text
-        lines = sorted(in_unit[q.unit_id], key=lambda x: x.start)
-        k = lines.index(q)
-        lo = lines[k - 1].end if k else 0
-        hi = lines[k + 1].start if k + 1 < len(lines) else len(t)
-        before = t[lo:q.start]
-        if k and before.lstrip(" 　").startswith("と"):  # 「…」とミナが言い、: the quotative と ties it to the line before
-            before = ""
-        return _QUOTED.sub("", before) + "\0" + _QUOTED.sub("", t[q.end:hi])
-
     def tag_ok_for(q: Quote) -> Any:
-        # the line's own narration, or the paragraph before / after when it is narration only: a paragraph with a
-        # line of its own (「…」とミナが言った) tells who says that line, not this one
+        # the line's own paragraph (its narration, what is said taken out), or the paragraph before / after when it is
+        # narration only. Which line in a paragraph the words belong to is the model's reading, not the program's
+        # (ADR-059: the program checks the words are there and name the speaker; it does not parse Japanese)
         i = position[q.unit_id]
-        near = [own_narration(q)] + [told[j] for j in (i - 1, i + 1) if 0 <= j < len(texts) and texts[j].id not in has_quote]
+        near = [told[i]] + [told[j] for j in (i - 1, i + 1) if 0 <= j < len(texts) and texts[j].id not in has_quote]
         rest = rest_of.get((q.unit_id, q.index), [])
         if rest:  # the speech's later paragraphs, and narration right after where it ends
             last = position[rest[-1]]

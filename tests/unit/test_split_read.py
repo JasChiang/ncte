@@ -103,3 +103,12 @@ def test_a_later_part_keeps_what_it_says_about_the_person():
     m = merge_outputs([a, b]).new_characters
     assert len(m) == 1 and [(k.ja, k.kind) for k in m[0].alias_kinds] == [("少女", "common")]
     assert m[0].same_as_ref == "c_hood" and m[0].group
+
+
+def test_even_parts_stay_even():
+    """Each cut re-balances what is left: 40 paragraphs in parts of about 10 are four parts of about the same size."""
+    from ncte.analysis.split_read import even_parts
+
+    src = [f"　地の文{i}。" if i % 5 in (0, 1) else f"「台詞{i}」" for i in range(40)]
+    sizes = [len(p) for p in even_parts([{"unit_id": f"u{i}", "source": t} for i, t in enumerate(src)], 10)]
+    assert len(sizes) == 4 and sum(sizes) == 40 and max(sizes) - min(sizes) <= 6

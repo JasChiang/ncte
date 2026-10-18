@@ -307,6 +307,10 @@ class ContextOrchestrator(Orchestrator):
         if not due:
             return {}
         stats = review_scope(self, due, any_run=True)
+        with self.lock:  # nothing left to review on them now (no flag any more): not pending for ever
+            self.conn.executemany("UPDATE jobs SET status='skipped', updated_at=? WHERE book_id=? AND stage='review' AND "
+                                  "target_id=? AND run_id!=? AND status IN ('pending','running')",
+                                  [(utcnow(), self.book.id, u, self.run_id) for u in due])
         self.log(f"  review left by an earlier run: {stats}")
         return stats
 
@@ -831,7 +835,7 @@ class ContextOrchestrator(Orchestrator):
                     pl["part_before"] = [{"unit_id": u, "source": src[u].get("source", "")} for u in before[-PART_BEFORE:]]
                 if (p := self._read_parts(stage, prompt, pl, blocked)) is not None:
                     parts.append(p)
-                before = keep
+                before = [u for u in keep if u not in blocked]  # a refused paragraph is not shown again
             parsed = merge_outputs(parts) if parts else None
         else:
             parsed = self._read_parts(stage, prompt, payload, blocked)
@@ -852,8 +856,15 @@ class ContextOrchestrator(Orchestrator):
                 blocked.extend(ids)
                 return None
         half = len(ids) // 2
-        parts = [p for keep in (ids[:half], ids[half:])
-                 if (p := self._read_parts(stage, prompt, subset_payload(payload, keep), blocked)) is not None]
+        src = {u["unit_id"]: u for u in payload["units"]}
+        parts = []
+        for k, keep in enumerate((ids[:half], ids[half:])):
+            pl = subset_payload(payload, keep)
+            if k and "part_before" in payload:  # the second half of a part: what comes right before it is the first half
+                prior = [u for u in ids[:half] if u not in blocked][-PART_BEFORE:]
+                pl["part_before"] = [{"unit_id": u, "source": src[u].get("source", "")} for u in prior]
+            if (p := self._read_parts(stage, prompt, pl, blocked)) is not None:
+                parts.append(p)
         return merge_outputs(parts) if parts else None
 
     def stage_scene_analyze(self, sid: str) -> None:

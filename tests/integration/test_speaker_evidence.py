@@ -72,18 +72,31 @@ def test_a_speech_over_paragraphs_is_stated_where_it_ends(conn, cfg, tmp_path):
     assert all(st == "explicit" for st in got.values())  # the rest of the speech follows its first line
 
 
-def test_a_line_cannot_borrow_the_tag_of_another_line_in_its_paragraph(conn, cfg, tmp_path):
-    """「おはよう」とミナが言い、「おう」とレドが答えた: 「とミナが言い」 belongs to the first line, not the second."""
+def test_a_tag_around_the_line_states_it(conn, cfg, tmp_path):
+    """ミナは「行くよ」と言った: the words on both sides of the line state it (the check reads the paragraph with what
+    is said taken out: 「ミナはと言った」)."""
+    lines = ["　朝の教室。", "　ミナは「行くよ」と言った。"]
+
+    def answer(units, q):
+        k = next(k for k in q if k[0] == units[lines[1]])
+        return [_said(k, "new_1", "ミナは「行くよ」と言った")], [_new("new_1", "ミナ", units[lines[1]])], None
+
+    assert _read(conn, cfg, tmp_path, lines, answer)["「行くよ」"] == "explicit"
+
+
+def test_which_line_of_a_paragraph_a_tag_belongs_to_is_the_models_reading(conn, cfg, tmp_path):
+    """「おはよう」とミナが言い、「おう」とレドが答えた: the program does not parse which line the words belong to
+    (ADR-059); a model that gives the first line's tag for the second is caught by the sampling and the proofreading,
+    not by a rule about Japanese."""
     lines = ["　朝の教室。", "「おはよう」とミナが言い、「おう」とレドが答えた。"]
 
     def answer(units, q):
         ks = sorted(k for k in q if k[0] == units[lines[1]])
-        return ([_said(ks[0], "new_1", "とミナが言い"), _said(ks[1], "new_1", "とミナが言い")],
-                [_new("new_1", "ミナ", units[lines[1]])], None)
+        return ([_said(ks[0], "new_1", "とミナが言い"), _said(ks[1], "new_2", "とレドが答えた")],
+                [_new("new_1", "ミナ", units[lines[1]]), _new("new_2", "レド", units[lines[1]])], None)
 
     got = _read(conn, cfg, tmp_path, lines, answer)
-    assert got["「おはよう」"] == "explicit" and got["「おう」"] == "inferred"
-
+    assert got["「おはよう」"] == "explicit" and got["「おう」"] == "explicit"
 
 def test_a_longer_name_does_not_name_someone_shorter(conn, cfg, tmp_path):
     """「…」とミナミが言った does not state that ミナ said it (ミナミ is someone else)."""
