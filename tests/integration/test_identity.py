@@ -301,3 +301,29 @@ def test_a_gender_revealed_later_is_not_shown_for_an_earlier_stretch(conn, cfg, 
     after = [{"ja": u["plain_text"], "_who": [u["sp"]], "_at": late + 1}]
     assert gender_of(proofread.cast(conn, book.id, after), late + 1) == "male"
     assert gender_of(reader.characters(conn, book.id, late + 1), late + 1) == "male"
+
+
+def test_an_impression_in_stretches_gives_each_scene_the_voice_of_its_time(conn, cfg, fixtures):
+    """ADR-060: a character whose way of speaking changes has two stretches; a scene before the change gets the first,
+    one after it the second; personality and role wait for the evidence they rest on; proofreading lists the card once."""
+    from ncte.analysis import impressions, proofread
+    from ncte.llm.schemas import ImpressionsOutput
+    from ncte.memory.repository import impression_at
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    req, lk = impressions.requests(conn, book.id)[0]
+    c = next(x for x in req["characters"] if len(x["lines"]) >= 2)
+    early, late = c["lines"][0], c["lines"][-1]
+    parsed = ImpressionsOutput.model_validate({"impressions": [
+        {"ref": c["ref"], "personality": "early", "voice": "冷淡", "role": "r1", "evidence": [early["ref"]]},
+        {"ref": c["ref"], "personality": "late", "voice": "開朗", "role": "r2", "evidence": [late["ref"]],
+         "from": late["ref"]}]})
+    impressions.apply(conn, book.id, [(parsed, lk)])
+    cid = lk["_chars"][c["ref"]]
+    assert impression_at(conn, cid, early["at"])["voice"] == "冷淡"
+    assert impression_at(conn, cid, late["at"])["voice"] == "開朗"
+    assert "personality" not in impression_at(conn, cid, late["at"] - 1) or impression_at(conn, cid, late["at"] - 1)["voice"] == "冷淡"
+    part = [{"ja": early["text"], "_who": [cid], "_at": early["at"]}]
+    cards = [x for x in proofread.cast(conn, book.id, part) if x.get("ja") == conn.execute(
+        "SELECT canonical_name FROM characters WHERE id=?", (cid,)).fetchone()[0]]
+    assert len(cards) == 1 and cards[0].get("voice") == "冷淡"

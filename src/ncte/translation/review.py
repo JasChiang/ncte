@@ -219,7 +219,8 @@ def _lines(conn: sqlite3.Connection, unit_id: str) -> list[str]:
     """Each line of the unit as read: 「speaker → listener」, an inference marked （推測）."""
     from ..memory.visibility import visible_names
 
-    rows = conn.execute("SELECT u.speaker_id_nullable sp, u.status, u.addressee_ids_json to_ FROM utterances u "
+    rows = conn.execute("SELECT u.speaker_id_nullable sp, u.status, u.addressee_ids_json to_, u.addressee_status ts "
+                        "FROM utterances u "
                         "WHERE u.unit_id=? ORDER BY u.quote_index", (unit_id,)).fetchall()
     if not rows:
         return []
@@ -233,7 +234,7 @@ def _lines(conn: sqlite3.Connection, unit_id: str) -> list[str]:
         who = names.get(r["sp"], "？") if r["sp"] else "？"
         to = "、".join(names.get(x, "？") for x in json.loads(r["to_"] or "[]"))
         guess = "" if r["status"] in ("explicit", "human_verified") else "（推測）"
-        out.append(f"{who}{guess}" + (f" → {to}（推測）" if to else ""))
+        out.append(f"{who}{guess}" + (f" → {to}" + ("" if r["ts"] == "explicit" else "（推測）") if to else ""))
     return out
 
 

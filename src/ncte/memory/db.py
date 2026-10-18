@@ -644,6 +644,31 @@ CREATE TABLE verify_answers (
     PRIMARY KEY (book_id, ref)
 );
 """),
+    (29, "how sure who a line is said to is (the text says so, or read from the scene)", """
+ALTER TABLE utterances ADD COLUMN addressee_status TEXT;
+"""),
+    (30, "a character's impression in stretches: from where it holds, in which time, up to which evidence (ADR-060)", """
+CREATE TABLE character_impressions_by_stretch (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    character_id TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    since_ordinal INTEGER NOT NULL DEFAULT 0,
+    period TEXT,
+    personality TEXT NOT NULL,
+    voice TEXT NOT NULL,
+    role TEXT NOT NULL,
+    evidence_json TEXT NOT NULL,
+    revealed_ordinal INTEGER NOT NULL DEFAULT 0,
+    run_id TEXT,
+    updated_at TEXT NOT NULL
+);
+INSERT INTO character_impressions_by_stretch(character_id, book_id, personality, voice, role, evidence_json, run_id,
+    updated_at) SELECT character_id, book_id, personality, voice, role, evidence_json, run_id, updated_at
+    FROM character_impressions;
+DROP TABLE character_impressions;
+ALTER TABLE character_impressions_by_stretch RENAME TO character_impressions;
+CREATE INDEX idx_impressions_character ON character_impressions(character_id, since_ordinal);
+"""),
 ]
 
 

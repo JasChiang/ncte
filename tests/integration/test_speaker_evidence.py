@@ -108,3 +108,35 @@ def test_a_longer_name_does_not_name_someone_shorter(conn, cfg, tmp_path):
                 [_new("new_1", "ミナ", units[lines[0]]), _new("new_2", "ミナミ", units[lines[0]])], None)
 
     assert _read(conn, cfg, tmp_path, lines, answer)["「行こう」"] == "inferred"
+
+
+def test_how_sure_who_a_line_is_said_to_reaches_the_translator(conn, cfg, tmp_path):
+    """「ミナ、行くぞ」 (called by name): said to ミナ, stated. 「急げ」: said to her, read from the scene — the translator is
+    told it is inferred (他／她、你／妳 only when the passage supports it)."""
+    lines = ["　俺とミナは森にいた。", "「ミナ、行くぞ」と俺は言った。", "「急げ」と俺は言った。"]
+    seen: list = []
+
+    def analyze(payload, req):
+        units = {u["source"]: u["unit_id"] for u in payload["units"]}
+        q = {(x["unit_id"], x["quote_index"]): x for x in payload["quotes"]}
+        k1 = next(k for k in q if k[0] == units[lines[1]])
+        k2 = next(k for k in q if k[0] == units[lines[2]])
+        utts = [{**_said(k1, "new_1", "と俺は言った"), "to": ["new_2"], "to_status": "explicit"},
+                {**_said(k2, "new_1", "と俺は言った"), "to": ["new_2"], "to_status": "inferred"}]
+        return {"pov": None, "location": None, "time": None, "participants": [], "actions": [], "props": [],
+                "uncertainties": [], "utterances": utts,
+                "new_characters": [_new("new_1", "レド", units[lines[0]]), _new("new_2", "ミナ", units[lines[0]])],
+                "narration": {"person": "first", "narrator_ref": "new_1", "focal_ref": None, "evidence_unit_ids": [],
+                              "self_forms": [{"ja": "俺", "zh": "我"}]}}
+
+    def translate(payload, req):
+        seen.extend(payload.get("scene", {}).get("utterances", []))
+        from ncte.llm.fake import default_translate
+        return default_translate(payload, req)
+
+    run_book(conn, cfg, small_book(tmp_path, lines), FakeLLM(responders={"scene_analyze": analyze, "translate": translate}),
+             mode="context")
+    got = {r["quote_text"]: r["addressee_status"] for r in conn.execute("SELECT quote_text, addressee_status FROM utterances")}
+    assert got["「ミナ、行くぞ」"] == "explicit" and got["「急げ」"] == "inferred"
+    certainty = {u["quote"]: u.get("to_certainty") for u in seen if u.get("to")}
+    assert certainty["「ミナ、行くぞ」"] is None and certainty["「急げ」"] == "inferred"

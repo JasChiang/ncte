@@ -79,6 +79,8 @@ class UtteranceAnalysis(_M):
     speaker_ref: str | None = Field(alias="speaker")
     contradictions: list[str] = Field(alias="conflicts")
     listener_refs: list[str] = Field(default_factory=list, alias="to")  # who the line is said to
+    # how sure who it is said to is: explicit (the text says so — called by name, 「ミナに言った」) or inferred
+    listener_status: Literal["explicit", "inferred"] = Field(default="inferred", alias="to_status")
     # for an explicit speaker: the words of the text that say who speaks (「とミナは言った」), checked verbatim
     speech_tag: str = Field(default="", alias="tag")
 
@@ -109,11 +111,16 @@ class SelfForm(_M):
 
 
 class ImpressionOut(_M):
+    """One stretch of a character's impression (ADR-060): usually one per character; several when the way of speaking
+    or the personality clearly changes (growth, a disguise dropped, another time of their life)."""
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
     ref: str
     personality: str  # 個性
     voice: str  # 說話口吻（翻譯時參考）
     role: str  # 在故事裡的定位
     evidence: list[str]  # refs of the lines / facts it rests on
+    since: str = Field(default="", alias="from")  # the line / fact ref from which this stretch holds (empty: the first)
+    period: str = ""  # another time of their life this describes (前世, 三年前); empty: the story's present
 
 
 class ImpressionsOutput(_M):

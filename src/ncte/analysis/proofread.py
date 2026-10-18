@@ -78,9 +78,10 @@ def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> 
     start = min((p["_at"] for p in part if "_at" in p), default=None)
     habits = load_style(conn, book_id).voices  # the house style's speech habits (ADR-053), by Japanese name
     out = []
-    for c in conn.execute("SELECT c.*, g.gender, i.voice FROM characters c LEFT JOIN character_gender g ON "
-                          "g.character_id=c.id LEFT JOIN character_impressions i ON i.character_id=c.id WHERE c.book_id=?",
-                          (book_id,)):
+    from ..memory.repository import impression_at
+
+    for c in conn.execute("SELECT c.*, g.gender FROM characters c LEFT JOIN character_gender g ON g.character_id=c.id "
+                          "WHERE c.book_id=?", (book_id,)):
         forms = [c["canonical_name"], *json.loads(c["aliases_json"] or "[]")]
         if c["id"] not in ids and not any(f and len(f) >= 2 and f in text for f in forms):
             continue
@@ -94,8 +95,8 @@ def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> 
         basics = view if view is not None else character_basics(
             conn, c["id"], pos(conn, book_id, max(p["_at"] for p in part)) if start is not None else None)
         item.update({k: basics[k] for k in ("gender", "narrator") if k in basics})
-        if c["voice"]:
-            item["voice"] = c["voice"]
+        if imp := impression_at(conn, c["id"], start):  # the way of speaking in force where the stretch begins
+            item["voice"] = imp["voice"]
         if habits.get(c["canonical_name"]):
             item["habits"] = habits[c["canonical_name"]]
         out.append(item)

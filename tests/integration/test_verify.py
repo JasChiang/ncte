@@ -161,3 +161,12 @@ def test_a_judgment_written_again_after_a_reread_is_asked_again(conn, cfg, fixtu
     conn.execute("UPDATE character_gender SET updated_at='t2' WHERE character_id=?", (cid,))  # written again
     assert [i for i in collect(conn, book.id) if i["ref"] == f"g:{cid}"]
 
+
+
+def test_a_new_card_elsewhere_does_not_reopen_identity_questions():
+    from ncte.analysis.verify import fingerprint
+
+    item = {"ref": "i:c1", "kind": "identity", "name": "姊姊", "context": ["…"], "called_by": [], "candidates": {"c2": "高木"}}
+    more = {**item, "candidates": {"c2": "高木", "c3": "新角色"}}
+    assert fingerprint(item) == fingerprint(more)
+    assert fingerprint(item) != fingerprint({**item, "called_by": ["高木：姉ちゃん"]})  # its own material changed

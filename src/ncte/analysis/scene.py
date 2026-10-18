@@ -583,7 +583,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             claims[key] = LlmClaim(ref_map[sref] if sref else None, ua.resolution_status, cands,
                                    [x[:200] for x in ua.contradictions],
                                    [ref_map[x] for x in ua.listener_refs if x in ref_map and ref_map[x] != ref_map.get(sref or "")],
-                                   ua.speech_tag[:80])
+                                   ua.speech_tag[:80], ua.listener_status)
         for p in parsed.participants:
             if p.character_ref in ref_map:
                 participants.append({"character_id": ref_map[p.character_ref], "presence": p.presence,
@@ -622,16 +622,17 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         conn.execute(
             "INSERT INTO utterances(id, book_id, unit_id, scene_id, quote_index, quote_start, quote_end, quote_text, "
             "continuation_of, speaker_id_nullable, status, resolution_source, notes_json, analysis_version, updated_at, "
-            "addressee_ids_json) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET scene_id=excluded.scene_id, "
-            "addressee_ids_json=excluded.addressee_ids_json, "
+            "addressee_ids_json, addressee_status) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET scene_id=excluded.scene_id, "
+            "addressee_ids_json=excluded.addressee_ids_json, addressee_status=excluded.addressee_status, "
             "quote_start=excluded.quote_start, quote_end=excluded.quote_end, quote_text=excluded.quote_text, "
             "continuation_of=excluded.continuation_of, speaker_id_nullable=excluded.speaker_id_nullable, "
             "status=excluded.status, resolution_source=excluded.resolution_source, notes_json=excluded.notes_json, "
             "analysis_version=excluded.analysis_version, updated_at=excluded.updated_at",
             (utt_id, book_id, q.unit_id, sid, q.index, q.start, q.end, q.text, cont, res.speaker_id, res.status,
              res.source, json.dumps(res.notes, ensure_ascii=False), version, utcnow(),
-             json.dumps(claims[uid_key].listeners if uid_key in claims else [])))
+             json.dumps(claims[uid_key].listeners if uid_key in claims else []),
+             claims[uid_key].listener_status if uid_key in claims and claims[uid_key].listeners else None))
         conn.execute("DELETE FROM speaker_hypotheses WHERE utterance_id=?", (utt_id,))
         for cand in res.candidates:
             conn.execute("INSERT INTO speaker_hypotheses(utterance_id, candidate_character_id, evidence_json, source, "

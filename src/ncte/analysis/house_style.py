@@ -99,10 +99,15 @@ def request(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, Any], dic
             if (t := best.get(uid)) is not None:
                 line["zh"] = PH_RE.sub("", t["text"]).strip()[:120]  # the paragraph as translated now
             lines.append(line)
-        imp = conn.execute("SELECT voice FROM character_impressions WHERE character_id=?", (c["id"],)).fetchone()
+        from ..memory.repository import impressions_of
+
+        # the whole book's view (a style for the book): every stretch, with where it holds from
+        stretches = impressions_of(conn, c["id"])
+        voice = "；".join((f"〔{s['period']}〕" if s["period"] else f"〔§{s['since_ordinal']}起〕" if len(stretches) > 1 else "")
+                         + s["voice"] for s in stretches)
         refs[f"c{k}"] = c["id"]
         items.append({"ref": f"c{k}", "name": c["display_name_zh"] or c["canonical_name"], "ja": c["canonical_name"],
-                      **character_basics(conn, c["id"]), **({"voice": imp[0]} if imp and imp[0] else {}), "lines": lines,
+                      **character_basics(conn, c["id"]), **({"voice": voice} if voice else {}), "lines": lines,
                       "repeated_endings": endings([q for q, _ in said])})
     counted: dict[str, int] = {}
     for a in conn.execute("SELECT * FROM address_terms WHERE book_id=?", (book_id,)):

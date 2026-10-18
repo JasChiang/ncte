@@ -304,6 +304,32 @@ def relation_guess(r: Any) -> str:
     return "（推測）" if r["certainty"] == "inferred" else ""
 
 
+def impressions_of(conn: sqlite3.Connection, character_id: str) -> list[sqlite3.Row]:
+    """A character's impression stretches, in story order (ADR-060)."""
+    return conn.execute("SELECT * FROM character_impressions WHERE character_id=? ORDER BY since_ordinal, id",
+                        (character_id,)).fetchall()
+
+
+def impression_at(conn: sqlite3.Connection, character_id: str, upto: int | None) -> dict[str, Any] | None:
+    """The impression in force at ``upto`` (None: after the book): the latest stretch of the story's present begun by
+    then — or the earliest, as the way of speaking to start from, before any has begun. Personality and role only once
+    the evidence they rest on is reached (what they say may come later in the story). A stretch about another time is
+    given with that time, once begun."""
+    rows = impressions_of(conn, character_id)
+    if not rows:
+        return None
+    now = [r for r in rows if not r["period"]]
+    begun = [r for r in now if upto is None or r["since_ordinal"] <= upto]
+    r = begun[-1] if begun else (now[0] if now else rows[0])
+    out: dict[str, Any] = {"voice": r["voice"]}
+    if upto is None or r["revealed_ordinal"] <= upto:
+        out.update(personality=r["personality"], role=r["role"])
+    other = [x for x in rows if x["period"] and (upto is None or x["since_ordinal"] <= upto)]
+    if other:
+        out["other_times"] = [f"〔{x['period']}〕{x['voice']}" for x in other]
+    return out
+
+
 def pair_relations(conn: sqlite3.Connection, book_id: str, a: str, b: str, names: dict[str, str]) -> list[str]:
     """How two people are related, as read (「席爾法德是艾恩的祖父」), for tasks that render how one addresses the other."""
     out = []

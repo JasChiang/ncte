@@ -84,8 +84,14 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             card["gender"] = v["gender"]
         if v.get("narrator"):
             card["narrator"] = True
-        if imp := conn.execute("SELECT voice FROM character_impressions WHERE character_id=?", (c["id"],)).fetchone():
-            card["voice"] = imp[0]  # how this character talks (ADR-045); never the place in the story (no reveals)
+        from .repository import impression_at
+
+        # how this character talks as of this scene (ADR-045, ADR-060: the stretch in force here; never the place in the
+        # story — no reveals)
+        if imp := impression_at(conn, c["id"], scene["end_ordinal"]):
+            card["voice"] = imp["voice"]
+            if imp.get("other_times"):
+                card["voice_other_times"] = imp["other_times"]
         present.append(card)
     # relations among the people of this scene, as the story has shown them so far (ADR-039): how they talk to each other
     ids = {c["character_id"] for c in present}
@@ -112,6 +118,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
         to = [names[x] for x in json.loads(u["addressee_ids_json"] or "[]") if x in names]
         if to:  # who the line is said to: 你 or 妳 follows that person, not the last woman mentioned
             item["to"] = to
+            if (u["addressee_status"] if "addressee_status" in u.keys() else None) != "explicit":
+                item["to_certainty"] = "inferred"  # read from the scene, not stated
         utts.append(item)
     actions = [a for a in state.get("actions", []) if a.get("unit_id") in batch_ids]
     for a in actions:

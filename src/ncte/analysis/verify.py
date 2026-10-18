@@ -131,6 +131,11 @@ def fingerprint(item: dict[str, Any]) -> str:
     import hashlib
 
     seen = {k: v for k, v in item.items() if not k.startswith("_")} | {"_version": item.get("_version")}
+    if item.get("kind") in ("identity", "group", "narrator"):
+        # the card's own material, not the list of every other card (a new card elsewhere is no reason to ask again;
+        # a name revealed later reaches the card through the reveal and the merge, not through this question)
+        seen.pop("candidates", None)
+        seen.pop("narrators_of_other_first_person_scenes", None)
     return hashlib.sha1(json.dumps(seen, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:16]
 
 

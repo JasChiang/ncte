@@ -56,6 +56,7 @@ class LlmClaim:
     contradictions: list[str] = field(default_factory=list)
     listeners: list[str] = field(default_factory=list)  # character ids the line is said to
     tag: str = ""  # the words of the text that say who speaks (for ``explicit``)
+    listener_status: str = "inferred"  # how sure ``listeners`` is (the model's reading)
 
 
 TO_LOOK_AT = "(to look at)"  # the second look (verify) reads these lines again with the text around them

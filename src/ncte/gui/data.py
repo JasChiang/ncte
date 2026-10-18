@@ -288,10 +288,17 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
                     "info": cv == here and info(c["known_from_ordinal"])}  # earlier volumes: never book matter here
         if c["is_narrator"]:
             out[cid]["narrator"] = True
-        imp = conn.execute("SELECT * FROM character_impressions WHERE character_id=?", (cid,)).fetchone()
-        if imp is not None:
-            out[cid]["impression"] = {"personality": imp["personality"], "voice": imp["voice"], "role": imp["role"],
+        from ..memory.repository import impressions_of
+
+        stretches = impressions_of(conn, cid)
+        if stretches:
+            imp = [s for s in stretches if not s["period"]][-1:] or stretches[-1:]
+            out[cid]["impression"] = {"personality": imp[0]["personality"], "voice": imp[0]["voice"], "role": imp[0]["role"],
                                       **_read_range(conn, book.id)}
+            if len(stretches) > 1:  # how the character changes: each stretch with where it holds from
+                out[cid]["impression"]["stretches"] = [
+                    {"since": s["since_ordinal"], "period": s["period"], "voice": s["voice"], "personality": s["personality"]}
+                    for s in stretches]
         for key, sql in (("members", "SELECT member_id FROM group_members WHERE group_id=?"),
                          ("member_of", "SELECT group_id FROM group_members WHERE member_id=?")):
             if ids := [r[0] for r in conn.execute(sql, (cid,)) if r[0] in chars]:

@@ -77,9 +77,12 @@ def _by_addressee(conn: sqlite3.Connection, book_id: str, unit: sqlite3.Row, tex
     import json
 
     to: set[str] = set()
-    for u in conn.execute("SELECT addressee_ids_json FROM utterances WHERE unit_id=?", (unit["id"],)):
-        to |= set(json.loads(u[0] or "[]"))
-    if len(to) != 1:
+    stated = True
+    for u in conn.execute("SELECT addressee_ids_json, addressee_status FROM utterances WHERE unit_id=?", (unit["id"],)):
+        ids = set(json.loads(u[0] or "[]"))
+        to |= ids
+        stated = stated and (not ids or u[1] == "explicit")
+    if len(to) != 1 or not stated:  # who it is said to only read from the scene: no rule on it
         return None
     from ..memory.repository import gender_view
 
