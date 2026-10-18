@@ -68,3 +68,21 @@ def test_proofreading_reads_the_stretch_before_and_knows_who_lines_are_said_to(c
                  (f'["{other}"]', u["id"]))
     item = next(x for part in pr.chunks(conn, u["book_id"]) for x in part if x["unit_id"] == u["unit_id"])
     assert item["to"].endswith("（推測）") and other in item["_who"]
+
+
+def test_with_verdicts_every_paragraph_is_answered_for(conn, cfg, fixtures):
+    """Asked for a verdict on each paragraph, the request says so; paragraphs left without one are counted."""
+    seen = []
+
+    def proofread(payload, req):
+        seen.append(payload)
+        first = payload["paragraphs"][0]
+        return {"checked": [{"unit_id": first["unit_id"], "gist": "打招呼", "ok": True}], "issues": []}
+
+    cfg.context.proofread_verdicts = True
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "proofread": proofread}),
+                            mode="context")
+    assert seen and all(p.get("verdicts") is True for p in seen)
+    job = conn.execute("SELECT checkpoint_json FROM jobs WHERE run_id=? AND stage='proofread'", (rid,)).fetchone()
+    total = sum(len(p["paragraphs"]) for p in seen)
+    assert f'"no_verdict": {total - len(seen)}' in job["checkpoint_json"]

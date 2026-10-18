@@ -140,3 +140,42 @@ def test_how_sure_who_a_line_is_said_to_reaches_the_translator(conn, cfg, tmp_pa
     assert got["「ミナ、行くぞ」"] == "explicit" and got["「急げ」"] == "inferred"
     certainty = {u["quote"]: u.get("to_certainty") for u in seen if u.get("to")}
     assert certainty["「ミナ、行くぞ」"] is None and certainty["「急げ」"] == "inferred"
+
+
+FULL = ["　ミナ・ロウが部屋に入ってきた。", "「久しぶり」", "　懐かしい言葉を口にしながら、ミナが微笑む。"]
+
+
+def _with_forms(forms):
+    def run(conn, cfg, tmp_path):
+        def analyze(payload, req):
+            units = {u["source"]: u["unit_id"] for u in payload["units"]}
+            k = next((x["unit_id"], x["quote_index"]) for x in payload["quotes"])
+            return {"pov": None, "location": None, "time": None, "participants": [], "actions": [], "props": [],
+                    "uncertainties": [], "utterances": [_said(k, "new_1", "ミナが微笑む")],
+                    "new_characters": [_new("new_1", "ミナ・ロウ", units[FULL[0]])],
+                    "other_forms": [{**f, "evidence_unit_ids": [units[FULL[2]]]} for f in forms]}
+
+        book, _, _ = run_book(conn, cfg, small_book(tmp_path, FULL), FakeLLM(responders={"scene_analyze": analyze}),
+                              mode="context")
+        st = conn.execute("SELECT status FROM utterances WHERE book_id=?", (book.id,)).fetchone()[0]
+        aliases = conn.execute("SELECT aliases_json FROM characters WHERE canonical_name='ミナ・ロウ'").fetchone()[0]
+        return st, aliases
+    return run
+
+
+def test_a_given_name_used_alone_joins_the_card_and_states_the_line(conn, cfg, tmp_path):
+    """The card has only the full name; the model reads 「ミナ」 in the scene as the same person (other_forms): the
+    form joins the card (checked to stand alone in its evidence), so 「…ミナが微笑む」 names the speaker."""
+    st, aliases = _with_forms([{"ref": "new_1", "ja": "ミナ", "kind": "name"}])(conn, cfg, tmp_path)
+    assert st == "explicit" and "ミナ" in aliases
+
+
+def test_without_the_form_the_full_name_alone_does_not_state_it(conn, cfg, tmp_path):
+    st, aliases = _with_forms([])(conn, cfg, tmp_path)
+    assert st == "inferred" and "ミナ" not in aliases
+
+
+def test_a_form_not_in_its_evidence_or_a_common_noun_is_not_kept(conn, cfg, tmp_path):
+    st, aliases = _with_forms([{"ref": "new_1", "ja": "ミナコ", "kind": "name"},
+                               {"ref": "new_1", "ja": "部屋", "kind": "common"}])(conn, cfg, tmp_path)
+    assert st == "inferred" and aliases == "[]"

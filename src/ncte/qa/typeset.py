@@ -49,7 +49,9 @@ _LEAD = re.compile(r"^[ \u3000]*")
 
 def indent_like(text: str, source: str) -> str:
     """The translation starts with the source paragraph's indent (「　」 or none), whatever the model wrote."""
-    return _LEAD.match(source).group(0) + text[_LEAD.match(text).end():]  # type: ignore[union-attr]
+    lead, rest = _LEAD.match(source), _LEAD.match(text)
+    assert lead is not None and rest is not None  # the pattern matches any string
+    return lead.group(0) + text[rest.end():]
 
 
 def typeset(text: str, source: str | None = None) -> str:

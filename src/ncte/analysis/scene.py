@@ -498,6 +498,34 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                     ref_map[k] = cid
             names_of[cid] = [*names_of.get(cid, [name]), *names_of.pop(same, [])]
             stats["merged"] = stats.get("merged", 0) + 1
+        # words naming a known person that their card does not have yet (a given name used alone): the model's
+        # reading; the program checks the words are in the scene, standing alone, and not another person's name.
+        # Known from here on (the link records where), so they are never shown before this scene.
+        for of in parsed.other_forms:
+            form, who = of.ja.strip(), ref_map.get(of.ref)
+            row = conn.execute("SELECT canonical_name, aliases_json FROM characters WHERE id=?", (who,)).fetchone() \
+                if who else None
+            ev = [u for u in of.evidence_unit_ids if u in unit_text and form in unit_text[u]]
+            if row is None or of.kind == "common" or not 2 <= len(form) <= MAX_NAME_LEN or form in PRONOUNS \
+                    or any(ch in form for ch in "「」『』"):
+                rej(of.model_dump(), "invalid form of a known character")
+                continue
+            if form == row[0] or form in json.loads(row[1]):
+                continue
+            if not ev or not _standalone(form, scene_text, [*existing_alias, *(n for ns in names_of.values() for n in ns)]):
+                rej(of.model_dump(), "form not found standing alone in its evidence units")
+                continue
+            if existing_alias.get(form, who) != who:
+                rej(of.model_dump(), "form already names another character")
+                continue
+            first = next(t for t in texts if t.id in ev)
+            conn.execute("UPDATE characters SET aliases_json=?, updated_at=? WHERE id=?",
+                         (json.dumps([*json.loads(row[1]), form], ensure_ascii=False), utcnow(), who))
+            record_link(conn, book_id, form, row[0], "alias", origin="scene_analysis", status="accepted",
+                        unit_id=first.id, quote=None, ordinal=first.ordinal)
+            names_of.setdefault(str(who), []).append(form)
+            existing_alias[form] = str(who)
+            stats["forms"] = stats.get("forms", 0) + 1
 
     all_visible = vis.visible_characters(conn, book_id, scene["end_ordinal"])
     amap = repo.alias_map(all_visible)

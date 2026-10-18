@@ -579,7 +579,8 @@ class ContextOrchestrator(Orchestrator):
             blocked: list[str] = []
             try:  # the content filter may refuse a stretch; it is then checked in halves
                 parsed = call_in_parts(lambda pl: self._llm("proofread", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
-                                       {"task": "proofread", "paragraphs": visible, "characters": cast, **extra},
+                                       {"task": "proofread", "paragraphs": visible, "characters": cast, **extra,
+                                        **({"verdicts": True} if self.cfg.context.proofread_verdicts else {})},
                                        "paragraphs", blocked)
             except FatalAPIError:
                 raise
@@ -597,6 +598,8 @@ class ContextOrchestrator(Orchestrator):
             assert isinstance(parsed, ProofreadOutput)
             valid = {p["unit_id"] for p in part} - set(blocked)  # what was really checked against the source
             stats["checked"] += len(valid)
+            if self.cfg.context.proofread_verdicts:  # paragraphs the model gave no verdict for were not looked at
+                stats["no_verdict"] = stats.get("no_verdict", 0) + len(valid - {c.unit_id for c in parsed.checked})
             feedback: dict[str, list[dict[str, Any]]] = {}
             for it in parsed.issues:
                 if it.unit_id not in valid or it.severity == "low" or not it.problem.strip():

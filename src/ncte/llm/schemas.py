@@ -54,6 +54,15 @@ class NewCharacter(_M):
     group: bool = False  # the words name several people (「取り巻きの二人」「生徒たち」): the model's reading
 
 
+class OtherForm(_M):
+    """Words of this scene that name a known character but are not on their card yet (a given name used alone, a
+    nickname): the model's reading, with where they occur."""
+    ref: str  # a known character's id (or a temp_id of new_characters)
+    ja: str  # verbatim
+    kind: Literal["name", "nickname", "title", "description", "common"]
+    evidence_unit_ids: list[str]
+
+
 class Participant(_M):
     character_ref: str
     presence: Literal["explicit", "inferred", "left"]
@@ -148,6 +157,7 @@ class SceneAnalysisOutput(_M):
     props: list[PropState]
     uncertainties: list[Uncertainty]
     narration: NarrationOut | None = None
+    other_forms: list[OtherForm] = Field(default_factory=list)
 
 
 # ------------------------------------------------------------------ memory update
@@ -365,7 +375,16 @@ class ProofreadIssue(_M):
     fix: str
 
 
+class ParagraphCheck(_M):
+    """One paragraph looked at (when asked for: ``proofread_verdicts``): what the source says, in a few words, and
+    whether the translation says it."""
+    unit_id: str
+    gist: str
+    ok: bool
+
+
 class ProofreadOutput(_M):
+    checked: list[ParagraphCheck] = Field(default_factory=list)
     issues: list[ProofreadIssue]
 
 
