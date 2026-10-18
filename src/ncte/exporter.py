@@ -32,6 +32,12 @@ def default_output_path(cfg: Config, book: Book, lang: str) -> Path:
     return cfg.workspace / "exports" / f"{stem}.{lang}.epub"
 
 
+def exported_text(text: str, note: str | None, status: str) -> str:
+    """A unit as it goes into the book: the translation, and a machine translator's note in parentheses after it
+    (ADR-025). The fix check reads this too, so a fix made (or an error brought in) in the note is seen."""
+    return f"{text}（註：{note}）" if status != "human" and note else text
+
+
 def export_book(conn: sqlite3.Connection, cfg: Config, book: Book, *, output: Path | None = None,
                 lang: str = "zh-TW", strict: bool = False, run_epubcheck: bool = True) -> ExportOutcome:
     pkg = load_book_package(book)
@@ -44,9 +50,7 @@ def export_book(conn: sqlite3.Connection, cfg: Config, book: Book, *, output: Pa
     patches: dict[tuple[str, str], TranslationPatch] = {}
     for uid, tr in best.items():
         u = units[uid]
-        text = tr["text"]
-        if tr["status"] != "human" and tr["translator_note"]:  # ADR-025: notes go in parentheses after the text
-            text = f"{text}（註：{tr['translator_note']}）"
+        text = exported_text(tr["text"], tr["translator_note"], tr["status"])
         patches[(u["resource_href"], u["xpath"])] = TranslationPatch(text, u["source_hash"], uid)
     translatable = [u for u in units.values() if u["translatable"]]
     missing = [u["id"] for u in translatable if u["id"] not in best]

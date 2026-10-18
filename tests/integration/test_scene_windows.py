@@ -39,9 +39,9 @@ def test_the_program_drops_breaks_it_cannot_accept():
                  sep=(14,))
     got = sw.cut_chapter(rows, lambda pl: SceneWindowsOutput.model_validate({"breaks": [
         {"unit_id": u, "reason": "t"} for u in ("u0", "u2", "u7", "u15")]}), title="", known=True, max_units=80)[0]
-    # u0 is the first paragraph, u2 leaves a 2-paragraph scene, u7 is inside a quote; u15 (after the separator) moves
-    # onto the separator, which opens the scene
-    assert [i for i, _ in got] == [14]
+    # u0 is the first paragraph, u7 is inside a quote; u2 (a short scene) is the model's call; u15 (after the
+    # separator) moves onto the separator, which opens the scene
+    assert [i for i, _ in got] == [2, 14]
 
 
 def test_an_unanswered_window_keeps_the_author_marks_as_unsure():
@@ -104,22 +104,27 @@ def test_a_book_without_a_toc_gets_its_chapters_from_the_model(conn, cfg, tmp_pa
 
 
 def test_a_scene_too_long_for_one_read_is_read_in_even_parts(conn, cfg, tmp_path):
-    """The model may keep one long exchange as one scene (240 paragraphs were seen): it is read in even parts at
-    quiet points, each part the same kind of scene."""
+    """The model may keep one long exchange as one scene (240 paragraphs were seen): it stays one scene (the program
+    does not cut the model's scenes, ADR-059) and is read in even consecutive parts, the answers joined."""
     cfg.memory.max_scene_units = 10
     lines = [f"　地の文{i}。" if i % 5 in (0, 1) else f"「台詞{i}」" for i in range(40)]
     body = "<section>" + paras(lines) + "</section>"
+    reads: list[int] = []
 
     def windows(payload, req):
         return {"first_kind": "flashback", "breaks": []}
 
-    book, _, s = run_book(conn, cfg, _book(tmp_path, body, n=3), FakeLLM(responders={**RESPONDERS, "scene_windows": windows}),
+    def analyze(payload, req):
+        reads.append(len(payload["units"]))
+        return RESPONDERS["scene_analyze"](payload, req)
+
+    book, _, s = run_book(conn, cfg, _book(tmp_path, body, n=3),
+                          FakeLLM(responders={**RESPONDERS, "scene_windows": windows, "scene_analyze": analyze}),
                           mode="context")
     assert s.status == "completed"
-    scenes = conn.execute("SELECT kind, break_reason, (SELECT COUNT(*) FROM units u WHERE u.scene_id=s.id AND u.book_id=s.book_id) n "
-                          "FROM scenes s WHERE book_id=? ORDER BY seq", (book.id,)).fetchall()
-    sizes = [r["n"] for r in scenes]
-    assert len(scenes) == 4 and max(sizes) - min(sizes) <= 6 and {r["kind"] for r in scenes} == {"flashback"}
-    starts = [conn.execute("SELECT plain_text FROM units WHERE book_id=? AND scene_id=(SELECT id FROM scenes WHERE book_id=? "
-                           "AND seq=?) ORDER BY ordinal LIMIT 1", (book.id, book.id, r)).fetchone()[0] for r in (1, 2, 3)]
-    assert all(t.startswith("　地の文") for t in starts)  # cut at narration, not inside the exchange
+    scenes = conn.execute("SELECT kind FROM scenes s WHERE book_id=? AND EXISTS (SELECT 1 FROM units u WHERE "
+                          "u.scene_id=s.id AND u.plain_text LIKE '%台詞%')", (book.id,)).fetchall()
+    assert len(scenes) == 1 and scenes[0]["kind"] == "flashback"
+    long_reads = [n for n in reads if n <= 10]
+    assert len(long_reads) >= 4 and sum(long_reads) >= 40  # read in parts of about max_scene_units
+

@@ -17,6 +17,7 @@ from typing import Any
 
 from ..epub.units import PH_RE
 from ..memory.repository import character_basics
+from ..series import pos
 from ..translation.cache import latest_texts
 
 CHUNK_UNITS = 60  # paragraphs per request: source and translation side by side
@@ -87,9 +88,12 @@ def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> 
         view = character_view(conn, book_id, c, start) if start is not None else None
         if start is not None and view is None:
             view = character_view(conn, book_id, c, max(p["_at"] for p in part))
-        item = {"name": (view["name_zh"] or view["name_ja"]) if view else c["display_name_zh"] or c["canonical_name"],
-                "ja": view["name_ja"] if view else c["canonical_name"],
-                **{k: v for k, v in character_basics(conn, c["id"]).items() if k != "aliases_ja"}}
+        item: dict[str, Any] = {"name": (view["name_zh"] or view["name_ja"]) if view else c["display_name_zh"] or
+                                c["canonical_name"], "ja": view["name_ja"] if view else c["canonical_name"]}
+        # gender and narrator as known there too (a gender revealed later must not judge an earlier 你)
+        basics = view if view is not None else character_basics(
+            conn, c["id"], pos(conn, book_id, max(p["_at"] for p in part)) if start is not None else None)
+        item.update({k: basics[k] for k in ("gender", "narrator") if k in basics})
         if c["voice"]:
             item["voice"] = c["voice"]
         if habits.get(c["canonical_name"]):

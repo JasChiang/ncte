@@ -105,3 +105,68 @@ def test_a_character_called_mother_does_not_take_every_mothers_fact(conn, cfg, f
                  (book.id, a, u["id"], u["ordinal"], utcnow()))
     pairs, _ = relations.candidate_pairs(conn, book.id)
     assert not any({p["a"], p["b"]} == {a, mom} for p in pairs)  # 「母親」 is not a proper name to match by
+
+
+def _three_notes(conn, book_id, a, b, rels):
+    for rel, at in rels:
+        _note(conn, book_id, a, b, rel, at, rel, rel, "feeling")
+    pairs, chars = relations.candidate_pairs(conn, book_id)
+    req, lk = relations.requests(pairs, chars)[0]
+    p = next(x for x in req["pairs"] if {lk["_chars"][x["a"]], lk["_chars"][x["b"]]} == {a, b})
+    return p, lk, {n["at"]: n["ref"] for n in p["notes"]}
+
+
+def test_enemy_ally_enemy_keeps_every_stretch(conn, cfg, fixtures):
+    """敵人 → 同盟 → 敵人: the second 敵人 is a new stretch, not the first one rewritten (the first stretch stays)."""
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    a, b = _two_characters(conn, book.id)
+    conn.execute("DELETE FROM relations")
+    conn.execute("DELETE FROM relation_notes")
+    p, lk, at = _three_notes(conn, book.id, a, b, [("敵人", 5), ("同盟", 9), ("敵人", 13)])
+    rel = lambda name, ref, replaces: {"a": p["a"], "b": p["b"], "relation": name, "a_is": name, "b_is": name,  # noqa: E731
+                                       "kind": "feeling", "certainty": "explicit", "facts": [ref], "reason": "t",
+                                       "replaces": replaces}
+    parsed = relations.RelationsOutput.model_validate({"relations": [
+        rel("敵人", at[5], None), rel("同盟", at[9], "敵人"), rel("敵人", at[13], "同盟")]})
+    assert relations.apply(conn, book.id, [(parsed, lk)]) == 3
+    seen = {x: {r["relation_zh"] for r in relations.visible(conn, book.id, x)} for x in (7, 11, 15)}
+    assert seen == {7: {"敵人"}, 11: {"同盟"}, 15: {"敵人"}}
+
+
+def test_a_replacement_ends_the_relation_of_its_own_time(conn, cfg, fixtures):
+    """「朋友」 of a past life replaced by 「宿敵」 of that life ends 「前世：朋友」 (stored with its time); the friends of
+    the present are not ended by what happened in a past life."""
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    a, b = _two_characters(conn, book.id)
+    conn.execute("DELETE FROM relations")
+    conn.execute("DELETE FROM relation_notes")
+    p, lk, at = _three_notes(conn, book.id, a, b, [("朋友", 5), ("宿敵", 9), ("朋友", 13)])
+    rel = lambda name, ref, replaces, period: {"a": p["a"], "b": p["b"], "relation": name, "a_is": name,  # noqa: E731
+                                               "b_is": name, "kind": "feeling", "certainty": "explicit", "facts": [ref],
+                                               "reason": "t", "replaces": replaces, "period": period}
+    parsed = relations.RelationsOutput.model_validate({"relations": [
+        rel("朋友", at[13], None, ""), rel("朋友", at[5], None, "前世"), rel("宿敵", at[9], "朋友", "前世")]})
+    relations.apply(conn, book.id, [(parsed, lk)])
+    rows = {(r["relation_zh"], r["since_ordinal"]): r["until_ordinal"] for r in conn.execute(
+        "SELECT * FROM relations WHERE book_id=?", (book.id,))}
+    assert rows[("前世：朋友", 5)] == 9 and rows[("前世：宿敵", 9)] is None and rows[("朋友", 13)] is None
+
+
+def test_a_relation_said_again_while_it_holds_is_one_stretch(conn, cfg, fixtures):
+    """敵人 at 5 and 敵人 at 13 with nothing between: one stretch from 5. With 同盟 between but its "replaces" left out
+    on the second 敵人, 同盟 is not ended — and neither 敵人 stretch is lost."""
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    a, b = _two_characters(conn, book.id)
+    conn.execute("DELETE FROM relations")
+    conn.execute("DELETE FROM relation_notes")
+    p, lk, at = _three_notes(conn, book.id, a, b, [("敵人", 5), ("同盟", 9), ("敵人", 13)])
+    rel = lambda name, ref, replaces: {"a": p["a"], "b": p["b"], "relation": name, "a_is": name, "b_is": name,  # noqa: E731
+                                       "kind": "feeling", "certainty": "explicit", "facts": [ref], "reason": "t",
+                                       "replaces": replaces}
+    relations.apply(conn, book.id, [(relations.RelationsOutput.model_validate(
+        {"relations": [rel("敵人", at[5], None), rel("敵人", at[13], None)]}), lk)])
+    assert [(r["relation_zh"], r["since_ordinal"]) for r in conn.execute("SELECT * FROM relations")] == [("敵人", 5)]
+    relations.apply(conn, book.id, [(relations.RelationsOutput.model_validate(
+        {"relations": [rel("敵人", at[5], None), rel("同盟", at[9], "敵人"), rel("敵人", at[13], None)]}), lk)])
+    got = sorted((r["relation_zh"], r["since_ordinal"], r["until_ordinal"]) for r in conn.execute("SELECT * FROM relations"))
+    assert got == [("同盟", 9, None), ("敵人", 5, 9), ("敵人", 13, None)]

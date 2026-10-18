@@ -276,3 +276,27 @@ def test_the_fix_check_knows_who_speaks_to_whom(conn, cfg, fixtures):
     item = seen[0]["items"][0]
     assert item["lines"] and item["lines"][0].startswith("米娜")  # ミナ says it (explicit tag in the fixture)
     assert any(c["ja"] == "ミナ" for c in seen[0]["characters"])
+
+
+def test_the_fix_check_reads_the_note_that_goes_into_the_book(conn, cfg, tmp_path):
+    """A fix written in the translator's note (exported in parentheses after the text) is part of what the book says:
+    the check sees it — before and after — as the export writes it."""
+    cfg.review.automatic_review = "all"
+    checks: list = []
+
+    def translate(payload, req):
+        out = translator(None)(payload, req)
+        for t, u in zip(out["translations"], payload["units"], strict=True):
+            if "来なかった" in u["source"] and "review_feedback" in payload:
+                t["translator_note"] = "原文是否定：她沒有來"
+        return out
+
+    def check(payload, req):
+        checks.extend(payload["items"])
+        return {"checks": [{"unit_id": i["unit_id"], "verdict": "still_wrong", "new_error": "", "reason": "正文仍是肯定"}
+                           for i in payload["items"]]}
+
+    run_book(conn, cfg, small_book(tmp_path), FakeLLM(responders={"translate": translate, "review": negation_review,
+                                                                  "fix_check": check}))
+    item = next(i for i in checks if WRONG in i["before"])
+    assert "（註：原文是否定：她沒有來）" in item["after"]

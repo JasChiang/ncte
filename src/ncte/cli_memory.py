@@ -651,23 +651,6 @@ def names_unlink(epub: Annotated[str, typer.Argument()], term: Annotated[str, ty
     typer.echo(f"{term} detached")
 
 
-@names_app.command("detect")
-def names_detect(epub: Annotated[str, typer.Argument()]) -> None:
-    """Scan the whole book for «A。通称B» style statements and link the forms (no API calls)."""
-    from .memory.entities import backfill_entities, detect_links
-
-    book = _book(epub)
-    conn = state.conn
-    with Transaction(conn):
-        backfill_entities(conn, book.id)
-        rows = conn.execute("SELECT * FROM units WHERE book_id=? AND spine_index IS NOT NULL ORDER BY ordinal",
-                            (book.id,)).fetchall()
-        found = detect_links(conn, book.id, rows)
-    for term, target, st in found:
-        typer.echo(f"  {term} → {target}: {st}")
-    typer.echo(f"{len(found)} statements found")
-
-
 def _character(book_id: str, name: str) -> str:
     """Character id from an id, a Japanese name / alias or the Chinese name."""
     for r in state.conn.execute(f"SELECT id, canonical_name, display_name_zh, aliases_json FROM characters "
@@ -835,23 +818,6 @@ def names_impressions(epub: Annotated[str, typer.Argument()],
     opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
                       client="fake" if fake else cfg.openrouter.provider, impressions_only=True)
     _run(book, opts, fake=fake, cfg=cfg)
-
-
-@names_app.command("address-check")
-def names_address_check(epub: Annotated[str, typer.Argument()],
-                        budget_usd: Annotated[float, typer.Option("--budget-usd")] = 0.5,
-                        fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
-    """Have the model classify forms of address the program found by name matching (ADR-037), for a book already read:
-    calling the person, talking about them, the speaker about themselves, quoting others, or unrelated."""
-    from .cli import _run
-    from .translation.orchestrator import RunOptions
-
-    cfg = state.cfg
-    book = _book(epub)
-    opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
-                      client="fake" if fake else cfg.openrouter.provider, address_only=True)
-    _run(book, opts, fake=fake, cfg=cfg)
-    typer.echo(f"see: ncte names address {epub}")
 
 
 @names_app.command("gender")

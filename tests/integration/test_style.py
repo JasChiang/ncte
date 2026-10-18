@@ -125,7 +125,9 @@ def test_gender_with_evidence_reaches_character_cards(conn, cfg, fixtures):
         u, kaito = uid(payload, "カイト、遅いですよ"), known(payload, "カイト")
         if u and kaito:
             out["genders"] = [
-                {"character_ref": kaito, "gender": "male", "evidence_unit_ids": [u], "evidence_quote": "カイト、遅いですよ"},
+                # no word in the line says so: the model reads it as an inference
+                {"character_ref": kaito, "gender": "male", "certainty": "inferred", "evidence_unit_ids": [u],
+                 "evidence_quote": "カイト、遅いですよ"},
                 {"character_ref": kaito, "gender": "female", "evidence_unit_ids": [u], "evidence_quote": "彼女は"}]  # rejected
         return out
 
@@ -182,13 +184,6 @@ def test_gender_scan_for_a_volume_already_read(conn, cfg, fixtures):
              gender_only=True)
     assert conn.execute("SELECT gender FROM character_gender").fetchone()[0] == "male"
     assert conn.execute("SELECT COUNT(*) FROM facts").fetchone()[0] == facts
-
-
-def test_explicit_gender_outranks_inferred():
-    from ncte.lexicon import states_gender
-
-    assert states_gender("流れるような黒髪の女性", "female") and not states_gender("あたしもそれに合わせ", "female")
-    assert not states_gender("彼女は笑った", "male") and states_gender("彼は笑った", "male")
 
 
 def test_gender_ranks(conn, cfg, fixtures):

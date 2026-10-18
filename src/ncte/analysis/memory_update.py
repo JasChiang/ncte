@@ -12,7 +12,6 @@ import re
 import sqlite3
 from typing import Any
 
-from ..lexicon import acceptable_glossary_term
 from ..llm.schemas import MemoryUpdateOutput
 from ..memory import repository as repo
 from ..memory.db import utcnow
@@ -184,7 +183,7 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         if not ev or not any(g.source_term in clean(text_of[u]) for u in ev):
             rej(g.model_dump(), "glossary source_term not found verbatim in evidence units")
             continue
-        if not acceptable_glossary_term(g.source_term):
+        if len(g.source_term.strip()) < 2:  # which words need a fixed rendering is the model's reading
             rej(g.model_dump(), "generic or single-character term is not a glossary term")
             continue
         first = min((u for u in ev if g.source_term in clean(text_of[u])), key=lambda u: ordinal[u])
@@ -196,10 +195,10 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
                                 origin="memory_update", first_unit_id=first):
             stats["glossary"] += 1
 
-    # name forms: «A。通称B» statements found by the program, then the model's proposals (ADR-019)
-    from ..memory.entities import detect_links, link
+    # name forms: the model's links, each with its evidence (ADR-019; ADR-059: the program finds no links itself)
+    from ..memory.entities import link
 
-    stats["name_links"] = sum(1 for *_, st in detect_links(conn, book_id, rows) if st == "accepted")
+    stats["name_links"] = 0
     scene_plain = "".join(clean(t) for t in text_of.values())
     for nl in parsed.name_links:
         ev = [u for u in nl.evidence_unit_ids if u in text_of]
@@ -211,7 +210,7 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         if nl.term not in scene_plain or (nl.same_as not in scene_plain and nl.same_as not in known_terms):
             rej(nl.model_dump(), "name link terms must occur verbatim in the scene (or be known forms)")
             continue
-        if nl.term == nl.same_as or not acceptable_glossary_term(nl.term):
+        if nl.term == nl.same_as or len(nl.term.strip()) < 2:
             rej(nl.model_dump(), "invalid name link term")
             continue
         first = min(ev, key=lambda u: ordinal[u])
@@ -225,47 +224,47 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
                 quote=nl.evidence_quote, ordinal=ordinal[first], note=nl.note[:200] or None) == "accepted":
             stats["name_links"] += 1
 
-    # who calls whom what, with the rendering the translation used (ADR-022)
+    # who calls whom what, with the rendering the translation used (ADR-022): the model's reading, linked to the line
+    # its evidence is in (ADR-059: the program checks the words are there; it does not match names itself)
     from ..memory.address import _PRONOUNS as ADDRESS_PRONOUNS
+    from ..memory.address import forget_scene as forget_address
+    from ..memory.address import set_usage
     from ..memory.address import upsert as upsert_address
 
+    forget_address(conn, book_id, sid)  # a scene read again replaces what its lines were said to contain
     stats["address_terms"] = 0
-    stats["address_reassigned"] = 0
-    from ..memory.address import _can_name as can_name
-    from ..memory.address import reassign_scene
-
-    # one addressee per (speaker, form) in this scene: the model's reading replaces the program's name-owner guess
-    targets: dict[tuple[str, str], set[str]] = {}
-    for at in parsed.address_terms:
-        targets.setdefault((at.speaker_ref, clean(at.term).strip()), set()).add(at.addressee_ref)
+    lines = conn.execute("SELECT id, unit_id, quote_text, speaker_id_nullable sp, status FROM utterances WHERE "
+                         "book_id=? AND scene_id=?", (book_id, sid)).fetchall()
     for at in parsed.address_terms:
         ev = [u for u in at.evidence_unit_ids if u in text_of]
         quote = _norm(at.evidence_quote)
+        term = clean(at.term).strip()
         if at.speaker_ref not in chars or at.addressee_ref not in chars:
             rej(at.model_dump(), "address term: speaker/addressee must be known character ids")
             continue
         if not ev or len(quote) < 2 or quote not in _norm("".join(text_of[u] for u in ev)) \
-                or _norm(at.term) not in quote or not acceptable_glossary_term(at.term):
+                or _norm(at.term) not in quote or len(term) < 2:
             rej(at.model_dump(), "address term: term/evidence_quote not found verbatim")
             continue
-        term0 = clean(at.term).strip()
-        if at.speaker_ref != at.addressee_ref and not can_name(conn, term0, at.addressee_ref) and any(
-                can_name(conn, term0, other) for other in chars if other != at.addressee_ref):
-            # 「中川は？」 asked of 小林 reported as 小林's address: the form names someone else
-            rej(at.model_dump(), "address term: the form is another character's name (listener reported?)")
-            continue
+        # the line(s) the evidence is in: a use observed there (counted once per line)
+        said_in = [ln for ln in lines if ln["unit_id"] in ev and _norm(at.term) in _norm(ln["quote_text"])
+                   and (quote in _norm(ln["quote_text"]) or _norm(ln["quote_text"]) in quote)]
         # a pronoun (「あなた」「お前」) is kept per speaker → addressee, but its rendering (妳／你／您／老公 …)
         # depends on who is addressed: naming decides it, the memory model's guess is not kept
-        pronoun = clean(at.term).strip() in PRONOUNS | ADDRESS_PRONOUNS
+        pronoun = term in PRONOUNS | ADDRESS_PRONOUNS
         first = min(ev, key=lambda u: ordinal[u])
-        upsert_address(conn, book_id, at.speaker_ref, at.addressee_ref, clean(at.term).strip(), ordinal=ordinal[first],
-                       unit_id=first, origin="llm", certainty="inferred",
-                       form_zh=None if pronoun else (at.term_zh.strip()[:24] or None),
-                       quote=at.evidence_quote, note=at.note[:200] or None)
+        for ln in said_in or [None]:
+            stated = ln is not None and ln["sp"] == at.speaker_ref and ln["status"] in ("explicit", "human_verified")
+            rid = upsert_address(conn, book_id, at.speaker_ref, at.addressee_ref, term,
+                                 ordinal=ordinal[ln["unit_id"] if ln else first], unit_id=ln["unit_id"] if ln else first,
+                                 origin="llm", certainty="explicit" if stated else "inferred",
+                                 form_zh=None if pronoun else (at.term_zh.strip()[:24] or None),
+                                 quote=at.evidence_quote, note=at.note[:200] or None,
+                                 utterance_id=ln["id"] if ln else None)
+        row = conn.execute("SELECT * FROM address_terms WHERE id=?", (rid,)).fetchone()
+        usage = "self" if at.speaker_ref == at.addressee_ref else at.usage
+        set_usage(conn, book_id, row, usage, at.note or "read with the scene", origin="llm")
         stats["address_terms"] += 1
-        term = clean(at.term).strip()
-        if len(targets.get((at.speaker_ref, term), ())) == 1 and at.speaker_ref != at.addressee_ref:
-            stats["address_reassigned"] += reassign_scene(conn, book_id, sid, at.speaker_ref, term, at.addressee_ref)
 
     # wordplay / real-world references a Chinese reader would miss (ADR-026); re-reading replaces the scene's list
     conn.execute("DELETE FROM reader_notes WHERE book_id=? AND scene_id=? AND origin='llm'", (book_id, sid))
@@ -323,9 +322,9 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
             continue
         holder = p.holder_ref if p.holder_ref in chars else None
         conn.execute("INSERT INTO prop_states(book_id, name_ja, holder_character_id, evidence_unit_ids_json, "
-                     "horizon_ordinal, scene_id, created_at) VALUES (?,?,?,?,?,?,?)",
+                     "horizon_ordinal, scene_id, created_at, period) VALUES (?,?,?,?,?,?,?,?)",
                      (book_id, p.name_ja, holder, json.dumps([u for u in p.evidence_unit_ids if u in text_of]),
-                      scene["end_ordinal"], sid, utcnow()))
+                      scene["end_ordinal"], sid, utcnow(), p.period.strip()[:20] or None))
         stats["props"] += 1
 
     summary = parsed.scene_summary.strip()[:800]
@@ -354,10 +353,9 @@ def apply_genders(conn: sqlite3.Connection, book_id: str, sid: str, text_of: dic
             else:
                 repo.reject(conn, book_id, sid, "memory_update", gd.model_dump(), "gender: evidence not verbatim")
             continue
-        from ..lexicon import states_gender
-
-        # explicit only when the quote has a word that says so (「少女」); 「あたし」 or a soft tone is an inference
-        certainty = "explicit" if gd.certainty == "explicit" and states_gender(gd.evidence_quote, gd.gender) else "inferred"
+        # how sure is the model's reading (ADR-059): the program checked the words are there; an inferred gender
+        # goes to the second look
+        certainty = "explicit" if gd.certainty == "explicit" else "inferred"
         repo.set_gender(conn, book_id, gd.character_ref, gd.gender, ordinal=min(ordinal[u] for u in ev),
                         quote=gd.evidence_quote, origin="llm", certainty=certainty)
         n += 1

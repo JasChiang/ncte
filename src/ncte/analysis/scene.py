@@ -10,13 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Config
-from ..lexicon import GENERIC_REFERENTS, acceptable_glossary_term, names_a_group
 from ..llm.schemas import SceneAnalysisOutput
 from ..memory import repository as repo
 from ..memory import visibility as vis
 from ..memory.db import Transaction, utcnow
 from ..series import SERIES_SCOPE
-from .dialogue import FIRST_PERSON, SECOND_PERSON, Quote, UnitText, clean, detect_tags, find_quotes
+from .dialogue import FIRST_PERSON, SECOND_PERSON, Quote, UnitText, clean, find_quotes
 from .reference_resolution import validate_actions
 from .speaker import Candidate, LlmClaim, Resolution, resolve
 
@@ -36,19 +35,14 @@ class Scene:
 
 
 def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units: int,
-                  breaks: dict[str, str] | None = None, *, lone_headings: bool = False,
-                  chapters: dict[str, bool] | None = None) -> list[Scene]:
-    """``breaks``: unit id → "llm" (a scene the model starts there) or "stretch" (a stretch the model divided: no
-    size cuts inside it up to twice the limit, ADR-036). A heading stays with the text after it (「序章」 followed by
-    blank lines was a scene of its own: read, summarised, translated and reviewed alone); ``lone_headings`` keeps the
-    old cut for a book already read that way.
-
-    ``chapters`` (first unit of each TOC chapter → whether the model has cut it): a chapter always starts a scene, and
-    inside a chapter the model's cut is the cut (the author's blank lines and separators were candidates it weighed);
-    a chapter not cut yet keeps the program's provisional cut."""
+                  breaks: dict[str, str] | None = None, *, chapters: dict[str, bool] | None = None) -> list[Scene]:
+    """``chapters`` (first unit of each TOC chapter → whether the model has cut it): a chapter always starts a scene,
+    and inside a chapter the model cut, the model's breaks are the scenes (ADR-057, ADR-059: the program does not cut
+    them further; a long scene is read in parts, not divided). A chapter not cut by the model (book matter, or a
+    chapter whose cutting failed) keeps a provisional cut at the author's marks; a heading stays with the text after
+    it."""
     breaks = breaks or {}
-    forced = _long_scene_cuts(rows, breaks, overrides, chapters, max_units) if chapters is not None else set()
-    decided = False
+    chapters = chapters or {}
     scenes: list[Scene] = []
     per_spine: dict[int | None, int] = {}
     cur: Scene | None = None
@@ -57,15 +51,13 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
     decided_chapter = False
     for r in rows:
         reason = None
-        if chapters is not None and (cur is None or r["id"] in chapters):
-            reason = "chapter"
+        if cur is None or r["id"] in chapters:
+            reason = "chapter" if chapters else "document"
             decided_chapter = chapters.get(r["id"], False)
-        elif chapters is not None and decided_chapter:
+        elif decided_chapter:
             if overrides.get(r["id"]) == "split" or breaks.get(r["id"]) == "llm":
                 reason = "manual" if overrides.get(r["id"]) == "split" else "llm"
-            elif r["id"] in forced:
-                reason = "max_size"  # the model's scene is too long to read in one request: cut evenly, at quiet points
-        elif cur is None or r["resource_href"] != prev_href:
+        elif r["resource_href"] != prev_href:
             reason = "document"
         elif overrides.get(r["id"]) == "split":
             reason = "manual"
@@ -75,20 +67,14 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
             reason = "separator"
         elif r["kind"] == "heading" and cur.has_body:
             reason = "heading"
-        elif not cur.has_body and not lone_headings:
+        elif not cur.has_body:
             reason = None  # only a heading so far: the text after it belongs with it
         elif r["blank_before"] >= 2:
             reason = "blank_lines"
         elif breaks.get(r["id"]) == "llm":
             reason = "llm"
-        elif decided and len(cur.unit_ids) < max_units * 2:
-            reason = None
         elif len(cur.unit_ids) >= max_units and (_calm(r, prev_row) or len(cur.unit_ids) >= max_units + MAX_SIZE_SLACK):
-            reason = "max_size"
-        if reason in ("chapter", "document", "manual", "separator", "heading", "blank_lines"):
-            decided = False  # the author's marker ends a stretch
-        if breaks.get(r["id"]) == "stretch":
-            decided = True
+            reason = "max_size"  # provisional only: a chapter the model has not cut
         if reason:
             n = per_spine.get(r["spine_index"], 0) + 1
             per_spine[r["spine_index"]] = n
@@ -105,40 +91,6 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
 
 
 MAX_SIZE_SLACK = 30  # how far past the size limit a cut may wait for a quiet point
-LONG_SCENE = 1.5  # a scene the model cut, longer than this many times max_units, is read in even parts
-CALM_REACH = 15  # how far an even cut may move to fall at a quiet point
-
-
-def _long_scene_cuts(rows: list[sqlite3.Row], breaks: dict[str, str], overrides: dict[str, str],
-                     chapters: dict[str, bool], max_units: int) -> set[str]:
-    """Where a scene the model cut is divided because it is too long for one reading request (240 paragraphs and 136
-    lines in one request were seen): into even parts of about ``max_units``, each cut moved to the nearest point
-    between two narration paragraphs. The model's scenes are kept whole up to ``LONG_SCENE`` times the limit."""
-    spans: list[list[int]] = []
-    decided = False
-    for i, r in enumerate(rows):
-        if r["id"] in chapters:
-            decided = chapters[r["id"]]
-            spans.append([i])
-        elif decided and (breaks.get(r["id"]) == "llm" or overrides.get(r["id"]) == "split"):
-            spans.append([i])
-        elif spans and decided:
-            spans[-1].append(i)
-        elif not decided and spans:
-            spans[-1] = []  # a chapter the model has not cut: the program's own cut applies
-    out: set[str] = set()
-    for span in spans:
-        n = len(span)
-        if n <= max_units * LONG_SCENE:
-            continue
-        parts = -(-n // max_units)
-        for k in range(1, parts):
-            t = k * n // parts
-            near = sorted(range(max(1, t - CALM_REACH), min(n - 1, t + CALM_REACH) + 1), key=lambda j: abs(j - t))
-            j = next((j for j in near if _calm(rows[span[j]], rows[span[j] - 1])), t)
-            if overrides.get(rows[span[j]]["id"]) != "merge":
-                out.add(rows[span[j]]["id"])
-    return out
 
 
 def _calm(r: sqlite3.Row, prev: sqlite3.Row | None) -> bool:
@@ -147,19 +99,6 @@ def _calm(r: sqlite3.Row, prev: sqlite3.Row | None) -> bool:
         t = (x["plain_text"] if x is not None else "").lstrip(" 　")
         return t.startswith(("「", "『")) or "」" in t[-3:]
     return not talk(r) and not talk(prev)
-
-
-def segmentation(conn: sqlite3.Connection, book_id: str) -> str:
-    """How this book is cut into scenes: "chapters" (TOC chapters, the model cuts inside them) for a book not read
-    yet; "files" (files, headings, the author's markers, size) for one already read that way — a changed range would
-    lose what reading it left and be read again (paid)."""
-    row = conn.execute("SELECT segmentation FROM books WHERE id=?", (book_id,)).fetchone()
-    if row is not None and row[0]:
-        return str(row[0])
-    read = conn.execute("SELECT 1 FROM scenes WHERE book_id=? AND version>0 LIMIT 1", (book_id,)).fetchone()
-    scheme = "files" if read else "chapters"
-    conn.execute("UPDATE books SET segmentation=? WHERE id=?", (scheme, book_id))
-    return scheme
 
 
 def ensure_chapters(conn: sqlite3.Connection, book_id: str) -> None:
@@ -177,8 +116,6 @@ def ensure_chapters(conn: sqlite3.Connection, book_id: str) -> None:
 def chapter_starts_for(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row]) -> dict[str, bool] | None:
     """First unit of each chapter → whether the model has cut it (None: the book is cut the old way). Chapters come
     from the TOC; a book without one is a single chapter until the model finds its chapters."""
-    if segmentation(conn, book_id) != "chapters":
-        return None
     ensure_chapters(conn, book_id)
     decided = {r[0] for r in conn.execute("SELECT unit_id FROM scene_breaks WHERE book_id=? AND origin='chapter'",
                                           (book_id,))}
@@ -200,21 +137,15 @@ def segment_book(conn: sqlite3.Connection, cfg: Config, book_id: str) -> list[Sc
                  conn.execute("SELECT unit_id, action FROM scene_overrides WHERE book_id=?", (book_id,))}
     breaks = {r["unit_id"]: r["origin"] for r in conn.execute("SELECT unit_id, origin FROM scene_breaks WHERE book_id=?",
                                                               (book_id,))}
-    # a book read with headings as scenes of their own keeps them: a changed range would be read again
-    lone = conn.execute("SELECT 1 FROM scenes s JOIN units u ON u.book_id=s.book_id AND u.id=s.start_unit_id AND "
-                        "u.id=s.end_unit_id WHERE s.book_id=? AND s.version>0 AND u.kind='heading' LIMIT 1",
-                        (book_id,)).fetchone() is not None
     from .memory_update import forget_scene
 
     with Transaction(conn):
         chapters = chapter_starts_for(conn, book_id, rows)
-        scenes = segment_units(rows, overrides, cfg.memory.max_scene_units, breaks, lone_headings=lone,
-                               chapters=chapters)
+        scenes = segment_units(rows, overrides, cfg.memory.max_scene_units, breaks, chapters=chapters)
         existing = {r["id"]: r for r in conn.execute("SELECT * FROM scenes WHERE book_id=?", (book_id,))}
         conn.execute("UPDATE units SET scene_id=NULL WHERE book_id=?", (book_id,))
         keep: set[str] = set()
         kinds = {r[0]: r[1] for r in conn.execute("SELECT unit_id, kind FROM scene_breaks WHERE book_id=?", (book_id,))}
-        last_kind: str | None = None
         for s in scenes:
             old = existing.get(s.id)
             if old and old["start_unit_id"] == s.unit_ids[0] and old["end_unit_id"] == s.unit_ids[-1]:
@@ -232,10 +163,7 @@ def segment_book(conn: sqlite3.Connection, cfg: Config, book_id: str) -> list[Sc
             keep.add(s.id)
             conn.executemany("UPDATE units SET scene_id=? WHERE id=?", [(s.id, u) for u in s.unit_ids])
             k = kinds.get(s.unit_ids[0])
-            if k is None and s.break_reason == "max_size":
-                k = last_kind  # a long scene read in parts: each part is the same kind of scene (a flashback's second half)
             conn.execute("UPDATE scenes SET kind=? WHERE book_id=? AND id=?", (k, book_id, s.id))
-            last_kind = k
         for sid in existing:
             if sid not in keep:
                 if int(existing[sid]["version"]) > 0:
@@ -342,16 +270,11 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
     rows = scene_rows(conn, book_id, scene["id"])
     known = vis.visible_characters(conn, book_id, scene["start_ordinal"] - 1)
     forms_at = vis.form_positions(conn, book_id)
-    amap = repo.alias_map(known)
     texts = _unit_texts(rows)
     quotes = find_quotes(texts)
-    ev = detect_tags(texts, quotes, amap)
-    q_payload = []
-    for q in quotes:
-        tags = {e.character_id for e in ev.get((q.unit_id, q.index), []) if e.kind == "dialogue_tag"}
-        q_payload.append({"unit_id": q.unit_id, "quote_index": q.index, "text": q.text[:200],
-                          "program_speaker": next(iter(tags)) if len(tags) == 1 else None,
-                          "continues_previous_quote": q.continuation_of is not None})
+    # the lines found by their brackets (structure); who says them is the model's reading
+    q_payload = [{"unit_id": q.unit_id, "quote_index": q.index, "text": q.text[:200],
+                  "continues_previous_quote": q.continuation_of is not None} for q in quotes]
     scene_text = " ".join(t.text for t in texts)
     from .narration import hint as narration_hint
 
@@ -434,37 +357,14 @@ def _relations_so_far(conn: sqlite3.Connection, book_id: str, before: int) -> di
     return {k: v[:6] for k, v in out.items()}
 
 
-REVEAL_WINDOW = 400  # units: a description is matched to a revealed name only if it was introduced shortly before
+def _revealed(known: list[Any], book_id: str, same_as: str | None) -> str | None:
+    """The known character a newly named one turns out to be: the model's ``same_as_ref`` (a known character of this
+    book). The program does not match names or descriptions itself (ADR-059)."""
+    mine = {c["id"] for c in known if c["book_id"] == book_id}
+    return same_as if same_as in mine else None
 
 
-def _revealed(conn: sqlite3.Connection, book_id: str, known: list[Any], same_as: str | None, aliases: list[str],
-              ordinal: int) -> str | None:
-    """The known character a newly named one turns out to be: the model's ``same_as_ref`` (a known character of
-    this book), or else a known character whose name is one of the new aliases — only a specific description
-    («黒髪の女性», «学院長»), not a generic word (「少女」), held by no one else, introduced shortly before."""
-    def group(c: Any) -> bool:  # 「取り巻き」 known as 「取り巻きの二人」 is several people, whoever says otherwise
-        return any(names_a_group(f) for f in [c["canonical_name"], *json.loads(c["aliases_json"] or "[]")])
-
-    mine = {c["id"]: c for c in known if c["book_id"] == book_id}
-    if same_as in mine:
-        return None if group(mine[same_as]) else same_as
-    hits = [c for c in mine.values() if c["canonical_name"] in aliases and c["canonical_name"] not in GENERIC_REFERENTS
-            and not group(c)
-            and acceptable_glossary_term(c["canonical_name"]) and 0 <= ordinal - c["known_from_ordinal"] <= REVEAL_WINDOW]
-    if len(hits) != 1:
-        return None
-    term = hits[0]["canonical_name"]
-    shared = [c for c in known if c["id"] != hits[0]["id"] and term in json.loads(c["aliases_json"] or "[]")]
-    return None if shared else str(hits[0]["id"])
-
-
-def _is_description(name: str) -> bool:
-    """「黒髪の女性」「長い銀髪の美しい女性」「フードをかぶった少女」: words describing someone, not a name."""
-    n = name.strip()
-    return len(n) >= 4 and (bool(re.search(r"[のなたいる]", n[1:-1])) or any(
-        n.endswith(g) and len(n) > len(g) + 1 for g in GENERIC_REFERENTS))
-
-
+_QUOTED = re.compile(r"「[^」]*」|『[^』]*』")  # what is said inside a paragraph (a speech tag is outside it)
 NEW_NARRATOR = "new_narrator"
 NARRATOR_NAME = "（敘述者）"
 
@@ -525,9 +425,10 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 via_entity = character_for_form(conn, book_id, name)
                 if via_entity:  # a known name form of an existing character (full name, nickname …)
                     existing_alias[name] = via_entity
-            if name in existing_alias and nc.other_person:
+            if nc.other_person and (name in existing_alias or nc.period.strip()):
                 # 「母親」 of a past life is not the mother of this one: a card of its own, named with its time, and the
-                # bare word stays with the card it had (the reader tells them apart by the cards it is given)
+                # bare word stays with the card it had (the reader tells them apart by the cards it is given) — also
+                # when the past one is met first in the scene, so the order of mention does not decide who is who
                 label = f"{name}（{nc.period.strip()[:10] or '另一人'}）"
                 cid, created = repo.upsert_character(conn, book_id, label, name_zh=None, aliases=[], unit_id=first.id,
                                                      ordinal=first.ordinal, origin="scene_analysis")
@@ -547,13 +448,15 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             # (the generic word list stays as a check for the model's omissions)
             common = {k.ja.strip() for k in nc.alias_kinds if k.kind == "common"}
             aliases = [a for a in nc.aliases_ja if a and a != name and len(a) <= MAX_NAME_LEN and a not in PRONOUNS
-                       and a not in GENERIC_REFERENTS and a not in common and not names_a_group(a)
+                       and a not in common
                        and _standalone(a, scene_text, [name, *existing_alias, *(x.name_ja for x in parsed.new_characters)])]
             proposed_zh = nc.proposed_name_zh.strip()[:MAX_NAME_LEN] or None
-            # described first and named in the same scene (「長い銀髪の美しい女性」 … 「エレナ」): the model marks
-            # the name among the aliases; the person is known by the name, the description stays an alias
+            # described first and named in the same scene (「長い銀髪の美しい女性」 … 「エレナ」): the model marks the
+            # words it was introduced by as a description and the name among the aliases; the person is known by the
+            # name, the description stays an alias
             real = next((k.ja.strip() for k in nc.alias_kinds if k.kind == "name" and k.ja.strip() in aliases), None)
-            if real and _is_description(name) and real not in existing_alias:
+            described = any(k.ja.strip() == name and k.kind == "description" for k in nc.alias_kinds)
+            if real and described and real not in existing_alias:
                 aliases = [name, *(a for a in aliases if a != real)]
                 name, proposed_zh = real, None
             gl = conn.execute(f"SELECT target_term FROM glossary WHERE {SERIES_SCOPE} AND source_term=?",
@@ -563,15 +466,16 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                                                  ordinal=first.ordinal, origin="scene_analysis")
             if created:
                 stats["new_characters"] += 1
-                if zh and acceptable_glossary_term(name):
+                if zh and len(name) >= 2:
                     repo.ensure_glossary(conn, book_id, name, zh, category="character", origin="scene_analysis",
                                          first_unit_id=first.id)
             ref_map[nc.temp_id] = cid
             ref_map[cid] = cid
             names_of[cid] = [name, *aliases]
             existing_alias[name] = cid
-            same = _revealed(conn, book_id, known, nc.same_as_ref,
-                             [a.strip() for a in nc.aliases_ja if a.strip() not in common], first.ordinal)
+            if nc.group:
+                conn.execute("UPDATE characters SET is_group=1 WHERE id=?", (cid,))
+            same = _revealed(known, book_id, nc.same_as_ref)
             if same and same != cid:
                 reveals.append((cid, same, name, first, nc.evidence_unit_ids))
         # a name revealed for a character known so far only by a description: one character from here on.
@@ -598,7 +502,25 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     all_visible = vis.visible_characters(conn, book_id, scene["end_ordinal"])
     amap = repo.alias_map(all_visible)
     quotes = find_quotes(texts)
-    program = detect_tags(texts, quotes, amap)
+    position = {t.id: i for i, t in enumerate(texts)}
+    told = [_QUOTED.sub("", clean(t.text)) for t in texts]  # the paragraphs without what is said in them
+
+    def names_for(cid: str) -> set[str]:
+        return {n for n, i in amap.items() if i == cid} | set(names_of.get(cid, []))
+
+    has_quote = {q.unit_id for q in quotes}
+
+    def tag_ok_for(q: Quote) -> Any:
+        # the line's own paragraph, or the paragraph before / after when it is narration only: a paragraph with a
+        # line of its own (「…」とミナが言った) tells who says that line, not this one
+        i = position[q.unit_id]
+        near = [told[j] for j in range(max(0, i - 1), min(len(texts), i + 2))
+                if j == i or texts[j].id not in has_quote]
+
+        def ok(tag: str, cid: str) -> bool:  # the words are there, outside quotes, and name the speaker
+            words = _QUOTED.sub("", clean(tag)).strip(" 　。、")
+            return bool(words) and any(words in n for n in near) and any(nm and nm in words for nm in names_for(cid))
+        return ok
 
     claims: dict[tuple[str, int], LlmClaim] = {}
     participants: list[dict[str, object]] = []
@@ -625,7 +547,8 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 sref = None
             claims[key] = LlmClaim(ref_map[sref] if sref else None, ua.resolution_status, cands,
                                    [x[:200] for x in ua.contradictions],
-                                   [ref_map[x] for x in ua.listener_refs if x in ref_map and ref_map[x] != ref_map.get(sref or "")])
+                                   [ref_map[x] for x in ua.listener_refs if x in ref_map and ref_map[x] != ref_map.get(sref or "")],
+                                   ua.speech_tag[:80])
         for p in parsed.participants:
             if p.character_ref in ref_map:
                 participants.append({"character_id": ref_map[p.character_ref], "presence": p.presence,
@@ -651,7 +574,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     for q in quotes:
         uid_key = (q.unit_id, q.index)
         head = resolutions.get(q.continuation_of) if q.continuation_of else None
-        res = resolve(program.get(uid_key, []), claims.get(uid_key), head)
+        res = resolve(claims.get(uid_key), head, tag_ok_for(q))
         utt_id = repo.utterance_id_for(q.unit_id, q.index)
         old = conn.execute("SELECT * FROM utterances WHERE id=?", (utt_id,)).fetchone()
         if old is not None and old["status"] == "human_verified":
@@ -705,9 +628,9 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     conn.execute("UPDATE scenes SET state_json=?, version=? WHERE book_id=? AND id=?",
                  (json.dumps(state, ensure_ascii=False), version, book_id, sid))
     repo.refresh_profiles(conn, book_id)
-    from ..memory.address import reharvest_scene
+    from ..memory.address import follow_speakers
 
-    stats["address_terms"] = reharvest_scene(conn, book_id, sid)
+    stats["address_moved"] = follow_speakers(conn, book_id, sid)  # forms of address on lines whose speaker changed
     return stats
 
 

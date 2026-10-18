@@ -1,19 +1,23 @@
-"""M4: quote detection, dialogue tags, sequence-level speaker resolution, speech profiles."""
+"""Quote structure, speech profiles, and who says a line: the model's reading with its evidence checked (ADR-059)."""
 
-from ncte.analysis.dialogue import UnitText, detect_tags, find_quotes, speech_profile, style_hints
-from ncte.analysis.speaker import Candidate, LlmClaim, Resolution, resolve
-
-AL = {"ミナ": "c_mina", "カイト": "c_kaito"}
+from ncte.analysis.dialogue import UnitText, find_quotes, speech_profile
+from ncte.analysis.speaker import TO_LOOK_AT, Candidate, LlmClaim, Resolution, resolve
 
 
 def mk(*lines):
     return [UnitText(f"u{i}", t, i) for i, t in enumerate(lines)]
 
 
-def ev_for(lines):
-    us = mk(*lines)
-    qs = find_quotes(us)
-    return us, qs, detect_tags(us, qs, AL)
+def claim(ref, status, tag="", types=("dialogue_tag",)):
+    return LlmClaim(ref, status, [Candidate(ref, set(types), ["u0"], "llm")] if ref else [], tag=tag)
+
+
+def names_ok(names):
+    """The program's check: the quoted words name the speaker (and, in scene analysis, are next to the line)."""
+    return lambda tag, cid: any(n in tag for n in names.get(cid, []))
+
+
+NAMES = {"c_mina": ["ミナ"], "c_kaito": ["カイト"]}
 
 
 def test_quotes_nested_and_multiple():
@@ -32,140 +36,37 @@ def test_multi_paragraph_quotes_both_conventions():
     assert [q.continuation_of for q in qs] == [None, ("u0", 0), ("u1", 0), None]
 
 
-def test_explicit_tags():
-    _, qs, ev = ev_for(["「行こう」とカイトは言った。"])
-    assert [(e.character_id, e.kind) for e in ev[("u0", 0)]] == [("c_kaito", "dialogue_tag")]
-    _, qs, ev = ev_for(["「行こう」", "　ミナは静かに答えた。"])
-    assert ev[("u0", 0)][0].kind == "dialogue_tag"
-    _, qs, ev = ev_for(["ミナが口を開いた。", "「行きましょう」"])
-    assert ev[("u1", 0)][0].character_id == "c_mina"
-
-
-def test_keep_doing_is_not_a_speech_verb():
-    # 「使い続け」 is "keeps using", not 「…と続けた」 (found in 剣士と魔女の転生記 §3363)
-    _, qs, ev = ev_for(["　絶え間なくミナが魔法を使い続けることで、その形状を保ち続けている。", "「耐えるに決まってるよな」"])
-    assert ("u1", 0) not in ev
-    _, qs, ev = ev_for(["「それに」とミナが続けた。"])
-    assert ev[("u0", 0)][0].character_id == "c_mina"
-
-
-def test_narration_looking_back_on_earlier_words_is_not_the_tag():
-    # 「まぁ……確かにそれくらいしか方法はないだろうからな」 then 「エルリアはその場の勢いで言ったようだが、」: the line
-    # is his answer; the narration is about what she said before (英雄と賢者の転生婚 1, s_011_01)
-    _, qs, ev = ev_for(["「まぁ……それしか方法はないだろうからな」", "　ミナはその場の勢いで言ったようだが、それが唯一の方法だ。"])
-    assert ("u0", 0) not in ev
-
-
-def test_name_spoken_to_is_not_the_speaker():
-    # 「…」と小林に声をかけた: 小林 is addressed (灯台と少女たち §1301)
-    _, qs, ev = ev_for(["「いつもありがとうございます」とミナに声をかけた。"])
-    assert ("u0", 0) not in ev
-
-
-def test_disputed_tag_yields_to_the_model_as_an_inference():
-    _, _, ev = ev_for(["「な、なに？」", "　ミナはすぐに答えない。"])
-    llm = LlmClaim("c_kaito", "inferred", [Candidate("c_kaito", {"action", "continuity"}, ["u0"], "llm")])
-    r = res(ev[("u0", 0)], llm)
-    assert (r.speaker_id, r.status) == ("c_kaito", "inferred")
-    _, _, ev = ev_for(["「な、なに？」とミナは答えた。"])
-    assert (res(ev[("u0", 0)], llm).speaker_id, res(ev[("u0", 0)], llm).status) == ("c_kaito", "inferred")
-
-
-def test_laughing_after_a_line_is_a_reaction_not_a_speech_tag():
-    """「君は犯人だ」 then 「カイトは笑った」: Kaito laughed; that does not say Kaito said the line."""
-    _, _, ev = ev_for(["「君は犯人だ」", "　カイトは笑った。"])
-    assert [(e.character_id, e.kind) for e in ev[("u0", 0)]] == [("c_kaito", "action")]
-    r = res(ev[("u0", 0)], LlmClaim(None, "unknown", []))
-    assert (r.speaker_id, r.status) == (None, "unknown")  # the model's "cannot tell" stands
-    for before in ("カイトは苦笑した。", "ミナは微笑んだ。"):  # before the line: no tag either
-        _, _, ev = ev_for([before, "「そうかもね」"])
-        assert all(e.kind != "dialogue_tag" for e in ev.get(("u1", 0), []))
-    # tied to the line by the quotative と, laughing is how it was said
-    _, _, ev = ev_for(["「君は犯人だ」とカイトは笑った。"])
-    assert [(e.character_id, e.kind) for e in ev[("u0", 0)]] == [("c_kaito", "dialogue_tag")]
-
-
-def test_action_is_not_explicit():
-    _, qs, ev = ev_for(["「悪い悪い」", "　カイトは頭をかいた。"])
-    assert [(e.character_id, e.kind) for e in ev[("u0", 0)]] == [("c_kaito", "action")]
-
-
-def test_tag_inside_previous_quote_paragraph_is_not_reused():
-    # regression found by the M6 evaluation: «「…」とミナは言った。» must not make the next line ミナ's
-    _, qs, ev = ev_for(["「カイト、遅いですよ」とミナは言った。", "「悪い、寝坊した」"])
-    assert ("u1", 0) not in ev
-
-
-def test_after_tag_is_not_reused_for_next_quote():
-    _, qs, ev = ev_for(["「遅いですよ」", "　ミナは腕を組んで言った。", "「悪い悪い」"])
-    assert ("u2", 0) not in ev
-
-
-def res(program=(), llm=None, head=None):
-    return resolve(list(program), llm, head)
-
-
-def test_resolution_known_speaker():
-    _, _, ev = ev_for(["「行こう」とカイトは言った。"])
-    assert (res(ev[("u0", 0)], None).speaker_id, res(ev[("u0", 0)], None).status) == ("c_kaito", "explicit")
-    agree = LlmClaim("c_kaito", "inferred", [Candidate("c_kaito", {"dialogue_tag"}, ["u0"], "llm")])
-    assert res(ev[("u0", 0)], agree).status == "explicit"
-    # disputed: the model's reading is kept, but only as an inference
-    r = res(ev[("u0", 0)], LlmClaim("c_mina", "explicit", [Candidate("c_mina", {"first_person"}, ["u0"], "llm")]))
+def test_a_stated_speaker_needs_words_that_name_them():
+    """「とミナは言った」 given as the evidence: explicit. No words, or words naming someone else: the model's answer is
+    kept, as an inference — the program never makes or unmakes the speaker, it checks the evidence."""
+    ok = names_ok(NAMES)
+    assert (resolve(claim("c_mina", "explicit", "とミナは言った"), None, ok).status) == "explicit"
+    r = resolve(claim("c_mina", "explicit", ""), None, ok)
+    assert (r.speaker_id, r.status) == ("c_mina", "inferred")
+    r = resolve(claim("c_mina", "explicit", "とカイトは言った"), None, ok)
     assert (r.speaker_id, r.status) == ("c_mina", "inferred")
 
 
-def test_resolution_llm_explicit_downgraded():
-    r = res((), LlmClaim("c_mina", "explicit", [Candidate("c_mina", {"dialogue_tag"}, ["u0"], "llm")]))
-    assert (r.speaker_id, r.status) == ("c_mina", "inferred")
-
-
-def test_resolution_unknown_stays_unknown():
-    r = res((), LlmClaim(None, "unknown", []))
+def test_the_model_answer_stands_and_no_answer_is_unknown():
+    assert (resolve(claim("c_kaito", "inferred"), None).speaker_id, resolve(claim("c_kaito", "inferred"), None).status) == (
+        "c_kaito", "inferred")
+    r = resolve(claim(None, "unknown"), None)
     assert (r.speaker_id, r.status) == (None, "unknown")
-    r = res(())
-    assert (r.speaker_id, r.status) == (None, "unknown")
+    assert resolve(None, None).status == "unknown"
 
 
-def test_resolution_weak_only_is_inferred_not_explicit():
-    r = res((), LlmClaim("c_kaito", "inferred", [Candidate("c_kaito", {"sentence_ending"}, ["u0"], "llm")]))
-    assert r.status == "inferred" and "only weak (style) evidence" in r.notes
-
-
-def test_resolution_model_kept_against_action_narration():
-    _, _, ev = ev_for(["「俺様に任せろ！」", "　ミナはカイトの口調を真似て、胸を張った。"])
-    r = res(ev[("u0", 0)], LlmClaim("c_kaito", "inferred", [Candidate("c_kaito", {"first_person", "verbal_tic"}, ["u0"], "llm")]))
-    # the model decides; the narration (ミナ imitating カイト) is a lead the second look reads with the exchange
-    assert (r.speaker_id, r.status, r.source) == ("c_kaito", "inferred", "llm")
-    assert any("action evidence for c_mina" in n and "(LLM kept)" in n for n in r.notes)
-
-
-def test_resolution_conflict_goes_to_the_second_look():
-    _, _, ev = ev_for(["「やめろ」", "　カイトは剣を抜いた。"])
-    r = res(ev[("u0", 0)], LlmClaim("c_mina", "inferred", [Candidate("c_mina", {"address"}, ["u0"], "llm")]))
-    assert (r.speaker_id, r.status) == ("c_mina", "inferred") and any("(LLM kept)" in n for n in r.notes)
-
-
-def test_resolution_continuation_inherits_head():
-    head = Resolution("c_mina", "explicit", "program")
-    r = res((), LlmClaim("c_kaito", "inferred", []), head)
+def test_a_continuation_keeps_its_speech_unless_the_model_reads_another():
+    head = Resolution("c_mina", "explicit", "llm")
+    r = resolve(claim(None, "unknown"), head)
     assert (r.speaker_id, r.status, r.source) == ("c_mina", "explicit", "continuity")
+    r = resolve(claim("c_kaito", "inferred"), head)
+    assert (r.speaker_id, r.status) == ("c_kaito", "inferred") and any(TO_LOOK_AT in n for n in r.notes)
 
 
-def test_consecutive_lines_not_forced_to_alternate():
-    # two consecutive quotes by the same explicit speaker stay with that speaker
-    us = mk("「まず一つ」とミナは言った。", "「それから二つ目」とミナは続けた。")
-    qs = find_quotes(us)
-    ev = detect_tags(us, qs, AL)
-    assert [resolve(ev[(q.unit_id, q.index)], None).speaker_id for q in qs] == ["c_mina", "c_mina"]
-
-
-def test_speech_profile_and_style_hints():
+def test_speech_profile():
     prof = speech_profile(["「私は行きます」", "「あなたも来てください」", "「私、知りませんでした」"])
     assert prof["first_person"] == ["私"] and prof["formality"] == "usually_polite"
     assert speech_profile(["「俺は知らねえよ」"])["formality"] == "casual"
-    hints = style_hints("「私が行く」", {"c_mina": prof, "c_kaito": {"first_person": ["俺"]}})
-    assert [h.character_id for h in hints] == ["c_mina"]
 
 
 def test_a_paragraph_that_is_one_double_bracket_is_a_voice():
@@ -180,9 +81,13 @@ def test_a_paragraph_that_is_one_double_bracket_is_a_voice():
     assert got["u4"].startswith("「") and len([q for q in find_quotes(us) if q.unit_id == "u4"]) == 1
 
 
-def test_resolution_action_alone_is_a_lead_not_an_answer():
-    """「台無しじゃねえかッ！」 then 「神は彼をあざ笑い、彼は声をあげた」: the narration names one person but may be about
-    another; with no answer from the model the line stays unknown and goes to the second look."""
-    _, _, ev = ev_for(["「やめろ」", "　カイトは剣を抜いた。"])
-    r = res(ev[("u0", 0)], LlmClaim(None, "unknown", []))
-    assert (r.speaker_id, r.status) == (None, "unknown") and any("(to look at)" in n for n in r.notes)
+def test_an_action_says_how_sure_who_does_it_is():
+    """「ミナを押した」: ミナ is the one pushed; with no one named as doing it, the action's status is unknown even if
+    the model was sure of the object — the translator must not read a known subject into it."""
+    from ncte.analysis.reference_resolution import validate_actions
+    from ncte.llm.schemas import ActionAnalysis
+
+    a = ActionAnalysis(unit_id="u0", summary="推了米娜", subject_candidates=[], object_candidates=["c_mina"],
+                       resolution_status="explicit")
+    kept, _ = validate_actions([a], {"u0": "　ミナを押した。"}, {"c_mina": "c_mina"}, {"c_mina": ["ミナ"]})
+    assert kept[0]["status"] == "unknown" and kept[0]["object_candidates"] == ["c_mina"]

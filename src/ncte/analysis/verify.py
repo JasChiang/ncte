@@ -1,11 +1,9 @@
 """A second look at the read pass's disputed judgments, before naming and translation (ADR-033).
 
-Only what the first pass left in doubt is asked again, with the surrounding text: lines whose speaker the model and
-the program disagreed on (the model's answer was kept as ``inferred``) or that ended ``unknown`` because adjacent
-narration pointed at someone else, genders known only by inference, and characters merged when a name was
-revealed, and every form of address the program found by matching a name in someone's line (ADR-037: is it calling
-that person, talking about them, the speaker about themselves, a quote of what others call them, or a word that only
-looks like the name?). The answers never become facts: a speaker stays ``inferred``; a doubtful inferred gender is dropped (the
+Only what the first pass left in doubt is asked again, with the surrounding text: lines the model was unsure of
+(it named candidates but no speaker, its evidence for a stated speaker did not check, or it read another speaker for
+the rest of a speech), genders known only by inference, and characters merged when a name was
+revealed. The answers never become facts: a speaker stays ``inferred``; a doubtful inferred gender is dropped (the
 translation then uses 你); a merge judged "different" stops counting the merged description as this character
 (its forms leave the aliases) and becomes a finding for the user — lines moved by the merge are not moved back.
 """
@@ -46,8 +44,8 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     for u in conn.execute(
             "SELECT ut.*, un.ordinal FROM utterances ut JOIN units un ON un.id=ut.unit_id WHERE ut.book_id=? AND "
-            "ut.status IN ('inferred','unknown') AND (ut.notes_json LIKE '%(LLM kept)%' OR ut.notes_json LIKE "
-            "'%conflict: action evidence%' OR ut.notes_json LIKE '%(to look at)%') ORDER BY un.ordinal", (book_id,)):
+            "ut.status IN ('inferred','unknown') AND ut.notes_json LIKE '%(to look at)%' ORDER BY un.ordinal",
+            (book_id,)):
         cands = sorted({h["candidate_character_id"] for h in conn.execute(
             "SELECT candidate_character_id FROM speaker_hypotheses WHERE utterance_id=?", (u["id"],))} & names.keys())
         items.append({"ref": f"q:{u['id']}", "kind": "speaker", "quote": match_text(u["quote_text"])[:120],
@@ -93,7 +91,6 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
     items = items[:MAX_ITEMS]
     items += narrator_items(conn, book_id, names)
     items += identity_items(conn, book_id, names)
-    items += address_items(conn, book_id, names)[:MAX_ADDRESS_ITEMS]
     return items
 
 
@@ -103,7 +100,6 @@ def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
     name or only a description is the model's call (the glossary keeps 「村長」「跟班」 as character names too), so every
     card with lines or relations is asked: groups first, then the cards known by the fewest name forms and lines
     (ADR-046)."""
-    from ..lexicon import names_a_group
     from ..series import SERIES_SCOPE
 
     rows = conn.execute(
@@ -116,7 +112,7 @@ def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
         f"SELECT id FROM characters WHERE {SERIES_SCOPE} AND is_narrator=0", (book_id,)) if r[0] in names}
 
     def order(c: sqlite3.Row) -> tuple[int, int, int]:
-        return (0 if names_a_group(c["canonical_name"]) else 1, len(json.loads(c["aliases_json"] or "[]")), c["n"])
+        return (0 if c["is_group"] else 1, len(json.loads(c["aliases_json"] or "[]")), c["n"])
 
     out = []
     for c in sorted((r for r in rows if r["id"] in cards and (r["n"] or r["k"])), key=order):
@@ -124,7 +120,7 @@ def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
         ctx = _window(conn, book_id, c["known_from_ordinal"])
         called_by = [f"{names.get(a['speaker_id'], '?')}：{a['form_ja']}" for a in conn.execute(
             "SELECT speaker_id, form_ja FROM address_terms WHERE book_id=? AND addressee_id=? LIMIT 5", (book_id, c["id"]))]
-        kind = "group" if names_a_group(c["canonical_name"]) else "identity"
+        kind = "group" if c["is_group"] else "identity"  # as the model read it when the card was made
         item = {"ref": f"{'p' if kind == 'group' else 'i'}:{c['id']}", "kind": kind, "name": cards[c["id"]],
                 "context": ctx, "called_by": called_by, "candidates": others}
         if kind == "group":  # members noted while reading: the model confirms or adds
@@ -166,39 +162,14 @@ def narrator_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
     return out
 
 
-def address_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]) -> list[dict[str, Any]]:
-    """Forms the program matched (not confirmed by the memory model, not a person's choice, not classified yet)."""
-    from ..memory.address import usage_of
-
-    out = []
-    for a in conn.execute("SELECT * FROM address_terms WHERE book_id=? AND origin='program' AND uses>0 AND "
-                          "(zh_origin IS NULL OR zh_origin!='human') ORDER BY uses DESC", (book_id,)).fetchall():
-        if usage_of(conn, a) is not None or a["speaker_id"] not in names or a["addressee_id"] not in names:
-            continue
-        lines = []
-        for r in conn.execute("SELECT ut.quote_text, un.ordinal FROM address_observations o JOIN utterances ut ON "
-                              "ut.id=o.utterance_id JOIN units un ON un.id=ut.unit_id WHERE o.address_id=? ORDER BY "
-                              "un.ordinal LIMIT ?", (a["id"], ADDRESS_LINES)):
-            lines.append({"quote": match_text(r["quote_text"])[:160], "context": _window(conn, book_id, r["ordinal"])[1:-1]})
-        if not lines and a["evidence_quote"]:
-            lines.append({"quote": match_text(a["evidence_quote"])[:160], "context": []})
-        if not lines:
-            continue
-        out.append({"ref": f"a:{a['id']}", "kind": "address", "speaker": names[a["speaker_id"]],
-                    "person": names[a["addressee_id"]], "form": a["form_ja"],
-                    "self": a["speaker_id"] == a["addressee_id"], "lines": lines})
-    return out
-
-
 def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], parsed: VerifyOutput,
           finding: Any) -> dict[str, int]:
     """Apply the second look. ``finding(unit_id, type, severity, evidence)`` records what needs the user."""
-    from ..memory.address import reharvest_scene
+    from ..memory.address import follow_speakers
 
     by_ref = {i["ref"]: i for i in items}
     stats = {"speakers_changed": 0, "speakers_unknown": 0, "speakers_kept": 0, "genders_dropped": 0,
              "genders_kept": 0, "merges_doubted": 0, "ignored": 0}
-    from ..memory.address import USAGES, set_usage
     scenes: set[str] = set()
     for a in parsed.items:
         item = by_ref.get(a.ref)
@@ -250,13 +221,6 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             conn.execute("UPDATE scenes SET state_json=? WHERE book_id=? AND id=?",
                          (json.dumps(state, ensure_ascii=False), book_id, key))
             stats["narration_checked"] = stats.get("narration_checked", 0) + 1
-        elif kind == "a":
-            row = conn.execute("SELECT * FROM address_terms WHERE id=?", (int(key),)).fetchone()
-            if row is None or answer not in USAGES:
-                stats["ignored"] += 1
-                continue
-            set_usage(conn, book_id, row, answer, a.reason)
-            stats[f"address_{answer}"] = stats.get(f"address_{answer}", 0) + 1
         elif kind == "i":
             if answer in item["candidates"] and answer != key:  # 「姉ちゃん」 in the sister's story is 高木
                 _narrator_is(conn, book_id, key, answer)
@@ -291,7 +255,7 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
                         + ("（這些稱呼已不再算作此角色；合併時搬過來的台詞請人工確認）" if dropped else ""))
                 stats["merges_doubted"] += 1
     for sid in scenes:
-        reharvest_scene(conn, book_id, sid)
+        follow_speakers(conn, book_id, sid)
     repo.refresh_profiles(conn, book_id)
     return stats
 

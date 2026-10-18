@@ -66,9 +66,10 @@ def visible_props(conn: sqlite3.Connection, book_id: str, horizon: int) -> list[
     where, ids = scope_clause(conn, book_id)
     rows = [r for r in conn.execute(f"SELECT * FROM prop_states WHERE {where}", ids)
             if _p(r, vols, "book_id", "horizon_ordinal") < hz]
-    latest: dict[str, sqlite3.Row] = {}
+    # the latest state for each time: a flashback (who held it three years before) does not replace who holds it now
+    latest: dict[tuple[str, str], sqlite3.Row] = {}
     for r in sorted(rows, key=lambda r: _p(r, vols, "book_id", "horizon_ordinal")):
-        latest[r["name_ja"]] = r
+        latest[(r["name_ja"], (r["period"] if "period" in r.keys() else None) or "")] = r
     return list(latest.values())
 
 

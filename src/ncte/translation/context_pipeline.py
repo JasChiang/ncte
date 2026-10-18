@@ -112,65 +112,9 @@ class ContextOrchestrator(Orchestrator):
         return max((r["ordinal"] for r in rows), default=None)
 
     def choose_scene_breaks(self, *, recut: bool = False) -> dict[str, int]:
-        """Before anything is read (ADR-036): the model divides long stretches the author left undivided.
-
-        ``recut``: choose again for a book already read or divided; scenes whose range changes lose what reading them
-        left in memory (``segment_book``) and are read again."""
-        from ..analysis import scene_breaks as sb
-        from ..analysis.scene import segment_book, segmentation
-        from ..llm.schemas import SceneBreaksOutput
-
-        with self.lock:
-            scheme = segmentation(self.conn, self.book.id)
-        if scheme == "chapters":
-            return self.cut_chapters(recut=recut)
-        max_chars = self.cfg.translation.scene_max_chars
-        with self.lock:
-            if recut:
-                with Transaction(self.conn):
-                    self.conn.execute("DELETE FROM scene_breaks WHERE book_id=?", (self.book.id,))
-                segment_book(self.conn, self.cfg, self.book.id)  # the author's markers and size cuts only
-            todo = sb.stretches(self.conn, self.book.id, max_chars)
-            if not recut:
-                todo = sb.undecided(self.conn, self.book.id, todo, self.sample_end())
-        if not todo:
-            return {}
-        prompt, size = load_prompt("scenes"), self.cfg.memory.max_scene_units
-        stats = {"stretches": len(todo), "breaks": 0, "kept_program_cuts": 0, "asked_again": 0}
-        for rows in todo:
-            req = sb.payload(rows, size, max_chars)
-            try:
-                blocked: list[str] = []  # a refused stretch is looked at in halves (breaks stay inside each half)
-                parsed = call_in_parts(lambda pl: self._llm("scenes", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
-                                       req, "paragraphs", blocked, min_part=8)
-                if parsed is None:
-                    stats["kept_program_cuts"] += 1
-                    continue
-                assert isinstance(parsed, SceneBreaksOutput)
-                if again := sb.runs_on(rows, [b.unit_id for b in parsed.breaks]):
-                    # the paragraph before ends mid-sentence: the model looks once more, and its answer stands
-                    stats["asked_again"] += 1
-                    parsed = self._llm("scenes", prompt, {**req, "reconsider": {
-                        "breaks": again, "why": "這些換場點的前一段沒有結束（以「――」「、」等結尾），句子接到下一段；"
-                                                "請確認是否真的在這裡換場，不是的話改選或拿掉"}}, [r["id"] for r in rows])
-            except FatalAPIError:
-                raise
-            except LLMError as exc:
-                self._finding(None, "scene_breaks_failed", "low", str(exc)[:300])
-                stats["kept_program_cuts"] += 1
-                continue
-            assert isinstance(parsed, SceneBreaksOutput)
-            ok = sb.check(rows, [b.unit_id for b in parsed.breaks], size)
-            if ok is None:
-                stats["kept_program_cuts"] += 1
-                continue
-            with self.lock:
-                sb.save(self.conn, self.book.id, rows, ok, {b.unit_id: b.reason for b in parsed.breaks})
-            stats["breaks"] += len(ok)
-        with self.lock:
-            segment_book(self.conn, self.cfg, self.book.id)
-        self.log(f"scene breaks: {stats}")
-        return stats
+        """Before anything is read: chapters from the TOC, scenes inside them cut by the model (ADR-057).
+        ``recut``: cut again; scenes whose range changes lose what reading them left and are read again."""
+        return self.cut_chapters(recut=recut)
 
     def cut_chapters(self, *, recut: bool = False) -> dict[str, int]:
         """Each chapter the run reaches, cut into scenes by the model in overlapping windows (``scene_windows``);
@@ -326,11 +270,41 @@ class ContextOrchestrator(Orchestrator):
         else:
             self.interleaved(scenes)
         if not self._stop_reason:
+            self.review_leftovers()
+        if not self._stop_reason:
             self.proofread_pass()  # against the source first; the reader then reads the corrected Chinese
         if not self._stop_reason:
             self.reader_pass()
         if not self._stop_reason:
             self.run_meta()
+
+    REVIEW_TRIES = 3  # runs a failed review is tried in before it is left for a person
+
+    def review_leftovers(self) -> dict[str, int]:
+        """Reviews an earlier run left undone (failed, or interrupted while pending) on paragraphs in this run's range:
+        done now, even when nothing is left to translate. A passage the content filter refused is not asked again (it
+        stays a finding); a review failed in REVIEW_TRIES runs is left for a person."""
+        from collections import Counter
+
+        from .review import review_scope
+
+        if self.cfg.review.automatic_review == "off":
+            return {}
+        with self.lock:
+            scope = {r["id"] for r in self.target_units()}
+            latest: dict[str, sqlite3.Row] = {}
+            fails: Counter[str] = Counter()
+            for r in self.conn.execute("SELECT target_id, status, run_id FROM jobs WHERE book_id=? AND stage='review' "
+                                       "ORDER BY id", (self.book.id,)):
+                latest[r["target_id"]] = r
+                fails[r["target_id"]] += r["status"] == "failed"
+            due = [u for u, r in latest.items() if u in scope and r["run_id"] != self.run_id and (
+                r["status"] in ("pending", "running") or (r["status"] == "failed" and fails[u] < self.REVIEW_TRIES))]
+        if not due:
+            return {}
+        stats = review_scope(self, due, any_run=True)
+        self.log(f"  review left by an earlier run: {stats}")
+        return stats
 
     def _scene_pending(self, sid: str) -> tuple[list[sqlite3.Row], bool]:
         pending = [r for r in self.pending_rows(meta=False) if r["scene_id"] == sid]
@@ -516,11 +490,12 @@ class ContextOrchestrator(Orchestrator):
             return {}
         with self.lock:
             parts = reader.chunks(self.conn, self.book.id, set(self.opts.unit_ids) if self.opts.unit_ids else None)
-            cast = reader.characters(self.conn, self.book.id)
         prompt = load_prompt("reader")
         stats = new_stats(read=0, blocked=0, failed=0)
         for part in parts:
             blocked: list[str] = []
+            with self.lock:
+                cast = reader.characters(self.conn, self.book.id, min(p["_at"] for p in part))
             try:  # 120 paragraphs at a time: the content filter may refuse a part; it is then read in halves
                 parsed = call_in_parts(lambda pl: self._llm("reader", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
                                        {"task": "reader", "paragraphs": [{k: v for k, v in p.items() if not k.startswith("_")}
@@ -633,30 +608,6 @@ class ContextOrchestrator(Orchestrator):
                           None, stats)
         self.log(f"proofreading: {stats}")
         return stats
-
-    def classify_address(self) -> None:
-        """``ncte names address-check``: the ADR-037 look at program-matched forms for a book already read."""
-        from ..analysis import verify
-
-        with self.lock:
-            names = verify._names(self.conn, self.book.id)
-            items = verify.address_items(self.conn, self.book.id, names)
-        stats: dict[str, int] = {"items": len(items)}
-        prompt = load_prompt("verify")
-        for i in range(0, len(items), VERIFY_BATCH):
-            chunk = items[i:i + VERIFY_BATCH]
-            try:
-                parsed = self._llm("verify", prompt, {"task": "verify", "items": chunk}, [])
-            except FatalAPIError:
-                raise
-            except LLMError as exc:
-                self._finding(None, "verify_failed", "low", str(exc)[:400])
-                continue
-            assert isinstance(parsed, VerifyOutput)
-            with self.lock, Transaction(self.conn):
-                for k, v in verify.apply(self.conn, self.book.id, chunk, parsed, self._finding).items():
-                    stats[k] = stats.get(k, 0) + v
-        self.log(f"address check: {stats}")
 
     def naming_pass(self) -> bool:
         """Pass 2: propose renderings. False when the run stops here for the user's choices."""
@@ -796,7 +747,9 @@ class ContextOrchestrator(Orchestrator):
                               "source": row["source_text"], "translation": tr["text"] if tr else "",
                               "speakers": _speakers(self.conn, row["id"]),
                               "around": _surroundings(self.conn, self.book.id, [row])})
-            cast = reader.characters(self.conn, self.book.id)
+            # as known at the earliest line checked: nothing revealed after it is shown
+            cast = reader.characters(self.conn, self.book.id, min(self.conn.execute(
+                "SELECT ordinal FROM units WHERE id=?", (f["unit_id"],)).fetchone()[0] for f in found))
         stats = {"checked": len(items), "dismissed": 0}
         blocked: list[str] = []
         try:
@@ -851,13 +804,27 @@ class ContextOrchestrator(Orchestrator):
                 correction = str(exc)
         raise AssertionError("unreachable")
 
+    LONG_SCENE = 1.5  # a scene longer than this many times max_scene_units is read in even parts (it stays one scene)
+
     def _read(self, stage: str, prompt: Any, payload: dict[str, Any], sid: str) -> Any:
-        """A read request; when the content filter refuses the scene, read it in halves (``split_read``).
+        """A read request; when the content filter refuses the scene, read it in halves (``split_read``). A scene the
+        model cut that is too long for one request is read in even consecutive parts and the answers joined: it is
+        still one scene (ADR-059: the program does not cut the model's scenes).
 
         Units no part could read are reported one by one; None when nothing could be read.
         """
         blocked: list[str] = []
-        parsed = self._read_parts(stage, prompt, payload, blocked)
+        ids = [u["unit_id"] for u in payload["units"]]
+        size = self.cfg.memory.max_scene_units
+        if len(ids) > size * self.LONG_SCENE:
+            n = -(-len(ids) // size)
+            parts = [p for k in range(n)
+                     if (p := self._read_parts(stage, prompt, subset_payload(payload, ids[k * len(ids) // n:
+                                                                                      (k + 1) * len(ids) // n]),
+                                               blocked)) is not None]
+            parsed = merge_outputs(parts) if parts else None
+        else:
+            parsed = self._read_parts(stage, prompt, payload, blocked)
         for uid in blocked:
             self._finding(uid, "read_blocked", "medium",
                           f"{sid} {stage}: the content filter refused this passage; it was not read "

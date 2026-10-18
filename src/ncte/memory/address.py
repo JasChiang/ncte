@@ -6,9 +6,9 @@ positions where it was first and last used, the number of uses and the rendering
 means the speaker refers to themself by that name.
 
 Sources, in order of authority:
-* ``program`` – name forms (with an attached honorific) found inside quotes whose speaker is resolved
-  (``explicit`` / ``inferred``; never ``unknown``). Idempotent per utterance (``address_observations``).
-* ``llm``     – memory_update proposals with a verbatim evidence quote; may supply the rendering used.
+* ``llm``     – the memory model reports each form with the line it is in (verbatim evidence) and how it is used
+  (calling the person, talking about them, oneself); the program links it to that line (``address_observations``)
+  and checks nothing else (ADR-059: no name matching by the program).
 * ``human``   – ``ncte names address-set``; never overwritten.
 """
 
@@ -141,77 +141,6 @@ def upsert(conn: sqlite3.Connection, book_id: str, speaker: str, addressee: str,
     return rid
 
 
-def harvest_scene(conn: sqlite3.Connection, book_id: str, scene_id: str,
-                  forms: tuple[dict[str, str], set[str]] | None = None) -> int:
-    """Program-only pass over the resolved quotes of one scene. Returns the number of new observations."""
-    if forms is None:
-        end = conn.execute("SELECT end_ordinal FROM scenes WHERE book_id=? AND id=?", (book_id, scene_id)).fetchone()
-        forms = name_forms(conn, book_id, end[0] if end else None)
-    fmap, _ = forms
-    if not fmap:
-        return 0
-    n = 0
-    rows = conn.execute(
-        "SELECT ut.*, u.ordinal FROM utterances ut JOIN units u ON u.id=ut.unit_id WHERE ut.book_id=? AND ut.scene_id=? "
-        f"AND ut.speaker_id_nullable IS NOT NULL AND ut.status IN ({','.join('?' * len(RESOLVED))}) ORDER BY u.ordinal",
-        (book_id, scene_id, *RESOLVED)).fetchall()
-    for ut in rows:
-        for form, cid in find_forms(ut["quote_text"], fmap):
-            before = conn.total_changes
-            upsert(conn, book_id, ut["speaker_id_nullable"], cid, form, ordinal=ut["ordinal"], unit_id=ut["unit_id"],
-                   origin="program", certainty="explicit" if ut["status"] != "inferred" else "inferred",
-                   quote=ut["quote_text"], utterance_id=ut["id"])
-            n += int(conn.total_changes > before)
-    return n
-
-
-def _can_name(conn: sqlite3.Connection, form: str, cid: str) -> bool:
-    """True if 「form」 (with or without an honorific) is a name of character ``cid`` or a shared form."""
-    c = conn.execute("SELECT canonical_name, aliases_json, book_id FROM characters WHERE id=?", (cid,)).fetchone()
-    if c is None:
-        return False
-    names = {c["canonical_name"], *json.loads(c["aliases_json"] or "[]")}
-    base = _HONORIFIC_END.sub("", form)
-    if form in names or base in names or any(variant_key(n) == variant_key(form) for n in names):
-        return True
-    if len(base) >= 2 and any(n.startswith(base + "の") or n.startswith(base + "（") for n in names):
-        return True  # a relative named after the family: 「水野さん」 for 水野の母, たかぎ（妹）
-    return conn.execute(f"SELECT 1 FROM form_senses WHERE {SERIES_SCOPE} AND term IN (?,?)",
-                        (c["book_id"], form, base)).fetchone() is not None
-
-
-def reassign_scene(conn: sqlite3.Connection, book_id: str, scene_id: str, speaker: str, form: str,
-                   addressee: str) -> int:
-    """The memory model read the scene and says ``speaker``'s 「form」 there is for ``addressee``: the program's
-    guess (whoever owns the name — 「水野さん」 → 水野, though it was said to her mother) follows. Only when the
-    form can name ``addressee`` at all (one of their names, or a form recorded as shared): the model sometimes
-    reports the listener instead of the person named (「中川は？」 asked of 小林). Returns observations moved."""
-    if not _can_name(conn, form, addressee):
-        return 0
-    rows = conn.execute(
-        "SELECT o.utterance_id, o.address_id, a.addressee_id, a.uses FROM address_observations o "
-        "JOIN address_terms a ON a.id=o.address_id JOIN utterances ut ON ut.id=o.utterance_id "
-        "WHERE ut.book_id=? AND ut.scene_id=? AND a.speaker_id=? AND a.form_ja=? AND a.addressee_id!=?",
-        (book_id, scene_id, speaker, form, addressee)).fetchall()
-    n = 0
-    for r in rows:
-        ut = conn.execute("SELECT ut.*, u.ordinal FROM utterances ut JOIN units u ON u.id=ut.unit_id WHERE ut.id=?",
-                          (r["utterance_id"],)).fetchone()
-        conn.execute("DELETE FROM address_observations WHERE utterance_id=? AND address_id=?",
-                     (r["utterance_id"], r["address_id"]))
-        conn.execute("UPDATE address_terms SET uses=MAX(uses-1, 0), updated_at=? WHERE id=?", (utcnow(), r["address_id"]))
-        guess = conn.execute("SELECT * FROM address_terms WHERE id=?", (r["address_id"],)).fetchone()
-        if guess["uses"] == 0 and guess["origin"] == "program" and guess["zh_origin"] not in DECIDED:
-            # nothing is left of the guess (a human / naming decision is kept)
-            conn.execute("DELETE FROM address_terms WHERE id=?", (r["address_id"],))
-            conn.execute("UPDATE naming_proposals SET status='superseded' WHERE kind='address' AND ref=? "
-                         "AND status='pending'", (str(r["address_id"]),))
-        upsert(conn, book_id, speaker, addressee, form, ordinal=ut["ordinal"], unit_id=ut["unit_id"], origin="llm",
-               certainty="inferred", quote=ut["quote_text"], utterance_id=ut["id"])
-        n += 1
-    return n
-
-
 _SMALL = str.maketrans("ぁぃぅぇぉゃゅょっゎァィゥェォャュョッヮ", "あいうえおやゆよつわアイウエオヤユヨツワ")
 
 
@@ -229,11 +158,6 @@ def decided_variants(conn: sqlite3.Connection, speaker: str, addressee: str, for
         "SELECT form_ja, form_zh FROM address_terms WHERE speaker_id=? AND addressee_id=? AND form_ja!=? AND "
         f"form_zh IS NOT NULL AND zh_origin IN ({','.join('?' * len(DECIDED))}) ORDER BY zh_origin='human' DESC, uses DESC",
         (speaker, addressee, form, *DECIDED)) if variant_key(r["form_ja"]) == key][:3]
-
-
-def harvest_book(conn: sqlite3.Connection, book_id: str) -> int:
-    return sum(harvest_scene(conn, book_id, r[0])
-               for r in conn.execute("SELECT id FROM scenes WHERE book_id=? ORDER BY start_ordinal", (book_id,)).fetchall())
 
 
 DECIDED = ("human", "naming")
@@ -257,6 +181,11 @@ def calls_by(conn: sqlite3.Connection, r: sqlite3.Row) -> bool:
 
 def set_usage(conn: sqlite3.Connection, book_id: str, r: sqlite3.Row, usage: str, reason: str, origin: str = "verify",
               ) -> None:
+    """How a form is used. A person's decision is never replaced."""
+    old = conn.execute("SELECT origin FROM address_usage WHERE speaker_id=? AND addressee_id=? AND form_ja=?",
+                       (r["speaker_id"], r["addressee_id"], r["form_ja"])).fetchone()
+    if old is not None and old[0] == "human" and origin != "human":
+        return
     conn.execute("INSERT OR REPLACE INTO address_usage(book_id, speaker_id, addressee_id, form_ja, usage, reason, "
                  "origin, created_at) VALUES (?,?,?,?,?,?,?,?)",
                  (book_id, r["speaker_id"], r["addressee_id"], r["form_ja"], usage, reason[:200], origin, utcnow()))
@@ -320,16 +249,41 @@ def context_items(conn: sqlite3.Connection, book_id: str, horizon: int, text: st
 
 
 def forget_scene(conn: sqlite3.Connection, book_id: str, scene_id: str) -> None:
-    """Withdraw the program observations of a scene (before re-harvesting it after its speakers changed)."""
+    """Withdraw the observations of a scene's lines (before its memory is read again); a form left with no use and
+    nobody's decision goes."""
     obs = conn.execute("SELECT o.utterance_id, o.address_id FROM address_observations o JOIN utterances ut ON "
                        "ut.id=o.utterance_id WHERE ut.book_id=? AND ut.scene_id=?", (book_id, scene_id)).fetchall()
     for utt, aid in obs:
         conn.execute("UPDATE address_terms SET uses=uses-1 WHERE id=?", (aid,))
         conn.execute("DELETE FROM address_observations WHERE utterance_id=? AND address_id=?", (utt, aid))
-    conn.execute("DELETE FROM address_terms WHERE uses<=0 AND origin='program' AND id NOT IN "
-                 "(SELECT address_id FROM address_observations)")
+    conn.execute("DELETE FROM address_terms WHERE uses<=0 AND origin IN ('program','llm') AND COALESCE(zh_origin,'') "
+                 "NOT IN ('human','naming') AND id NOT IN (SELECT address_id FROM address_observations)")
 
 
-def reharvest_scene(conn: sqlite3.Connection, book_id: str, scene_id: str) -> int:
-    forget_scene(conn, book_id, scene_id)
-    return harvest_scene(conn, book_id, scene_id)
+def follow_speakers(conn: sqlite3.Connection, book_id: str, scene_id: str) -> int:
+    """A line's speaker changed (the second look, a person): the forms of address recorded on that line go with it to
+    the new speaker. Only the data moves; the text is not searched again. Returns the observations moved."""
+    rows = conn.execute(
+        "SELECT o.utterance_id, o.address_id, a.speaker_id, a.addressee_id, a.form_ja, a.origin, a.form_zh, a.zh_origin, "
+        "a.note, ut.speaker_id_nullable sp, ut.status, ut.unit_id, ut.quote_text, u.ordinal FROM address_observations o "
+        "JOIN address_terms a ON a.id=o.address_id JOIN utterances ut ON ut.id=o.utterance_id JOIN units u ON "
+        "u.id=ut.unit_id WHERE ut.book_id=? AND ut.scene_id=? AND ut.speaker_id_nullable IS NOT NULL AND "
+        "ut.speaker_id_nullable!=a.speaker_id", (book_id, scene_id)).fetchall()
+    # a line now said by no one known (a person confirmed the speaker unknown): what it was said to contain goes
+    for r in conn.execute("SELECT o.utterance_id, o.address_id FROM address_observations o JOIN utterances ut ON "
+                          "ut.id=o.utterance_id WHERE ut.book_id=? AND ut.scene_id=? AND ut.speaker_id_nullable IS NULL",
+                          (book_id, scene_id)).fetchall():
+        conn.execute("DELETE FROM address_observations WHERE utterance_id=? AND address_id=?", (r[0], r[1]))
+        conn.execute("UPDATE address_terms SET uses=uses-1 WHERE id=?", (r[1],))
+    for r in rows:
+        conn.execute("DELETE FROM address_observations WHERE utterance_id=? AND address_id=?",
+                     (r["utterance_id"], r["address_id"]))
+        conn.execute("UPDATE address_terms SET uses=uses-1 WHERE id=?", (r["address_id"],))
+        addressee = r["sp"] if r["speaker_id"] == r["addressee_id"] else r["addressee_id"]  # one's own name moves too
+        upsert(conn, book_id, r["sp"], addressee, r["form_ja"], ordinal=r["ordinal"], unit_id=r["unit_id"],
+               origin=r["origin"], certainty="explicit" if r["status"] in ("explicit", "human_verified") else "inferred",
+               form_zh=r["form_zh"] if r["zh_origin"] in ("llm", "naming", "human") else None, quote=r["quote_text"],
+               note=r["note"], utterance_id=r["utterance_id"])
+    conn.execute("DELETE FROM address_terms WHERE uses<=0 AND origin IN ('program','llm') AND COALESCE(zh_origin,'') "
+                 "NOT IN ('human','naming') AND id NOT IN (SELECT address_id FROM address_observations)")
+    return len(rows)

@@ -51,6 +51,7 @@ class NewCharacter(_M):
     # the same words as a known character's name but another person (the mother of a past life, not of this one)
     other_person: bool = False
     period: str = ""  # when this person lives, if not the story's present (前世, 三年前)
+    group: bool = False  # the words name several people (「取り巻きの二人」「生徒たち」): the model's reading
 
 
 class Participant(_M):
@@ -78,6 +79,8 @@ class UtteranceAnalysis(_M):
     speaker_ref: str | None = Field(alias="speaker")
     contradictions: list[str] = Field(alias="conflicts")
     listener_refs: list[str] = Field(default_factory=list, alias="to")  # who the line is said to
+    # for an explicit speaker: the words of the text that say who speaks (「とミナは言った」), checked verbatim
+    speech_tag: str = Field(default="", alias="tag")
 
 
 class ActionAnalysis(_M):
@@ -92,6 +95,7 @@ class PropState(_M):
     name_ja: str
     holder_ref: str | None
     evidence_unit_ids: list[str]
+    period: str = ""  # when this holds, if not the story's present (a flashback: 三年前)
 
 
 class Uncertainty(_M):
@@ -179,6 +183,8 @@ class AddressTermOut(_M):
     note: str
     evidence_unit_ids: list[str]
     evidence_quote: str
+    # calling the person (address), talking about someone (mention), oneself by one's own name (self)
+    usage: Literal["address", "mention", "self"] = "address"
 
 
 class WordplayOut(_M):

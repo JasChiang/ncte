@@ -10,7 +10,6 @@ Chinese rendering and type::
         ソラ  official → 索拉 · 天野ソラ full → 天野索拉 · ソラっち nickname → 小索拉
 
 Every glossary row is a form; ``glossary.entity_id`` groups forms. Links between forms need evidence:
-* ``pattern``  – the source says so («ハガネ。通称黒鬼»), detected by the program
 * ``llm``      – proposed by the memory-update model; both names must occur verbatim in the scene and the
                  evidence quote must be verbatim (otherwise only a *candidate*)
 * ``human``    – ``ncte names link``
@@ -20,19 +19,13 @@ Each link stores the ordinal where it was revealed; translation requests only se
 from __future__ import annotations
 
 import hashlib
-import re
 import sqlite3
 from typing import Any
 
-from ..epub.units import match_text
 from ..series import SERIES_SCOPE, volumes
 from .db import utcnow
 
 FORM_TYPES = ("official", "full", "short", "nickname", "alias", "title")
-MARKERS = {"通称": "nickname", "通稱": "nickname", "愛称": "nickname", "あだ名": "nickname", "渾名": "nickname",
-           "呼び名": "nickname", "ニックネーム": "nickname", "略称": "short", "略して": "short", "本名": "official"}
-_MARKER_RE = re.compile(r"(" + "|".join(map(re.escape, MARKERS)) + r")(?:は|が|も|の|で)?[「『]?")
-_RIGHT_TERM = re.compile(r"([^\s　、。，,「」『』！？!?…・（）()]{2,16}?)(?=[」』]|の|と|で|、|。|は|が|を|も|$)")
 
 
 def entity_id_for(book_id: str, label: str) -> str:
@@ -229,39 +222,6 @@ def link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_ty
     record_link(conn, book_id, term, target, form_type, origin=origin, status="candidate", unit_id=unit_id,
                 quote=quote, ordinal=ordinal)
     return "candidate"
-
-
-def detect_links(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row]) -> list[tuple[str, str, str]]:
-    """Find «A。通称B» style statements in ``rows``; returns (term, target, status) for each link made."""
-    forms = sorted({r[0] for r in conn.execute(f"SELECT source_term FROM glossary WHERE {SERIES_SCOPE}", (book_id,))
-                    if len(r[0]) >= 2}, key=len, reverse=True)
-    out = []
-    for r in rows:
-        text = match_text(r["plain_text"])
-        for m in _MARKER_RE.finditer(text):
-            rt = _RIGHT_TERM.match(text[m.end():m.end() + 20])
-            if not rt:
-                continue
-            right = rt.group(1)
-            left_zone = text[max(0, m.start() - 40):m.start()]
-            best = None
-            for f in forms:
-                pos = left_zone.rfind(f)
-                if pos >= 0 and f != right and (best is None or pos + len(f) > best[1] + len(best[0])
-                                                or (pos + len(f) == best[1] + len(best[0]) and len(f) > len(best[0]))):
-                    best = (f, pos)
-            if not best:
-                continue
-            kind = MARKERS[m.group(1)]
-            if kind == "official":  # «Bの本名はA» – the right side is the real name
-                term, target = best[0], right
-                kind = "alias"
-            else:
-                term, target = right, best[0]
-            status = link(conn, book_id, term, target, kind, origin="pattern", unit_id=r["id"],
-                          quote=text[max(0, m.start() - 30):m.end() + 20], ordinal=r["ordinal"])
-            out.append((term, target, status))
-    return out
 
 
 def entity_forms(conn: sqlite3.Connection, book_id: str) -> dict[str, list[dict[str, Any]]]:

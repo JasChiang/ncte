@@ -24,7 +24,7 @@ TEXT_CHARS = 120  # a paragraph's opening
 END_CHARS = 20  # and the ending of a longer one: whether it runs on into the next (「…眺めていた時――」)
 WINDOW_CHARS = 9000  # what one window shows, about
 WINDOW_PARAGRAPHS = 220
-MIN_SCENE = 3  # paragraphs: a break closer than this to the one before is dropped (not after a separator)
+MIN_SCENE = 3  # paragraphs: the shortest scene size told to the model (guidance only)
 
 
 def marks(r: sqlite3.Row, prev: sqlite3.Row | None) -> list[str]:
@@ -67,9 +67,8 @@ def payload(rows: list[sqlite3.Row], start: int, end: int, *, title: str, known:
 
 
 def accepted(rows: list[sqlite3.Row], start: int, end: int, breaks: list[WindowBreak]) -> list[tuple[int, WindowBreak]]:
-    """The breaks the program keeps, by position: inside the window and not its first paragraph, not inside a quote
-    that runs over paragraphs, and not leaving a scene of one or two paragraphs (unless the author put a separator
-    there). A break on the paragraph right after a separator moves onto the separator (the separator opens the scene).
+    """The breaks the program keeps, by position: inside the window and not its first paragraph, and not inside a
+    quote that runs over paragraphs (structure; how short a scene may be is the model's reading, ADR-059). A break on the paragraph right after a separator moves onto the separator (the separator opens the scene).
     A sentence that runs on (「…時――」) is the model's to weigh: it sees each paragraph's ending, and 「――」 that ends
     one beat and opens the next is a real change of scene."""
     pos = {rows[i]["id"]: i for i in range(start + 1, end)}
@@ -80,11 +79,8 @@ def accepted(rows: list[sqlite3.Row], start: int, end: int, breaks: list[WindowB
         i = pos[b.unit_id]
         if i - 1 > start and rows[i - 1]["is_separator"]:
             i -= 1
-        sep = bool(rows[i]["is_separator"])
         if b.unit_id in inside or (out and out[-1][0] == i):
-            continue
-        if not sep and i - (out[-1][0] if out else start) < MIN_SCENE:
-            continue
+            continue  # inside a speech that runs over paragraphs (structure), or the same paragraph twice
         out.append((i, b))
     return out
 

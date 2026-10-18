@@ -43,14 +43,19 @@ def _replace(value: Any, mapping: dict[str, str]) -> Any:
 def merge_outputs[M: BaseModel](parts: list[M]) -> M:
     """One answer from the answers about consecutive parts of a scene.
 
-    Lists are joined in order. A new character a later part introduces again (same Japanese name) becomes the
-    earlier one; other temporary ids of later parts are made unique, everywhere they are referred to. The scene's
+    Lists are joined in order. A new character a later part introduces again (same Japanese name, same "another
+    person" mark and time) becomes the earlier one; other temporary ids of later parts are made unique, everywhere they are referred to. The scene's
     single values come from the first part that has them (narration: the first that is not 'unclear'); summaries
     are joined.
     """
     cls = type(parts[0])
     dumped = [p.model_dump() for p in parts]
-    by_name: dict[str, dict[str, Any]] = {}
+    # the same person met again: the same words, and the same "another person" mark and time (「母親」 of a past life
+    # is not the mother of the present; two people under one word in one time are beyond what the words can tell)
+    def same_person(c: dict[str, Any]) -> tuple[str, bool, str]:
+        return c["name_ja"], bool(c.get("other_person")), str(c.get("period") or "").strip()
+
+    by_name: dict[tuple[str, bool, str], dict[str, Any]] = {}
     for i, d in enumerate(dumped):
         chars = d.get("new_characters")
         if chars is None:
@@ -58,7 +63,7 @@ def merge_outputs[M: BaseModel](parts: list[M]) -> M:
         mapping: dict[str, str] = {}
         kept = []
         for c in chars:
-            first = by_name.get(c["name_ja"])
+            first = by_name.get(same_person(c))
             if first is not None:
                 mapping[c["temp_id"]] = first["temp_id"]
                 first["aliases_ja"] += [a for a in c["aliases_ja"] if a not in first["aliases_ja"]]
@@ -69,7 +74,7 @@ def merge_outputs[M: BaseModel](parts: list[M]) -> M:
             kept.append(c)
         d = dumped[i] = _replace({**d, "new_characters": kept}, mapping)
         for c in d["new_characters"]:
-            by_name.setdefault(c["name_ja"], c)
+            by_name.setdefault(same_person(c), c)
     out: dict[str, Any] = {}
     for key, value in dumped[0].items():
         values = [d[key] for d in dumped]

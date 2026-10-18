@@ -121,7 +121,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
     present_ids = {p["character_id"] for p in present}
     batch_plain = match_text(" ".join(r["plain_text"] for r in batch_rows))
     facts = select_facts(vis.visible_facts(conn, book_id, horizon), batch_plain, present, names, limit=max_evidence)
-    props = [{"item": p["name_ja"], "holder": names.get(p["holder_character_id"]) if p["holder_character_id"] else None}
+    props = [{"item": p["name_ja"], "holder": names.get(p["holder_character_id"]) if p["holder_character_id"] else None,
+              **({"period": p["period"]} if p["period"] else {})}
              for p in vis.visible_props(conn, book_id, horizon) if p["name_ja"] in scene_text]
     mem: dict[str, Any] = {
         "note": "Only information revealed before this scene. 'inferred'/'unknown' items are NOT facts.",

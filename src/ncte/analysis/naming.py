@@ -264,14 +264,6 @@ def _fix_character(conn: sqlite3.Connection, book_id: str, cid: str, option: dic
             repo.ensure_glossary(conn, book_id, other[0], other[1] or other[0], category="character", origin="naming",
                                  first_unit_id=None)
             add_sense(conn, book_id, form, other[0], origin="human", note=f"也用來稱呼{option['name_zh']}")
-        # address observations made while the form meant only this person are redone (it is ambiguous now)
-        from ..memory.address import reharvest_scene
-        from ..series import scope_clause as _sc
-
-        where, ids = _sc(conn, book_id, "book_id")
-        for bid, sid in conn.execute(f"SELECT DISTINCT book_id, scene_id FROM units WHERE {where} AND scene_id IS NOT "
-                                     "NULL AND instr(plain_text, ?) > 0", (*ids, form)).fetchall():
-            reharvest_scene(conn, bid, sid)
         # the form is no longer this person's name: a pending name proposal for it is moot
         conn.execute("UPDATE naming_proposals SET status='superseded' WHERE kind='name' AND ref=? AND status!='decided'",
                      (form,))

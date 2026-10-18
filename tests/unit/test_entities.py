@@ -1,25 +1,5 @@
 
 
-def test_group_forms_are_not_one_person():
-    from ncte.lexicon import names_a_group
-
-    for t in ("取り巻きの二人", "生徒たち", "騎士達", "三人組", "兵士ども", "両名"):
-        assert names_a_group(t), t
-    for t in ("取り巻き", "ボルト", "二人目", "サクラ", "一人娘"):
-        assert not names_a_group(t), t
-
-
-def test_a_group_is_never_merged_into_a_revealed_name():
-    from ncte.analysis.scene import _revealed
-
-    henchmen = {"id": "c_1", "book_id": "b", "canonical_name": "取り巻き", "aliases_json": '["取り巻きの二人"]',
-                "known_from_ordinal": 10}
-    hooded = {"id": "c_2", "book_id": "b", "canonical_name": "フードの少女", "aliases_json": "[]", "known_from_ordinal": 10}
-    assert _revealed(None, "b", [henchmen], "c_1", ["取り巻き"], 50) is None  # even when the model says so
-    assert _revealed(None, "b", [henchmen], None, ["取り巻き"], 50) is None
-    assert _revealed(None, "b", [hooded], None, ["フードの少女"], 50) == "c_2"
-
-
 def test_a_size_cut_waits_for_a_quiet_point():
     from ncte.analysis.scene import segment_units
 
@@ -43,17 +23,6 @@ def test_a_heading_stays_with_the_text_after_it():
 
     rows = [row(0, "序章", "heading"), row(1, "　地の文。", blank=2), row(2, "　地の文。"), row(3, "　次の場面。", blank=2)]
     assert [s.unit_ids for s in segment_units(rows, {}, 80)] == [["u0", "u1", "u2"], ["u3"]]
-    # a book already read with the heading alone keeps that cut (a changed range would be read again)
-    assert [s.unit_ids for s in segment_units(rows, {}, 80, lone_headings=True)] == [["u0"], ["u1", "u2"], ["u3"]]
-
-
-def test_a_description_is_not_a_name():
-    from ncte.analysis.scene import _is_description
-
-    for d in ("黒髪の女性", "長い銀髪の美しい女性", "フードをかぶった少女", "年配の給仕"):
-        assert _is_description(d), d
-    for n in ("エレナ", "ヴァルター", "ミレーユ", "水野", "たかぎ", "みずっち", "ガルド", "大司教グレゴ"):
-        assert not _is_description(n), n
 
 
 def test_narration_person_slip():

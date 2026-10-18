@@ -168,7 +168,6 @@ ncte import 第4集.epub --series auto                              # 套用自�
 ### 稱呼與實體卡（正式名稱、全名、暱稱、通稱…）
 ```bash
 ncte names list 書.epub                     # 每個人物／團體的所有稱呼與譯名、警告
-ncte names detect 書.epub                   # 從原文「〜。通称〜」等句型自動連結
 ncte names link 書.epub ソラっち --to ソラ --type nickname --zh 小索拉
 ncte names link 書.epub ミナちゃん --to ミナ妹 --shared   # 兩個人共用的稱呼（不合併，翻譯時依上下文判斷）
 ncte names address 書.epub --character ミナ                   # 誰怎麼稱呼誰（含敬稱、譯法、使用次數、首次出現）
@@ -176,7 +175,6 @@ ncte names address-set 書.epub --speaker ソラ --to ミナ --ja ミナっち -
 ncte names gender 書.epub                    # 角色性別（原文明寫／推測／人工）與依據；翻譯時決定「你／妳」「他／她」
 ncte names gender 書.epub ミナ female      # 人工設定（unknown＝不提供，翻譯用「你」）
 ncte names gender-scan 書.epub               # 已讀過的舊書補記性別（只呼叫記憶更新，不動其他記憶）
-ncte names address-check 書.epub            # 已讀過的舊書補做稱呼歸類（當面叫／提到／自稱／轉述／無關，ADR-037）
 ncte names relations 書.epub                # 已讀過的舊書補做人物關係（由事實歸納，ADR-039）
 ```
 

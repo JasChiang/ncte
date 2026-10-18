@@ -39,7 +39,7 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
             out.append(cur)
             cur = []
         href = r["resource_href"]
-        item: dict[str, Any] = {"unit_id": r["id"], "zh": PH_RE.sub("", t["text"]), "_tid": t["id"]}
+        item: dict[str, Any] = {"unit_id": r["id"], "zh": PH_RE.sub("", t["text"]), "_tid": t["id"], "_at": r["ordinal"]}
         look = hint(r, t["text"])
         if look:
             item["look"] = look
@@ -57,9 +57,21 @@ def hint(unit: sqlite3.Row, text: str) -> str | None:
     return None
 
 
-def characters(conn: sqlite3.Connection, book_id: str) -> list[dict[str, str]]:
+def characters(conn: sqlite3.Connection, book_id: str, upto: int | None = None) -> list[dict[str, str]]:
+    """The main characters with gender and narrator, as known at ``upto`` (where the part read begins): a name or a
+    gender revealed later is not shown for an earlier stretch. None: as known after the book."""
     from ..series import SERIES_SCOPE
 
+    if upto is not None:
+        from ..memory.visibility import character_view, visible_characters
+
+        seen: list[dict[str, str]] = []
+        for c in visible_characters(conn, book_id, upto)[:40]:
+            if (v := character_view(conn, book_id, c, upto)) is not None:
+                item: dict[str, str] = {"name": v["name_zh"] or v["name_ja"]}
+                item.update({k: v[k] for k in ("gender", "narrator") if k in v})
+                seen.append(item)
+        return seen
     out = []
     for c in conn.execute(f"SELECT c.*, g.gender FROM characters c LEFT JOIN character_gender g ON g.character_id=c.id "
                           f"WHERE c.{SERIES_SCOPE} ORDER BY c.known_from_ordinal LIMIT 40", (book_id,)):

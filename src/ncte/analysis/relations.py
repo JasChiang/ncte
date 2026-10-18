@@ -305,7 +305,7 @@ def apply(conn: sqlite3.Connection, book_id: str, results: list[tuple[RelationsO
         manual = {(r["a_id"], r["b_id"], r["relation_zh"]) for r in conn.execute(
             "SELECT * FROM relations WHERE book_id=? AND origin!='llm'", (book_id,))}
         conn.execute("DELETE FROM relations WHERE book_id=? AND origin='llm'", (book_id,))
-        placed: list[tuple[str, str, str, int, str | None]] = []
+        placed: list[tuple[str, str, str, int, str | None, str]] = []
         for parsed, lk in results:
             chars, ev = lk["_chars"], lk["_ev"]
             allowed = set().union(*lk["_allowed"].values()) if lk["_allowed"] else set()
@@ -330,13 +330,25 @@ def apply(conn: sqlite3.Connection, book_id: str, results: list[tuple[RelationsO
                      at_period(r.b_is.strip()[:12], when) or None, since,
                      json.dumps([i for k, i, _ in cited if k == "fact"]), r.reason[:200], utcnow(), r.kind, r.certainty,
                      "llm", json.dumps([{"kind": k, "id": i, "at": o} for k, i, o in cited]), when or None))
-                placed.append((a, b, rel, since, (r.replaces or "").strip() or None))
+                placed.append((a, b, rel, since, (r.replaces or "").strip() or None, when))
                 n += 1
-        for a, b, _rel, since, replaces in placed:  # 宿敵 → 未婚夫妻: the earlier relation ends where the later begins
-            if replaces:
-                conn.execute("UPDATE relations SET until_ordinal=? WHERE book_id=? AND relation_zh=? AND since_ordinal<? "
-                             "AND ((a_id=? AND b_id=?) OR (a_id=? AND b_id=?))",
-                             (since, book_id, replaces, since, a, b, b, a))
+        # 宿敵 → 未婚夫妻: the earlier relation ends where the later begins — the latest stretch of it still holding,
+        # in the same time (a relation of a past life is ended by what happens in that life, not in the present); the
+        # model names it without the time (「朋友」), as stored it carries it (「前世：朋友」)
+        for a, b, _rel, since, replaces, when in sorted(placed, key=lambda x: x[3]):
+            if not replaces:
+                continue
+            target = replaces if "：" in replaces else at_period(replaces, when)
+            conn.execute("UPDATE relations SET until_ordinal=? WHERE rowid=(SELECT rowid FROM relations WHERE book_id=? "
+                         "AND relation_zh=? AND since_ordinal<? AND until_ordinal IS NULL AND ((a_id=? AND b_id=?) OR "
+                         "(a_id=? AND b_id=?)) ORDER BY since_ordinal DESC LIMIT 1)",
+                         (since, book_id, target, since, a, b, b, a))
+        # the same relation said again while an earlier stretch of it still holds is that stretch going on, not a new one
+        conn.execute("DELETE FROM relations WHERE book_id=? AND origin='llm' AND EXISTS (SELECT 1 FROM relations e WHERE "
+                     "e.book_id=relations.book_id AND e.relation_zh=relations.relation_zh AND e.since_ordinal<"
+                     "relations.since_ordinal AND (e.until_ordinal IS NULL OR e.until_ordinal>relations.since_ordinal) AND "
+                     "((e.a_id=relations.a_id AND e.b_id=relations.b_id) OR (e.a_id=relations.b_id AND e.b_id=relations.a_id)))",
+                     (book_id,))
     return n
 
 

@@ -99,36 +99,25 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
         out_high += int(chars * 1.5)
     breaks = 0
     if opts.mode == "context" and cfg.context.scene_breaks == "llm" and not opts.unit_ids and todo:
-        # the model cuts scenes first: each chapter in windows, or the undivided stretches of a book read the old
-        # way (ADR-036); a sample only what it reaches
-        from ..analysis import scene_breaks as sb
+        # the model cuts scenes first, each chapter in windows (ADR-057); a sample only what it reaches
         from ..analysis import scene_windows as sw
-        from ..analysis.scene import segmentation
+        from ..analysis.scene import ensure_chapters
+        from ..memory.db import Transaction
 
         end = max(r["ordinal"] for r in rows) if opts.limit is not None else None
-        if segmentation(conn, book.id) == "chapters":
-            from ..analysis.scene import ensure_chapters
-            from ..memory.db import Transaction
-
-            with Transaction(conn):
-                ensure_chapters(conn, book.id)  # local: the TOC read once and kept
-            decided = {r[0] for r in conn.execute("SELECT unit_id FROM scene_breaks WHERE book_id=? AND origin='chapter'",
-                                                  (book.id,))}
-            paras = 0
-            for ch in conn.execute("SELECT * FROM chapters WHERE book_id=? ORDER BY seq", (book.id,)).fetchall():
-                if end is not None and ch["start_ordinal"] > end:
-                    break
-                crows = sw.chapter_rows(conn, book.id, ch)
-                if crows and (opts.force or crows[0]["id"] not in decided):
-                    paras += len(crows)
-                    breaks += -(-len(crows) // sw.WINDOW_PARAGRAPHS) + 1  # windows overlap by the unfinished scene
-            prompt_name, per_para = "scene_windows", sw.TEXT_CHARS // 2 + 20
-        else:
-            stretches = sb.stretches(conn, book.id, cfg.translation.scene_max_chars)
-            stretches = stretches if opts.force else sb.undecided(conn, book.id, stretches, end)
-            paras = sum(len(s) for s in stretches)
-            breaks = len(stretches)
-            prompt_name, per_para = "scenes", sb.OPENING_CHARS + sb.ENDING_CHARS + 20
+        with Transaction(conn):
+            ensure_chapters(conn, book.id)  # local: the TOC read once and kept
+        decided = {r[0] for r in conn.execute("SELECT unit_id FROM scene_breaks WHERE book_id=? AND origin='chapter'",
+                                              (book.id,))}
+        paras = 0
+        for ch in conn.execute("SELECT * FROM chapters WHERE book_id=? ORDER BY seq", (book.id,)).fetchall():
+            if end is not None and ch["start_ordinal"] > end:
+                break
+            crows = sw.chapter_rows(conn, book.id, ch)
+            if crows and (opts.force or crows[0]["id"] not in decided):
+                paras += len(crows)
+                breaks += -(-len(crows) // sw.WINDOW_PARAGRAPHS) + 1  # windows overlap by the unfinished scene
+        prompt_name, per_para = "scene_windows", sw.TEXT_CHARS // 2 + 20
         n_req += breaks
         in_tok += breaks * estimate_tokens(load_prompt(prompt_name).text) + int(paras * per_para * 1.3)
         out_low += paras * 5

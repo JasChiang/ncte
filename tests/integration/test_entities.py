@@ -2,14 +2,13 @@
 
 import json
 
-import pytest
 from typer.testing import CliRunner
 
 from ncte.cli import app
 from ncte.epub.units import InlineSpec  # noqa: F401
 from ncte.library import import_book
 from ncte.llm.fake import FakeLLM
-from ncte.memory.entities import detect_links, entity_forms, link
+from ncte.memory.entities import entity_forms, link
 from ncte.memory.repository import ensure_glossary, set_glossary
 from ncte.qa.rules import check_translation
 from ncte.translation.cache import glossary_entries, is_cached
@@ -27,25 +26,9 @@ def book_with_terms(conn, cfg, fixtures):
     return book
 
 
-def test_pattern_links_official_name_and_nickname(conn, cfg, fixtures):
-    book = book_with_terms(conn, cfg, fixtures)
-    rows = [{"id": "u_x", "ordinal": 5, "plain_text": "　三人組のユニット、ハガネ。通称黒《くろ》鬼《おに》の登場だ。"}]
-    assert detect_links(conn, book.id, rows) == [("黒鬼", "ハガネ", "accepted")]
-    forms = {f["ja"]: f["form"] for fs in entity_forms(conn, book.id).values() if len(fs) > 1 for f in fs}
-    assert forms == {"ハガネ": "official", "黒鬼": "nickname"}
-    ev = conn.execute("SELECT origin, evidence_unit_id, revealed_ordinal FROM entity_links").fetchone()
-    assert tuple(ev) == ("pattern", "u_x", 5)
-
-
-def test_unknown_nickname_becomes_candidate(conn, cfg, fixtures):
-    book = book_with_terms(conn, cfg, fixtures)
-    rows = [{"id": "u_y", "ordinal": 7, "plain_text": "　ハガネ、略してＫＧは強い。"}]
-    assert detect_links(conn, book.id, rows) == [("ＫＧ", "ハガネ", "candidate")]
-
-
 def test_translation_payload_shows_forms_only_after_reveal(conn, cfg, fixtures):
     book = book_with_terms(conn, cfg, fixtures)
-    link(conn, book.id, "黒鬼", "ハガネ", "nickname", origin="pattern", ordinal=100,
+    link(conn, book.id, "黒鬼", "ハガネ", "nickname", origin="llm", ordinal=100,
          note="the fans' nickname")
     gl = glossary_entries(conn, book.id)
     before = glossary_payload(gl, "ハガネが来た", upto=(1.0, 50), revealed={"黒鬼": (1.0, 100)})
@@ -111,7 +94,6 @@ def test_names_cli(tmp_path, fixtures):
     forms = {f["ja"]: (f["form"], f["zh"]) for e in data["entities"] for f in e["forms"]}
     assert forms["ミナっち"] == ("nickname", "小米娜") and forms["ミナ"] == ("official", "米娜")
     assert r.invoke(app, ["-w", str(ws), "names", "unlink", epub, "ミナっち"]).exit_code == 0
-    assert r.invoke(app, ["-w", str(ws), "names", "detect", epub]).exit_code == 0
     # a nickname two people share
     assert r.invoke(app, ["-w", str(ws), "glossary", "set", epub, "カイト", "海斗", "--category", "character"]).exit_code == 0
     out = r.invoke(app, ["-w", str(ws), "names", "link", epub, "ミナっち", "--to", "カイト", "--shared",
@@ -212,8 +194,7 @@ def test_entity_label_follows_official_form_and_unlink_drops_alias(conn, cfg, fi
     assert conn.execute("SELECT entity_id FROM glossary WHERE source_term='たかぎ（妹）'").fetchone()[0] != eid
 
 
-@pytest.mark.parametrize("by_model", [True, False])
-def test_revealed_name_merges_the_described_character(conn, cfg, fixtures, by_model):
+def test_revealed_name_merges_the_described_character(conn, cfg, fixtures):
     from ncte.memory import visibility as vis
 
     from ..scripted import known, scene_analyze, uid, utt
@@ -229,16 +210,11 @@ def test_revealed_name_merges_the_described_character(conn, cfg, fixtures, by_mo
         hood = known(payload, "フードをかぶった少女")
         for nc in out["new_characters"]:
             if nc["name_ja"] == "リリア" and hood:
-                if by_model:
-                    nc["same_as_ref"] = hood
-                else:  # the model only lists the description as an alias: the program links them
-                    nc["aliases_ja"] = ["王女", "フードをかぶった少女"]
+                nc["same_as_ref"] = hood  # the model says who she is (the program does not match descriptions)
         return out
 
     book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "scene_analyze": analyze}),
                           mode="context")
-    if not by_model:  # the description without a glossary entry must still be shown before the reveal
-        conn.execute("DELETE FROM glossary WHERE source_term='フードをかぶった少女'")
     rows = conn.execute("SELECT * FROM characters WHERE canonical_name IN ('リリア', 'フードをかぶった少女')").fetchall()
     assert [r["canonical_name"] for r in rows] == ["リリア"]
     lilia = rows[0]
@@ -270,16 +246,6 @@ def test_merge_carries_gender_and_address_terms(conn, cfg, fixtures):
     assert [(r[0], r[1]) for r in rows] == [(named, 2)]
 
 
-def test_generic_alias_does_not_merge():
-    from ncte.analysis.scene import _revealed
-
-    known = [{"id": "c1", "book_id": "b", "canonical_name": "少女", "known_from_ordinal": 10, "aliases_json": "[]"}]
-    assert _revealed(None, "b", known, None, ["少女"], 20) is None
-    known[0]["canonical_name"] = "黒髪の女性"
-    assert _revealed(None, "b", known, None, ["黒髪の女性"], 20) == "c1"
-    assert _revealed(None, "b", known, None, ["黒髪の女性"], 2000) is None  # introduced long before: may be someone else
-
-
 def test_aliases_the_model_calls_common_nouns_are_not_kept(conn, cfg, fixtures):
     from ..scripted import scene_analyze
 
@@ -294,3 +260,30 @@ def test_aliases_the_model_calls_common_nouns_are_not_kept(conn, cfg, fixtures):
     run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "scene_analyze": analyze}), mode="context")
     al = json.loads(conn.execute("SELECT aliases_json FROM characters WHERE canonical_name='カイト'").fetchone()[0])
     assert "寝坊" not in al and "市場" in al  # not in the word list: the model's label decides
+
+
+def test_merge_leaves_no_reference_to_the_dropped_card(conn, cfg, fixtures):
+    """Every column that names a character follows the merge: whose belief a fact is, who a line is said to, who
+    calls whom what (the usage judged by the second look) — none points at the deleted card."""
+    from ncte.memory.db import utcnow
+    from ncte.memory.repository import merge_characters, upsert_character
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    us = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal", (book.id,)).fetchall()
+    mk = lambda n: upsert_character(conn, book.id, n, name_zh=n, aliases=[], unit_id=us[0][0], ordinal=us[0][1],  # noqa: E731
+                                    origin="t")[0]
+    desc, named, other = mk("黒髪の女性"), mk("ソフィ"), mk("カイル")
+    conn.execute("INSERT INTO facts(id, book_id, subject, predicate, object, fact_type, certainty, fact_json, "
+                 "evidence_unit_ids_json, evidence_quote, first_revealed_unit_id, first_revealed_ordinal, source_viewpoint, "
+                 "created_at) VALUES ('f1',?,?,?,?,?,?,'{}',?,?,?,?,?,?)", (book.id, other, "は", "王", "character_belief",
+                                                                          "inferred", "[]", "",
+                                                    us[0][0], us[0][1], desc, utcnow()))
+    conn.execute("INSERT INTO utterances(id, book_id, unit_id, quote_index, quote_start, quote_end, quote_text, status, "
+                 "resolution_source, updated_at, addressee_ids_json) VALUES ('q1',?,?,0,0,1,'「x」','unknown','none',?,?)",
+                 (book.id, us[0][0], utcnow(), json.dumps([desc, other])))
+    conn.execute("INSERT INTO address_usage(book_id, speaker_id, addressee_id, form_ja, usage, origin, created_at) VALUES "
+                 "(?,?,?,?,?,?,?)", (book.id, other, desc, "お前", "address", "llm", utcnow()))
+    merge_characters(conn, named, desc)
+    assert conn.execute("SELECT source_viewpoint FROM facts WHERE id='f1'").fetchone()[0] == named
+    assert json.loads(conn.execute("SELECT addressee_ids_json FROM utterances WHERE id='q1'").fetchone()[0]) == [named, other]
+    assert conn.execute("SELECT addressee_id FROM address_usage WHERE speaker_id=?", (other,)).fetchone()[0] == named

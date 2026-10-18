@@ -193,9 +193,14 @@ REVIEW_CONTEXT = 5  # paragraphs on each side: who is talking to whom is often t
 
 def _speakers(conn: sqlite3.Connection, unit_id: str) -> list[str]:
     """Who says each quote of the unit, as the read pass judged it (an inference is marked so)."""
-    return [(r["n"] or "？") + ("" if r["status"] in ("explicit", "human_verified") else "（推測）")
-            for r in conn.execute("SELECT c.canonical_name n, u.status FROM utterances u LEFT JOIN characters c ON "
-                                  "c.id=u.speaker_id_nullable WHERE u.unit_id=? ORDER BY u.quote_index", (unit_id,))]
+    from ..memory.visibility import visible_names
+
+    unit = conn.execute("SELECT book_id, ordinal FROM units WHERE id=?", (unit_id,)).fetchone()
+    names = visible_names(conn, unit["book_id"], unit["ordinal"]) if unit else {}  # a name revealed later stays out
+    return [(names.get(r["sp"]) or "？" if r["sp"] else "？") + ("" if r["status"] in ("explicit", "human_verified")
+                                                               else "（推測）")
+            for r in conn.execute("SELECT speaker_id_nullable sp, status FROM utterances WHERE unit_id=? ORDER BY "
+                                  "quote_index", (unit_id,))]
 
 
 def _people(conn: sqlite3.Connection, unit_id: str) -> set[str]:
@@ -373,7 +378,11 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
         todo.append(r)
     if not todo:
         return
-    before = {u: (t["text"] if t is not None else "") for u, t in current.items()}
+    from ..exporter import exported_text
+
+    # what the book says now, as exported (the text and a translator's note after it)
+    before = {u: (exported_text(t["text"], t["translator_note"], t["status"]) if t is not None else "")
+              for u, t in current.items()}
     stats["retranslated"] += len(todo)
     res = BatchResult()
     # the fix sees as much of its scene as the first translation did (the scene around it, up to
@@ -416,7 +425,8 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
             stats["still_flagged"] += 1
             stats["pending"] += 1
             orch._finding(uid, "review_retranslation_failed", "high", res.failed[uid][:300])
-    checks = _check_fixes(orch, [(by_id[u], before[u], res.ok[u].text, feedback[u])
+    checks = _check_fixes(orch, [(by_id[u], before[u], exported_text(res.ok[u].text, res.ok[u].translator_note,
+                                                                     "needs_review"), feedback[u])
                                  for u in res.ok]) if orch.cfg.review.fix_check else {}
     with orch.lock, Transaction(orch.conn):
         for uid, ur in res.ok.items():

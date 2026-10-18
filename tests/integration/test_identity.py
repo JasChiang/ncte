@@ -45,6 +45,7 @@ def test_nameless_character_merged_and_group_members_recorded(conn, cfg, fixture
     sis, _ = upsert_character(conn, book.id, "姉ちゃん", name_zh="姊姊", aliases=[], unit_id=u["id"], ordinal=u["ordinal"], origin="t")
     grp, _ = upsert_character(conn, book.id, "取り巻きの二人", name_zh="跟班兩人", aliases=[], unit_id=u["id"], ordinal=u["ordinal"],
                               origin="t")
+    conn.execute("UPDATE characters SET is_group=1 WHERE id=?", (grp,))  # as the model read the words (several people)
     for c in (sis, grp):
         conn.execute("INSERT INTO relation_notes(book_id, scene_id, a_id, b_id, relation_zh, a_is, b_is, kind, "
                      "evidence_unit_ids_json, evidence_quote, first_ordinal, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -271,3 +272,32 @@ def test_guessed_speakers_are_marked_and_the_narrator_is_named(conn, cfg, fixtur
     paras = [p for ch in proofread.chunks(conn, book.id) for p in ch]
     assert any("（推測）" in p.get("speaker", "") for p in paras)
     assert any(c.get("narrator") for c in naming.build_naming_payload(conn, book.id)["characters"])
+
+
+def test_a_gender_revealed_later_is_not_shown_for_an_earlier_stretch(conn, cfg, fixtures):
+    """Proofreading, the fix check (which reads the proofreading cards) and the reader's look name people and their
+    gender as known where the stretch is: a gender the text gives later must not judge an earlier 你."""
+    from ncte.analysis import proofread, reader
+    from ncte.memory.db import utcnow
+    from ncte.memory.visibility import visible_names
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    u = conn.execute("SELECT u.*, x.speaker_id_nullable sp FROM utterances x JOIN units u ON u.id=x.unit_id WHERE "
+                     "x.book_id=? AND x.speaker_id_nullable IS NOT NULL ORDER BY u.ordinal LIMIT 1", (book.id,)).fetchone()
+    late = conn.execute("SELECT MAX(ordinal) FROM units WHERE book_id=?", (book.id,)).fetchone()[0]
+    conn.execute("DELETE FROM character_gender WHERE character_id=?", (u["sp"],))
+    conn.execute("INSERT INTO character_gender(character_id, gender, book_id, ordinal, origin, updated_at, certainty) "
+                 "VALUES (?,?,?,?,?,?,?)", (u["sp"], "male", book.id, late, "llm", utcnow(), "explicit"))
+
+    ja = conn.execute("SELECT canonical_name FROM characters WHERE id=?", (u["sp"],)).fetchone()[0]
+
+    def gender_of(cards, at):
+        name = visible_names(conn, book.id, at).get(u["sp"])
+        return next((c.get("gender") for c in cards if c["name"] == name or c.get("ja") == ja), "missing")
+
+    early = [{"ja": u["plain_text"], "_who": [u["sp"]], "_at": u["ordinal"]}]
+    assert gender_of(proofread.cast(conn, book.id, early), u["ordinal"]) is None
+    assert gender_of(reader.characters(conn, book.id, u["ordinal"]), u["ordinal"]) in (None, "missing")  # not known yet
+    after = [{"ja": u["plain_text"], "_who": [u["sp"]], "_at": late + 1}]
+    assert gender_of(proofread.cast(conn, book.id, after), late + 1) == "male"
+    assert gender_of(reader.characters(conn, book.id, late + 1), late + 1) == "male"

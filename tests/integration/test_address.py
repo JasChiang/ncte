@@ -3,7 +3,7 @@
 import json
 
 from ncte.llm.fake import FakeLLM
-from ncte.memory.address import find_forms, harvest_book
+from ncte.memory.address import find_forms
 
 from ..helpers import run_book
 from ..scripted import RESPONDERS, known, memory_update, uid
@@ -35,14 +35,27 @@ def test_find_forms_longest_match_and_honorifics():
     assert set(find_forms("「リナ嬢、セレナ」", {"リナ": "c3", "セレナ": "c4"})) == {("リナ嬢", "c3"), ("セレナ", "c4")}
 
 
-def test_program_harvest_from_resolved_quotes(conn, cfg, fixtures):
+def test_a_form_the_model_reads_is_linked_to_its_line(conn, cfg, fixtures):
+    """ADR-059: the memory model reports 「カイト」 in ミナ's line, with the line as evidence; the program links it to that
+    line (a stated speaker: explicit) and counts the line once, however often the scene's memory is read."""
+    from ncte.analysis.memory_update import apply_memory_update
+    from ncte.llm.schemas import MemoryUpdateOutput
+
     book, _, s = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
     assert s.status == "completed"
     r = rows(conn)[("ミナ", "カイト", "カイト")]
-    assert (r["certainty"], r["uses"], r["origin"]) == ("explicit", 1, "program")  # 「カイト、遅いですよ」とミナ
-    assert r["form_zh"] == "海斗" and r["zh_origin"] == "glossary"
-    # idempotent: harvesting again does not count the same quote twice
-    harvest_book(conn, book.id)
+    assert (r["certainty"], r["uses"], r["origin"], r["form_zh"]) == ("explicit", 1, "llm", "海斗")
+    line = conn.execute("SELECT id, scene_id FROM utterances WHERE quote_text LIKE '%遅いですよ%'").fetchone()
+    assert conn.execute("SELECT COUNT(*) FROM address_observations WHERE utterance_id=?", (line[0],)).fetchone()[0] == 1
+    scene = conn.execute("SELECT * FROM scenes WHERE id=?", (line[1],)).fetchone()
+    payload = {"units": [{"unit_id": u, "source": ""} for u in
+                         [x[0] for x in conn.execute("SELECT id FROM units WHERE scene_id=?", (line[1],))]],
+               "known_characters": [{"character_id": c[0], "name_ja": c[1]} for c in
+                                    conn.execute("SELECT id, canonical_name FROM characters")]}
+    again = MemoryUpdateOutput.model_validate(memory_update({**payload, "units": [
+        {"unit_id": u, "source": t} for u, t in conn.execute("SELECT id, plain_text FROM units WHERE scene_id=?",
+                                                             (line[1],))]}, None))
+    apply_memory_update(conn, book.id, scene, again)
     assert rows(conn)[("ミナ", "カイト", "カイト")]["uses"] == 1
 
 
@@ -54,7 +67,7 @@ def test_translation_payload_carries_earlier_address_terms(conn, cfg, fixtures):
     assert "address_terms" not in first  # nothing was known before the first scene
     later = [p for p in payloads if p.get("address_terms")]
     assert later and later[0]["address_terms"][0] == {"speaker": "米娜", "to": "海斗", "ja": "カイト", "uses": 1,
-                                                       "since": "第1集", "zh": "海斗"}
+                                                       "since": "第1集", "zh": "海斗", "note": "直呼名字"}
 
 
 def test_llm_rendering_and_validation(conn, cfg, fixtures):
@@ -78,13 +91,18 @@ def test_llm_rendering_and_validation(conn, cfg, fixtures):
     assert conn.execute("SELECT count(*) FROM memory_rejections WHERE reason LIKE 'address term%'").fetchone()[0] == 2
 
 
-def test_human_speaker_change_reharvests(conn, cfg, fixtures):
+def test_forms_follow_a_line_whose_speaker_changes(conn, cfg, fixtures):
+    """A person sets the speaker: the form recorded on that line goes with the new speaker; a speaker confirmed
+    unknown takes it away. Only the data moves (the text is not searched again)."""
     from ncte.analysis.speaker import set_speaker_human
 
     run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    ids = {r[1]: r[0] for r in conn.execute("SELECT id, canonical_name FROM characters")}
     utt = conn.execute("SELECT id FROM utterances WHERE quote_text LIKE '%遅いですよ%'").fetchone()[0]
-    set_speaker_human(conn, utt, None)  # the speaker is confirmed unknown → the observation is withdrawn
-    assert ("ミナ", "カイト", "カイト") not in rows(conn)
+    set_speaker_human(conn, utt, ids["カイト"])
+    assert ("カイト", "カイト", "カイト") in rows(conn) and ("ミナ", "カイト", "カイト") not in rows(conn)
+    set_speaker_human(conn, utt, None)
+    assert not [k for k in rows(conn) if k[2] == "カイト"]
 
 
 def test_cli_address_list_and_set(tmp_path, fixtures):
@@ -144,9 +162,8 @@ def test_decided_rendering_reaches_the_scene_of_first_use(conn, cfg, fixtures):
     assert context_items(conn, book.id, start, text, set(), names, upto=r["ordinal"] - 1) == []  # not before it
 
 
-def test_memory_model_reassigns_the_name_owner_guess(conn, cfg, fixtures):
-    # 「アダチさん」 said to アダチ's mother is counted for アダチ by the program (the name's owner); the memory
-    # model read the scene and says otherwise
+def test_the_model_says_who_a_form_is_for(conn, cfg, fixtures):
+    # 「アダチさん」 said to アダチ's mother: the memory model read the scene and says who is meant (no program guess)
     from ncte.memory.repository import upsert_character
 
     def mem(payload, req):
@@ -188,37 +205,6 @@ def test_nickname_with_honorific_builds_on_the_decided_spelling(conn, cfg, fixtu
 
 
 
-def test_listener_reported_as_addressee_does_not_move_a_name(conn, cfg, fixtures):
-    # 「中川は？」 asked of 小林: the model reported the listener; 中川 is not a name of 小林, so nothing moves
-    def mem(payload, req):
-        out = memory_update(payload, req)
-        u, mina, kaito = uid(payload, "カイト、遅いですよ"), known(payload, "ミナ"), known(payload, "カイト")
-        if u and mina and kaito:
-            out["address_terms"] = [{"speaker_ref": mina, "addressee_ref": mina, "term": "カイト", "term_zh": "海斗",
-                                     "note": "", "evidence_unit_ids": [u], "evidence_quote": "カイト、遅いですよ"}]
-        return out
-
-    from ncte.memory.address import reassign_scene
-
-    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "memory_update": mem}),
-                          mode="context")
-    ids = {r[0]: r[1] for r in conn.execute("SELECT canonical_name, id FROM characters")}
-    sid = conn.execute("SELECT scene_id FROM utterances WHERE quote_text LIKE '%カイト、遅いですよ%'").fetchone()[0]
-    assert reassign_scene(conn, book.id, sid, ids["ミナ"], "カイト", ids["ミナ"]) == 0
-
-
-def test_family_name_can_name_a_relative(conn, cfg, fixtures):
-    from ncte.library import import_book
-    from ncte.memory.address import _can_name
-    from ncte.memory.repository import upsert_character
-
-    book, _ = import_book(conn, cfg, fixtures["basic"])
-    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
-    mk = lambda n: upsert_character(conn, book.id, n, name_zh=n, aliases=[], unit_id=u[0], ordinal=u[1], origin="t")[0]  # noqa: E731
-    mom, hino = mk("水野の母"), mk("小林")
-    assert _can_name(conn, "水野さん", mom) and not _can_name(conn, "中川", hino)
-
-
 def test_a_title_talked_about_or_ones_own_is_not_a_way_of_calling(conn, cfg, fixtures):
     """「『賢者』が死んだ？」 is about her, 「『英雄』と呼ばれているからには」 is his own title: the second look says so,
     and cards, house style and relations count only the calls."""
@@ -238,3 +224,19 @@ def test_a_title_talked_about_or_ones_own_is_not_a_way_of_calling(conn, cfg, fix
     assert [k for k, r in row.items() if calls_by(conn, r)] == ["call"]
     req, _ = house_style.request(conn, book.id)
     assert req["address_forms"] == ["エルリア×1"]
+
+
+def test_a_form_the_model_says_is_talk_about_someone_is_not_a_call(conn, cfg, fixtures):
+    """The model reads 「カイト」 in ミナ's line as talking about him (not calling him): recorded as a mention, so the
+    cards, the house style and relations do not count it as how she calls him."""
+    from ncte.memory.address import calls_by
+
+    def mem(payload, req):
+        out = memory_update(payload, req)
+        for a in out.get("address_terms", []):
+            a["usage"] = "mention"
+        return out
+
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "memory_update": mem}), mode="context")
+    row = conn.execute("SELECT * FROM address_terms WHERE form_ja='カイト'").fetchone()
+    assert row is not None and not calls_by(conn, row)

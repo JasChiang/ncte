@@ -34,13 +34,13 @@ def utt(payload, text, ref, status, types=("dialogue_tag",), ev_text=None):
         return None
     ev = [uid(payload, ev_text)] if ev_text and uid(payload, ev_text) else [k[0]]
     cands = [{"character_ref": ref, "evidence_types": list(types), "evidence_unit_ids": ev, "note": ""}] if ref else []
+    # a stated speaker comes with the words that state it (the evidence the program checks)
     return {"unit_id": k[0], "quote_index": k[1], "speaker_candidates": cands, "resolution_status": status,
-            "speaker_ref": ref, "contradictions": []}
+            "speaker_ref": ref, "contradictions": [], **({"tag": ev_text} if status == "explicit" and ev_text else {})}
 
 
 def scene_analyze(payload: dict[str, Any], req: Any) -> dict[str, Any]:
-    out = default_scene_analyze(payload, req)
-    out["utterances"] = []
+    out = default_scene_analyze(payload, req)  # what a reader finds stated (「カイトは呆然と呟いた」), as the model would
     mina = known(payload, "ミナ") or "new_1"
     kaito = known(payload, "カイト") or "new_2"
     new = []
@@ -95,6 +95,11 @@ def memory_update(payload: dict[str, Any], req: Any) -> dict[str, Any]:
         out["glossary_candidates"] = [{"source_term": "銀の鍵", "target_term": "銀之鑰", "category": "item",
                                        "evidence_unit_ids": [hand]}]
         out["scene_summary"] = "米娜在市場等海斗，海斗把銀之鑰交給米娜。"
+        line, mina = uid(payload, "カイト、遅いですよ"), known(payload, "ミナ")
+        if line and mina:  # the model reads who calls whom what, with the line as evidence
+            out["address_terms"] = [{"speaker_ref": mina, "addressee_ref": kaito, "term": "カイト", "term_zh": "海斗",
+                                     "note": "直呼名字", "evidence_unit_ids": [line], "evidence_quote": "カイト、遅いですよ",
+                                     "usage": "address"}]
     if hood:
         out["facts"] = [{"subject_ref": "フードの少女", "predicate": "真實身分是", "object": "王女リリア",
                          "fact_type": "objective", "certainty": "explicit", "evidence_unit_ids": [hood],

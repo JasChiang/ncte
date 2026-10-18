@@ -30,7 +30,7 @@ def validate_actions(actions: list[ActionAnalysis], unit_text: dict[str, str], r
             text = unit_text[a.unit_id]
             if not (len(subj) == 1 and any(n in text for n in names_of.get(subj[0], []))):
                 status = "inferred"
-        if not subj and not obj:
+        if not subj:  # the status is about who does it: 「ミナを押した」 — ミナ is pushed, the one who pushes unknown
             status = "unknown"
         kept.append({"unit_id": a.unit_id, "summary": a.summary[:200], "subject_candidates": subj,
                      "object_candidates": obj, "status": status})

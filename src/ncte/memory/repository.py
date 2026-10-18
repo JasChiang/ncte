@@ -138,6 +138,7 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
                 "UPDATE OR IGNORE speech_examples SET character_id=? WHERE character_id=?",
                 "UPDATE facts SET subject=? WHERE subject=?",
                 "UPDATE facts SET object_ref=? WHERE object_ref=?",
+                "UPDATE facts SET source_viewpoint=? WHERE source_viewpoint=?",  # whose belief it is
                 "UPDATE relation_notes SET a_id=? WHERE a_id=?",
                 "UPDATE relation_notes SET b_id=? WHERE b_id=?",
                 "UPDATE OR IGNORE relations SET a_id=? WHERE a_id=?",
@@ -154,6 +155,14 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
     conn.execute("UPDATE characters SET is_narrator=1 WHERE id=? AND ?", (keep_id, int(drop["is_narrator"] or 0)))
     conn.execute("UPDATE prop_states SET holder_character_id=? WHERE holder_character_id=?", (keep_id, drop_id))
     _merge_address(conn, keep_id, drop_id)
+    # who a line is said to (a list of ids) and how a form was judged (the second look's usage of a form of address)
+    for row in conn.execute("SELECT id, addressee_ids_json FROM utterances WHERE addressee_ids_json LIKE ?",
+                            (f'%"{drop_id}"%',)).fetchall():
+        ids = [keep_id if x == drop_id else x for x in json.loads(row["addressee_ids_json"] or "[]")]
+        conn.execute("UPDATE utterances SET addressee_ids_json=? WHERE id=?", (json.dumps(list(dict.fromkeys(ids))), row["id"]))
+    for col in ("speaker_id", "addressee_id"):
+        conn.execute(f"UPDATE OR IGNORE address_usage SET {col}=? WHERE {col}=?", (keep_id, drop_id))
+    conn.execute("DELETE FROM address_usage WHERE speaker_id=? OR addressee_id=?", (drop_id, drop_id))  # duplicates
     g_keep = conn.execute("SELECT 1 FROM character_gender WHERE character_id=?", (keep_id,)).fetchone()
     g_drop = conn.execute("SELECT * FROM character_gender WHERE character_id=?", (drop_id,)).fetchone()
     if g_drop is not None:

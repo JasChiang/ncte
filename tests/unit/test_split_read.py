@@ -59,3 +59,21 @@ def test_several_lists_are_split_without_asking_anything_twice():
     flat = [r for a in asked for r in a]
     assert sorted(flat) == ["a1", "n1", "n3", "n4"] and len(flat) == len(set(flat))  # each asked once
     assert blocked == ["bad"] and len(out.names) == 4
+
+
+def test_same_word_another_person_or_time_is_not_merged_across_parts():
+    """「母親」 of the present in one part, 「母親」 of a past life (another person) in the next, 「母親」 of that past
+    life again in a third: the first two stay apart (other_person and period kept); the last two are one card."""
+    def scene(chars):
+        s = _scene([(t, n, e) for t, n, e, *_ in chars], [])
+        for c, (_, _, _, other, period) in zip(s.new_characters, chars, strict=True):
+            c.other_person, c.period = other, period
+        return s
+
+    now = scene([("n1", "母親", "u1", False, "")])
+    past = scene([("n1", "母親", "u5", True, "前世")])
+    past_again = scene([("n1", "母親", "u9", True, "前世")])
+    m = merge_outputs([now, past, past_again])
+    kept = [(c.name_ja, c.other_person, c.period) for c in m.new_characters]
+    assert kept == [("母親", False, ""), ("母親", True, "前世")]
+    assert m.new_characters[1].evidence_unit_ids == ["u5", "u9"]  # the past-life mother, met twice

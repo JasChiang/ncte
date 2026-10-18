@@ -604,6 +604,36 @@ ALTER TABLE facts ADD COLUMN period TEXT;
 ALTER TABLE relation_notes ADD COLUMN period TEXT;
 ALTER TABLE relations ADD COLUMN period TEXT;
 """),
+    (25, "the time a prop state holds in: who held it in a flashback is not who holds it now", """
+ALTER TABLE prop_states ADD COLUMN period TEXT;
+"""),
+    (26, "a relation can hold more than once (敵人 → 同盟 → 敵人): each stretch is its own row, keyed by where it begins", """
+CREATE TABLE relations_by_stretch (
+    book_id TEXT NOT NULL,
+    a_id TEXT NOT NULL,
+    b_id TEXT NOT NULL,
+    relation_zh TEXT NOT NULL,
+    a_is TEXT,
+    b_is TEXT,
+    since_ordinal INTEGER NOT NULL,
+    fact_ids_json TEXT NOT NULL,
+    reason TEXT,
+    created_at TEXT NOT NULL,
+    kind TEXT,
+    certainty TEXT,
+    origin TEXT NOT NULL DEFAULT 'llm',
+    until_ordinal INTEGER,
+    evidence_json TEXT NOT NULL DEFAULT '[]',
+    period TEXT,
+    PRIMARY KEY (book_id, a_id, b_id, relation_zh, since_ordinal)
+);
+INSERT INTO relations_by_stretch(book_id, a_id, b_id, relation_zh, a_is, b_is, since_ordinal, fact_ids_json, reason, created_at, kind, certainty, origin, until_ordinal, evidence_json, period) SELECT book_id, a_id, b_id, relation_zh, a_is, b_is, since_ordinal, fact_ids_json, reason, created_at, kind, certainty, origin, until_ordinal, evidence_json, period FROM relations;
+DROP TABLE relations;
+ALTER TABLE relations_by_stretch RENAME TO relations;
+"""),
+    (27, "a character card that names several people, as the model read it (no word pattern decides it)", """
+ALTER TABLE characters ADD COLUMN is_group INTEGER NOT NULL DEFAULT 0;
+"""),
 ]
 
 
@@ -650,10 +680,7 @@ def _assign_series(conn: sqlite3.Connection) -> None:
 
 
 def _harvest_address_terms(conn: sqlite3.Connection) -> None:
-    from .address import harvest_book
-
-    for (book_id,) in conn.execute("SELECT id FROM books").fetchall():
-        harvest_book(conn, book_id)
+    """Once filled address terms by matching names in lines; forms of address now come from the model (ADR-059)."""
 
 
 def _naming_context(conn: sqlite3.Connection) -> None:

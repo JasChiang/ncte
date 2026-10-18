@@ -49,15 +49,37 @@ def default_translate(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any
         for u in payload.get("units", [])]}
 
 
+_FAKE_SAID = ("言った", "言う", "呟いた", "つぶやいた", "答えた", "叫んだ", "尋ねた", "返した", "口を開いた")
+
+
 def default_scene_analyze(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:
+    """A stand-in for the model reading a scene: a line whose paragraph (or the next / previous one) says
+    「<known name>は…言った」 is that person's, stated (with the words as evidence); other lines are unknown."""
+    units = [u["unit_id"] for u in payload.get("units", [])]
+    text = {u["unit_id"]: u["source"] for u in payload.get("units", [])}
+    names = {n: c["character_id"] for c in payload.get("known_characters", [])
+             for n in [c.get("name_ja"), *c.get("aliases_ja", [])] if n}
+
+    def stated(uid: str) -> tuple[str, str] | None:
+        i = units.index(uid)
+        for near in units[max(0, i - 1): i + 2]:
+            if near != uid and "「" in text[near]:
+                continue  # that paragraph's tag belongs to its own line
+            outside = re.sub(r"「[^」]*」|『[^』]*』", "", text[near])
+            for sentence in re.split(r"[。\n]", outside):
+                for n, cid in names.items():
+                    if (n + "は" in sentence or n + "が" in sentence) and any(v in sentence for v in _FAKE_SAID):
+                        return cid, sentence.strip(" 　")
+        return None
+
     utts = []
     for q in payload.get("quotes", []):
-        ps = q.get("program_speaker")
+        hit = stated(q["unit_id"]) if q["unit_id"] in text else None
         utts.append({"unit_id": q["unit_id"], "quote_index": q["quote_index"],
-                     "speaker_candidates": ([{"character_ref": ps, "evidence_types": ["dialogue_tag"],
-                                              "evidence_unit_ids": [q["unit_id"]], "note": ""}] if ps else []),
-                     "resolution_status": "explicit" if ps else "unknown", "speaker_ref": ps,
-                     "contradictions": []})
+                     "speaker_candidates": ([{"character_ref": hit[0], "evidence_types": ["dialogue_tag"],
+                                              "evidence_unit_ids": [q["unit_id"]], "note": ""}] if hit else []),
+                     "resolution_status": "explicit" if hit else "unknown", "speaker_ref": hit[0] if hit else None,
+                     "contradictions": [], **({"tag": hit[1]} if hit else {})})
     return {"pov": None, "location": None, "time": None, "new_characters": [], "participants": [],
             "utterances": utts, "actions": [], "props": [], "uncertainties": []}
 

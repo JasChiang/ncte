@@ -114,3 +114,44 @@ def test_the_same_word_for_another_person_gets_a_card_of_its_own(conn, cfg, fixt
     apply_scene_analysis(conn, book.id, scene, out)
     cards = {r[0]: r[1] for r in conn.execute("SELECT canonical_name, id FROM characters WHERE book_id=?", (book.id,))}
     assert cards[word] == mother and f"{word}（前世）" in cards
+
+
+def test_another_person_met_first_in_the_scene_still_gets_the_time_label(conn, cfg, fixtures):
+    """The past-life 「母親」 mentioned before the present one in the same scene: the order of mention must not give
+    her the bare word (and then fold the present mother into her card)."""
+    from ncte.analysis.scene import apply_scene_analysis
+    from ncte.library import import_book
+    from ncte.llm.schemas import SceneAnalysisOutput
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    word = "ミナ"
+    unit = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='text' AND plain_text LIKE '%ミナ%' ORDER BY ordinal "
+                        "LIMIT 1", (book.id,)).fetchone()
+    scene = conn.execute("SELECT * FROM scenes WHERE book_id=? AND id=?", (book.id, unit["scene_id"])).fetchone()
+    nc = lambda t, other, period: {"temp_id": t, "name_ja": word, "aliases_ja": [], "proposed_name_zh": "",  # noqa: E731
+                                   "evidence_unit_ids": [unit["id"]], "other_person": other, "period": period}
+    out = SceneAnalysisOutput.model_validate({
+        "pov": None, "location": None, "time": None, "participants": [], "utterances": [], "actions": [], "props": [],
+        "uncertainties": [], "new_characters": [nc("new_1", True, "前世"), nc("new_2", False, "")]})
+    apply_scene_analysis(conn, book.id, scene, out)
+    cards = {r[0] for r in conn.execute("SELECT canonical_name FROM characters WHERE book_id=?", (book.id,))}
+    assert {word, f"{word}（前世）"} <= cards
+
+
+def test_a_flashback_does_not_change_who_holds_a_prop_now(conn, cfg, fixtures):
+    """Read in order: 鍵 is with A now; a later flashback says it was with B three years before. Now it is still A's;
+    the flashback state is kept apart, with its time."""
+    from ncte.library import import_book
+    from ncte.memory.db import utcnow
+    from ncte.memory.repository import upsert_character
+    from ncte.memory.visibility import visible_props
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    u = conn.execute("SELECT id FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()[0]
+    a = upsert_character(conn, book.id, "甲", name_zh=None, aliases=[], unit_id=u, ordinal=0, origin="t")[0]
+    b = upsert_character(conn, book.id, "乙", name_zh=None, aliases=[], unit_id=u, ordinal=0, origin="t")[0]
+    for holder, at, period in ((a, 10, None), (b, 20, "三年前")):
+        conn.execute("INSERT INTO prop_states(book_id, name_ja, holder_character_id, evidence_unit_ids_json, horizon_ordinal, "
+                     "created_at, period) VALUES (?,?,?,?,?,?,?)", (book.id, "鍵", holder, "[]", at, utcnow(), period))
+    states = {(p["period"] or ""): p["holder_character_id"] for p in visible_props(conn, book.id, 30)}
+    assert states == {"": a, "三年前": b}
