@@ -36,7 +36,7 @@ def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
         for uid, row in best.items():
             u = UnitInput.from_row(units[uid])
             t: dict[str, Any] = dict(row)
-            if t["status"] != "human" and (fixed := typeset(t["text"])) != t["text"]:  # house punctuation (ADR-053)
+            if t["status"] != "human" and (fixed := typeset(t["text"], u.source_text)) != t["text"]:  # house punctuation (ADR-053)
                 conn.execute("UPDATE translations SET text=? WHERE id=?", (fixed, t["id"]))
                 t["text"] = fixed
                 stats["typeset"] = stats.get("typeset", 0) + 1

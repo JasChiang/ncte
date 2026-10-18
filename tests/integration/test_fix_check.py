@@ -11,7 +11,7 @@ from ncte.translation.cache import latest_texts
 from ..helpers import run_book
 
 LINES = ["　彼女は来なかった。", "　雨は朝から降り続いていた。", "　禁書庫の扉は固く閉ざされていた。"]
-WRONG, RIGHT = "她來了。", "她沒有來。"
+WRONG, RIGHT = "　她來了。", "　她沒有來。"  # the source paragraph is indented, so the stored text is too
 
 
 def small_book(tmp_path: Path, lines: list[str] = LINES) -> Path:
@@ -63,10 +63,11 @@ def test_a_retranslation_that_repeats_the_error_is_not_fixed(conn, cfg, tmp_path
     uid = unit_of(conn, book, "来なかった")
     # the translator was given the text to correct, not only the source and the suggestion
     assert seen and seen[0][0]["current_translation"] == WRONG
-    # the checker saw the source, both texts and the issue
+    # the checker saw the source, both texts and what kind of issue it was — not the finder's reasoning about the
+    # source, so a misreading is not handed on to the check that judges it
     item = checks[0]["items"][0]
     assert item["source"].strip() == "彼女は来なかった。" and item["before"] == WRONG and item["after"] == WRONG
-    assert any("否定" in x for x in item["issues"])
+    assert any("mistranslation" in x for x in item["issues"]) and not any("否定" in x for x in item["issues"])
     best = latest_texts(conn, book.id)[uid]
     assert best["text"] == WRONG and best["status"] == "needs_review"  # not passed off as succeeded
     issue = conn.execute("SELECT status FROM qa_findings WHERE unit_id=? AND type='review:mistranslation'", (uid,)).fetchone()
@@ -112,7 +113,7 @@ def test_a_fix_that_breaks_something_else_is_not_the_books_text(conn, cfg, tmp_p
     book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text="他沒有來。", fix_check=regressed)
     uid = unit_of(conn, book, "来なかった")
     assert latest_texts(conn, book.id)[uid]["text"] == WRONG  # the old text stays until a person decides
-    assert conn.execute("SELECT status FROM translations WHERE unit_id=? AND text='他沒有來。'", (uid,)).fetchone()[0] \
+    assert conn.execute("SELECT status FROM translations WHERE unit_id=? AND text='　他沒有來。'", (uid,)).fetchone()[0] \
         == "rejected_fix"
     assert conn.execute("SELECT status FROM qa_findings WHERE unit_id=? AND type='review:mistranslation'",
                         (uid,)).fetchone()["status"] == "open"
@@ -300,3 +301,17 @@ def test_the_fix_check_reads_the_note_that_goes_into_the_book(conn, cfg, tmp_pat
                                                                   "fix_check": check}))
     item = next(i for i in checks if WRONG in i["before"])
     assert "（註：原文是否定：她沒有來）" in item["after"]
+
+
+def test_when_the_old_text_was_right_it_stays(conn, cfg, tmp_path):
+    """The source allows the old reading: the issue is dismissed and the old text is kept, not the new wording."""
+    def invalid(payload, req):
+        return {"checks": [{"unit_id": i["unit_id"], "verdict": "issue_invalid", "new_error": "",
+                            "reason": "兩種讀法原文都說得通"} for i in payload["items"]]}
+
+    book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=RIGHT, fix_check=invalid)
+    uid = unit_of(conn, book, "来なかった")
+    best = latest_texts(conn, book.id)[uid]
+    assert best["text"] == WRONG and best["status"] == "succeeded"
+    assert conn.execute("SELECT status FROM translations WHERE unit_id=? AND text=?", (uid, RIGHT)).fetchone()[0] \
+        == "unneeded_fix"

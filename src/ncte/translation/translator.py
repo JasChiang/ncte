@@ -284,7 +284,7 @@ class Translator:
             pending_ok: dict[str, UnitResult] = {}
             for u in group:
                 t = by_id[u.unit_id]
-                t.translated_text = typeset(t.translated_text)  # house punctuation, like a typesetter (ADR-053)
+                t.translated_text = typeset(t.translated_text, u.source_text)  # house punctuation, like a typesetter (ADR-053)
                 findings = check_translation(unit_id=u.unit_id, kind=u.kind, source_text=u.source_text,
                                              plain_text=u.plain_text, inline_map=u.inline_map,
                                              ruby_count=u.ruby_count, text=t.translated_text,

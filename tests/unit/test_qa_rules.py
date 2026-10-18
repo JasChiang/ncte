@@ -115,3 +115,13 @@ def test_house_punctuation_is_the_same_everywhere():
     assert typeset("完美了♡ 對吧♡") == "完美了♡　對吧♡" and typeset("耶！？ 搞什麼") == "耶！？　搞什麼"
     assert typeset("☆ FUSHI，交給妳") == "☆ FUSHI，交給妳" and typeset("我有 3 個") == "我有 3 個"  # beside Latin: kept
     assert typeset("⟦1⟧!?⟦/1⟧") == "⟦1⟧!?⟦/1⟧" and typeset("他說⟦1⟧OK, go!⟦/1⟧") == "他說⟦1⟧OK, go!⟦/1⟧"
+
+
+def test_the_indent_is_the_source_paragraphs():
+    """The model drops or adds the leading 「　」; the translation takes the source's, nothing else changes."""
+    from ncte.qa.typeset import typeset
+
+    assert typeset("話雖如此，我是女孩子。", "　とはいえ私は女の子。") == "　話雖如此，我是女孩子。"
+    assert typeset("　『喂。』", "『おい』") == "『喂。』"
+    assert typeset("　⟦1⟧啊⟦/1⟧!?", "　⟦1⟧あ⟦/1⟧!?") == "　⟦1⟧啊⟦/1⟧！？"
+    assert typeset("啊...", None) == "啊……"

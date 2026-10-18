@@ -562,17 +562,25 @@ class ContextOrchestrator(Orchestrator):
         if record_job and (job is None or job["status"] not in ("pending", "running")):
             return {}
         with self.lock:
-            parts = proofread.chunks(self.conn, self.book.id, set(self.opts.unit_ids) if self.opts.unit_ids else None)
+            parts = proofread.chunks(self.conn, self.book.id, set(self.opts.unit_ids) if self.opts.unit_ids else None,
+                                     size=self.cfg.context.proofread_chunk_units)
         prompt = load_prompt("proofread")
         stats = new_stats(checked=0, blocked=0, failed=0)
+        prev: list[dict[str, Any]] = []
         for part in parts:
+            # the end of the stretch before, in the same chapter: read for who is talking and about what, not checked
+            before = [p for p in prev[-proofread.BEFORE_UNITS:] if p["_href"] == part[0]["_href"]]
+            prev = part
             with self.lock:
                 cast = proofread.cast(self.conn, self.book.id, part)
+                extra = proofread.notes(self.conn, self.book.id, part, before, glossary=self.glossary,
+                                        volume=self.volume, revealed=self.link_revealed)
             visible = [{k: v for k, v in p.items() if not k.startswith("_")} for p in part]
             blocked: list[str] = []
             try:  # the content filter may refuse a stretch; it is then checked in halves
                 parsed = call_in_parts(lambda pl: self._llm("proofread", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
-                                       {"task": "proofread", "paragraphs": visible, "characters": cast}, "paragraphs", blocked)
+                                       {"task": "proofread", "paragraphs": visible, "characters": cast, **extra},
+                                       "paragraphs", blocked)
             except FatalAPIError:
                 raise
             except LLMError as exc:

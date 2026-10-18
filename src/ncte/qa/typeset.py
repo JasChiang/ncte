@@ -4,7 +4,8 @@ The model copies Japanese punctuation as often as not: 「――」 (U+2015) or 
 「!?」 and 「,」 beside Chinese, 「...」. Within one book that is a mixture; a Taiwan edition writes the dash as 「——」,
 the ellipsis as 「……」, full-width ！？，, letters and digits half-width (OK, not ＯＫ) and a space between Chinese
 as 「　」 (a space beside Latin or digits is left as it is). These are typography, not meaning, so the program writes them the
-same way everywhere; the words are left as they are. Human edits are never touched.
+same way everywhere; the words are left as they are. Human edits are never touched. The paragraph's indent is the
+source's: the model drops or adds the leading 「　」 as often as not.
 """
 
 from __future__ import annotations
@@ -43,8 +44,16 @@ def _chinese(s: str) -> bool:
     return any("぀" <= ch <= "鿿" for ch in s)
 
 
-def typeset(text: str) -> str:
-    """The same punctuation everywhere; placeholders (⟦1⟧) are kept exactly. A run inside a placeholder (a styled
+_LEAD = re.compile(r"^[ \u3000]*")
+
+
+def indent_like(text: str, source: str) -> str:
+    """The translation starts with the source paragraph's indent (「　」 or none), whatever the model wrote."""
+    return _LEAD.match(source).group(0) + text[_LEAD.match(text).end():]  # type: ignore[union-attr]
+
+
+def typeset(text: str, source: str | None = None) -> str:
+    """The same punctuation everywhere (and, given the source, its indent); placeholders (⟦1⟧) are kept exactly. A run inside a placeholder (a styled
     「⟦1⟧!?⟦/1⟧」) is read with the characters on either side of it, so marks alone between tags count as Chinese
     when the text around them is."""
     text = halfwidth(text)
@@ -65,4 +74,4 @@ def typeset(text: str) -> str:
     res = out[0]
     for mark, p in zip(marks, out[1:], strict=True):
         res += mark + p
-    return res
+    return res if source is None else indent_like(res, source)

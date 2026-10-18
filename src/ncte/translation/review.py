@@ -8,7 +8,7 @@ feedback, then re-checked by program QA. At most one review pass per unit per ru
 Passing program QA does not make a fix a fix: a retranslation that says the same wrong thing is still wrong. Each
 fix (here, after proofreading and after the reader's look) is checked once against the source and the issue it was
 meant to fix (``fix_check``): fixed, the issue was not an error, still wrong, or undecided. Only the first two settle
-the issue; the others leave it open with the new text marked ``needs_review``. A unit the content filter refused, or
+the issue (when it was not an error, the old text stays and the new one is not used); the others leave it open with the new text marked ``needs_review``. A unit the content filter refused, or
 whose request failed, was not reviewed: it is counted as blocked / failed and nothing found on it is cleared.
 """
 
@@ -438,11 +438,27 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
             fids = [i["finding_id"] for i in feedback[uid] if i.get("finding_id")]
             outcome = fix_outcome(checks.get(uid), program_high=worst(ur.findings) == "high",
                                   checked=orch.cfg.review.fix_check)
-            if outcome in ("fixed", "issue_invalid"):
+            if outcome == "issue_invalid":
+                # the old text already said what the source says: it stays, the new one is not used (least
+                # intervention — two readings the source allows are not an error to fix)
+                orch.conn.execute("UPDATE translations SET status='unneeded_fix' WHERE id=?", (tid,))
+                orch.conn.executemany("UPDATE qa_findings SET status='dismissed_by_check' WHERE id=? AND status='open'",
+                                      [(f,) for f in fids])
+                old = current.get(uid)
+                if old is not None and old["status"] == "needs_review" and not orch.conn.execute(
+                        "SELECT 1 FROM qa_findings WHERE unit_id=? AND status='open' AND severity='high'",
+                        (uid,)).fetchone():
+                    orch.conn.execute("UPDATE translations SET status='succeeded' WHERE id=?", (old["id"],))
+                orch.conn.execute("UPDATE jobs SET status='succeeded' WHERE run_id=? AND stage='translate' AND "
+                                  "target_id=?", (orch.run_id, uid))
+                stats["issue_invalid"] += 1
+                stats["resolved"] += 1
+                continue
+            if outcome == "fixed":
                 orch.conn.execute("UPDATE translations SET status='succeeded' WHERE id=?", (tid,))
                 orch.conn.executemany(
                     "UPDATE qa_findings SET status=? WHERE id=? AND status='open'",
-                    [("resolved" if outcome == "fixed" else "dismissed_by_check", f) for f in fids])
+                    [("resolved", f) for f in fids])
                 orch.conn.execute("UPDATE jobs SET status='succeeded' WHERE run_id=? AND stage='translate' AND "
                                   "target_id=?", (orch.run_id, uid))
                 stats[outcome] += 1
@@ -475,6 +491,17 @@ def fix_outcome(check: FixCheck | None, *, program_high: bool, checked: bool = T
 
 
 FIX_CHECK_BATCH = 20
+# what the source says (meaning, who, what is missing or added): the check reads the source itself, without the
+# finder's reasoning or suggested wording, so one model's misreading is not passed on to the check that judges it
+SOURCE_CLAIMS = {"mistranslation", "omission", "addition", "speaker_error", "subject_object_error",
+                 "proofread_meaning", "proofread_omission", "proofread_addition", "proofread_speaker"}
+
+
+def _claim(x: dict[str, Any]) -> str:
+    kind = str(x.get("issue_type", ""))
+    if kind in SOURCE_CLAIMS:
+        return f"{kind}（只給類別；請自己對照原文判斷）"
+    return f"{kind}: {x.get('evidence', '')} → {x.get('suggestion', '')}"[:500]
 
 
 def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[str, Any]]]]) -> dict[str, FixCheck]:
@@ -494,8 +521,7 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
             for r, before, after, issues in chunk:
                 item: dict[str, Any] = {
                     "unit_id": r["id"], "source": r["source_text"], "before": before, "after": after,
-                    "issues": [f"{x.get('issue_type', '')}: {x.get('evidence', '')} → {x.get('suggestion', '')}"[:500]
-                               for x in issues],
+                    "issues": [_claim(x) for x in issues],
                     "around": [a["source"] for a in _surroundings(conn, orch.book.id, [r], reach=2)]}
                 if lines := _lines(conn, r["id"]):  # 你／妳 and who-did-what issues need who speaks to whom
                     item["lines"] = lines
