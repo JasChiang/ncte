@@ -55,6 +55,7 @@ def test_relations_and_second_look_think_more_when_the_model_offers_it():
                 supported_parameters=("reasoning",), reasoning_efforts=("low", "medium", "high"))
     check_reasoning_effort(cfg, p)
     assert reasoning_setting(cfg, "relations") == "high" and reasoning_setting(cfg, "verify") == "high"
+    assert reasoning_setting(cfg, "proofread") == "high"
     cfg2 = Config()
     check_reasoning_effort(cfg2, Pricing(model="m", prompt=0.0, completion=0.0, reasoning=0.0, cache_read=None,
                                          context_length=None, supported_parameters=(), reasoning_efforts=()))

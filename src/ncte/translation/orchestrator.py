@@ -108,8 +108,10 @@ def reasoning_label(param: dict[str, Any] | None) -> str | None:
 
 # Steps that judge from material gathered over the whole book (relations, the second look) think more: with "medium"
 # the model often chose not to think at all, and a relation that takes one step of inference was missed. They are a
-# handful of requests per book. Used when the model offers "high" and the step has no setting of its own.
-DEFAULT_STAGE_REASONING = {"relations": "high", "verify": "high", "fix_check": "high"}
+# handful of requests per book. Proofreading too: with "medium" it caught fewer real errors (two books, 300 paragraphs
+# each: 4 → 6 and 1–3 → 5), none more wrongly changed; about +US$1 a book. Used when the model offers "high" and the step
+# has no setting of its own.
+DEFAULT_STAGE_REASONING = {"relations": "high", "verify": "high", "fix_check": "high", "proofread": "high"}
 
 
 def check_reasoning_effort(cfg: Config, pricing: Pricing) -> None:
