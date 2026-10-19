@@ -342,3 +342,12 @@
   - 網頁顯示「約多少、最多多少」，預算上限＝最多 × 1.1（至少 US$0.5）。指令列 `--dry-run` 列出每個步驟。
 - 驗證（2026-10-18，以實驗工作區的紀錄估三本前 300 段）：魔石 實際 0.707／估 0.58、上限 0.92；英雄賢者 0.714（校稿 medium）／0.64、1.04；惡魔公女 0.598（校稿 medium）／0.92、1.48。實際都在上限內，一般值誤差約 ±25%，文字較密的書會估高。整本推估約 US$8–11。
 - 取代 ADR-034 的「預算上限＝估價 × 2」。
+
+## ADR-062（2026-10-19）：Claude 方案當模型（`claude` 來源）；agent 逐題回答（`ncte agent`、MCP、skill）
+- 背景：使用者希望不再經 OpenRouter 付費，改用自己的 Claude 訂閱。先在獨立的 ncte-agent repo 驗證：引擎每個請求變成任務，由 Claude Code 的非互動模式（`claude -p`）逐題回答。同一本書整本跑三種組合，再由 Opus 用同一套標準重校三本的最終譯文：全 Sonnet 留下 28 處會影響理解的錯，全 Opus 4 處，Sonnet 讀＋Opus 翻 2 處。照定價換算 Sonnet US$37.7、Opus US$60.3、Sonnet 讀＋Opus 翻 US$38.9：Opus 貴在讀書（US$33），Sonnet 的翻譯也不便宜（初稿錯多，校稿後逐段重譯 189 次）。Sonnet 讀書時把一位女性角色取了男性的名字（定名）。另一個 repo 要另外安裝、版本要對齊、介面兩套（GUI 只在 ncte）。
+- 決定：
+  - 新增模型來源 `claude`（`NCTE_LLM_PROVIDER=claude`、網頁設定「Claude 方案」）：每個請求一次全新的 `claude -p`，步驟的提示詞取代 Claude Code 自己的系統提示，不帶工具、不讀使用者設定、不留對話紀錄（每次額外約 600 token）；每步的推理程度照 `stage_reasoning`（預設 medium，關係、覆核、校稿、修正檢查 high）以 `--effort` 傳過去。額度用完或連線失敗時等待後重試（最長每次一小時），不中斷。沒登入則立即停止。
+  - 不收費：記錄的 `cost_usd` 為 0；CLI 回報的定價換算金額記在 `usage_json.list_cost_usd`，網頁顯示「Claude 方案・照定價約 US$X（不另收費）」，不顯示預算上限。
+  - 預設模型：翻譯、定名與所有檢查用 Opus；切場景、讀場景、記憶整理、覆核、關係、角色印象、體例用 Sonnet（`stage_models`）。設定裡已選的 `claude/…` 模型保留；API 模型 id（OpenRouter 預設、審稿或備援模型）在這個來源沒有意義，換掉或移除。原本註解寫「讀書與翻譯用同一個模型」；程式只禁止換翻譯模型，讀書步驟本來就可以設，這次的整本實測顯示分開比較好，註解改正。
+  - 把 ncte-agent 併回：任務佇列、背景引擎、`ncte agent start|next|submit|status|export|stop|resume`、`ncte mcp`（MCP 伺服器，選用套件 `pip install 'ncte[agent]'`）、`skills/ncte-translate`。來源名 `agent`；這種執行不能經 API 續譯（`ncte resume` 會要求改用 `ncte agent resume`）。ncte-agent 的 `drive` 由 `claude` 來源取代。
+- 不做：讓 agent 自己探索資料（開放工具讀全書）。理由：Sonnet 翻錯的段落，判斷所需的後文都已在輸入裡（模型沒用上，不是沒資料）；開工具每次重送累積的上下文（子代理每題約 4–5 萬 token）；自由搜尋會讀到後面才揭曉的身分與伏筆，繞過可見範圍。若要做，先做只能查 NCTE 紀錄、受可見範圍限制的「查筆記」工具，並先統計缺資料的錯有多少。

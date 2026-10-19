@@ -109,9 +109,13 @@ async function upload(f) {
 // ------------------------------------------------------------ settings
 async function settingsView() {
   const k = await api("settings");
-  const fal = k.provider === "fal", label = fal ? "fal" : "OpenRouter";
+  const fal = k.provider === "fal", claude = k.provider === "claude", label = fal ? "fal" : "OpenRouter";
+  const claudeCard = `<div class="card"><strong>Claude 方案</strong>
+    <p>用這台電腦上已登入的 Claude Code（<code>claude</code> 指令）翻譯，使用你的 Claude 訂閱額度：不需要金鑰，NCTE 不另外收費。讀書的步驟用 Sonnet，翻譯與各種檢查用 Opus。</p>
+    <p>${k.set ? `${chip("c-ok", "找到 Claude Code")} <span class="small muted">${esc(k.claude)}</span>` : `${chip("c-warn", "找不到 Claude Code")} 請先安裝並在終端機執行 <code>claude</code> 登入。`}</p>
+    <p class="small muted">額度用完時會自動等到重置再接著翻，不會中斷；一本書通常要好幾個小時。畫面上的金額是照定價換算的參考，不會向你收費。</p></div>`;
   view.innerHTML = `<h2>設定</h2>
-    <div class="card"><strong>${label} 金鑰</strong>
+    ${claude ? claudeCard : `<div class="card"><strong>${label} 金鑰</strong>
     ${fal ? "" : `<p>NCTE 透過 <a href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter</a> 使用翻譯模型（Gemini），費用從你的 OpenRouter 帳戶扣，NCTE 不另外收費。</p>
       <ol class="small"><li>到 <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a> 登入並建立一把金鑰（以 sk-or- 開頭）。</li>
       <li>到 <a href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener">Credits</a> 儲值；一本輕小說約 US$8–11（依長度而定）。</li>
@@ -119,22 +123,23 @@ async function settingsView() {
     <p>${k.set ? `${chip("c-ok", "已設定")} 結尾 ${esc(k.hint)}` : chip("c-warn", "尚未設定")}</p>
     <p><input type="password" id="key" size="48" placeholder="${fal ? "FAL_KEY" : "sk-or-…"}" autocomplete="off"> <button class="btn primary" id="saveKey">儲存</button></p>
     <p class="muted small">只存在這台電腦的 ${esc(k.file)}，不會顯示在畫面上，也不會寫進紀錄。</p>
-    <div id="bal"></div></div>
+    <div id="bal"></div></div>`}
     <div class="card"><strong>翻譯設定</strong><p>模型與推理程度用預設（目前測試結果最好的組合），不需要選。預算上限會依每本書估價的「最多」金額自動設定，到了會先停下來問你。</p></div>
-    <details class="card" ${fal ? "open" : ""}><summary><strong>進階：連線方式</strong> <span class="muted small">一般不用改</span></summary>
-    <p><select id="provider"><option value="openrouter" ${fal ? "" : "selected"}>直連 OpenRouter（建議）</option>
-    <option value="fal" ${fal ? "selected" : ""}>透過 fal 連 OpenRouter</option></select> <button class="btn" id="saveProvider">套用</button></p>
+    <details class="card" ${fal || claude ? "open" : ""}><summary><strong>進階：連線方式</strong> <span class="muted small">一般不用改</span></summary>
+    <p><select id="provider"><option value="openrouter" ${fal || claude ? "" : "selected"}>直連 OpenRouter（建議）</option>
+    <option value="fal" ${fal ? "selected" : ""}>透過 fal 連 OpenRouter</option>
+    <option value="claude" ${claude ? "selected" : ""}>Claude 方案（用 Claude 訂閱額度，不需金鑰）</option></select> <button class="btn" id="saveProvider">套用</button></p>
     <p class="small muted">新任務使用此設定；續譯沿用原任務的連線方式。</p>
     ${fal ? `<p class="small">費用由 fal 結算；估價參考 OpenRouter 價目，實際帳單以 fal 為準。此處不提供 fal 餘額查詢。</p>` : ""}</details>`;
   $("#saveProvider").onclick = async () => {
     try { await api("settings/provider", {provider: $("#provider").value}); toast("已套用"); settingsView(); }
     catch (e) { toast(e.message); }
   };
-  $("#saveKey").onclick = async () => {
+  if (!claude) $("#saveKey").onclick = async () => {
     try { await api("settings/key", {key: $("#key").value}); toast("已儲存"); settingsView(); }
     catch (e) { toast(e.message); }
   };
-  if (k.set && !fal) {
+  if (k.set && !fal && !claude) {
     $("#bal").textContent = "查詢餘額…";
     try { const b = await api("balance");
       $("#bal").innerHTML = [b.account_usd != null ? `帳戶餘額 <b>US$${b.account_usd.toFixed(2)}</b>` : "",
@@ -189,7 +194,7 @@ async function overviewView(id) {
   const stat = (label, v, extra = "") => `<div class="card stat"><span class="muted small">${label}</span><b>${v}</b>${extra}</div>`;
   // before anything is translated the counts are all zero: only the start card
   view.innerHTML = `<div class="card" id="runcard"><p class="muted">讀取翻譯狀態…</p></div>${!o.translated && !o.runs.length ? "" : `<div class="row">
-    ${stat("已翻譯", `${o.translatable ? Math.round(100 * o.translated / o.translatable) : 0}%`, `<span class="small muted">${o.translated} / ${o.translatable} 段</span>`)}${stat("這本書總共花費", "US$" + o.spent_usd.toFixed(2), `<span class="small muted">所有執行加總</span>`)}
+    ${stat("已翻譯", `${o.translatable ? Math.round(100 * o.translated / o.translatable) : 0}%`, `<span class="small muted">${o.translated} / ${o.translatable} 段</span>`)}${stat("這本書總共花費", "US$" + o.spent_usd.toFixed(2), `<span class="small muted">所有執行加總${o.plan_usd ? `；另有 Claude 方案照定價約 US$${o.plan_usd.toFixed(2)}（不另收費）` : ""}</span>`)}
     ${stat("有疑點的段落", o.flagged_units, `<a class="small" href="#/b/${id}/review?f=flagged">去看</a>`)}
     ${stat("可再確認的譯法", o.pending_names, `<a class="small" href="#/b/${id}/names">去看看</a>`)}
     ${stat("說話者未定", o.unknown_speakers)}${stat("譯註", o.notes)}${stat("人工修改", o.human_edits)}</div>
@@ -204,6 +209,9 @@ async function runCard(id, o) {
   const card = $("#runcard"); if (!card) return;
   const p = await api(`book/${id}/run`), r = p.run;
   const money = v => "US$" + (+v || 0).toFixed(2);
+  // a run on the Claude plan is not billed: say what it used at list price instead of a spend against a budget
+  const cost = r => r.provider === "claude" ? `Claude 方案・照定價約 <b>${money(r.plan_usd)}</b>（不另收費）`
+    : `已花 <b>${money(r.spent_usd)}</b>（上限 ${money(r.budget_usd)}）`;
   const bars = (p.stages || []).map(s => { const pc = Math.round(100 * s.done / s.total);
     return `<div class="small" style="margin-top:6px">${esc(s.label)}　${s.done} / ${s.total}${s.failed ? `　<span class="issue">失敗 ${s.failed}</span>` : ""}<div class="bar"><i style="width:${pc}%"></i></div></div>`; }).join("");
   const exportBtns = o.translated ? `<button class="btn ${r && r.status === "completed" ? "primary big" : ""}" id="exp">匯出並下載 EPUB</button> <span id="expres" class="small"></span>` : "";
@@ -221,7 +229,7 @@ async function runCard(id, o) {
   let body;
   if (p.busy) {
     body = `<div class="run-now"><strong>翻譯中</strong><span>${esc(now)}</span></div>
-      <div class="run-meta">已花 <b>${money(r.spent_usd)}</b>（上限 ${money(r.budget_usd)}）${left ? `・大約還要 <b>${left < 60 ? left + " 分鐘" : (left / 60).toFixed(1) + " 小時"}</b>` : ""}・已進行 ${Math.round(elapsed)} 分鐘</div>
+      <div class="run-meta">${cost(r)}${left ? `・大約還要 <b>${left < 60 ? left + " 分鐘" : (left / 60).toFixed(1) + " 小時"}</b>` : ""}・已進行 ${Math.round(elapsed)} 分鐘</div>
       ${bars}<p class="muted small">可以關掉這個分頁，但不要關掉 NCTE 視窗。暫停後按「繼續翻譯」會從停下的地方接著做。</p>
       <button class="btn" id="pause">暫停</button>
       <details class="small"><summary class="muted">詳細紀錄（給除錯用）</summary><pre class="log">${esc((p.log || []).join("\n"))}</pre></details>`;
@@ -242,7 +250,7 @@ async function runCard(id, o) {
         <button class="btn primary" data-go data-budget="${Math.max(more, r.budget_usd + 1)}">把上限提高到 ${money(Math.max(more, r.budget_usd + 1))} 並繼續</button>`; }
     else if (r.status === "running_elsewhere") action = `<p class="small">${esc(p.elsewhere.source)}（pid ${esc(p.elsewhere.pid)}）正在翻譯這本書；這裡不能同時繼續，等它結束或在那邊暫停後再回來。</p>`;
     else if (r.status !== "completed") action = `<button class="btn primary" data-go>繼續翻譯</button>`;
-    body = `<div class="run-now"><strong>${esc(st)}</strong><span class="muted small">最近一次執行：花 ${money(r.spent_usd)}（上限 ${money(r.budget_usd)}）</span></div>
+    body = `<div class="run-now"><strong>${esc(st)}</strong><span class="muted small">最近一次執行：${cost(r)}</span></div>
       ${p.error ? `<p class="issue">${esc(p.error)}</p>` : ""}${r.status === "stopped_fatal" ? `<p class="small">如果是餘額不足，儲值後按繼續即可。</p>` : ""}
       ${bars}<div style="margin-top:10px">${action} ${exportBtns}</div>`;
   }
@@ -266,10 +274,12 @@ async function runCard(id, o) {
   });
   if ($("#est")) {
     try { const e = await api(`book/${id}/estimate`, {});
-      const lo = Math.max(5, Math.round(e.units * .025)), hi = Math.max(10, Math.round(e.units * .035));
+      // Claude Code answers more slowly (a whole book took about 6 hours, waits for the plan's usage window aside)
+      const slow = e.provider === "claude" ? 2.5 : 1;
+      const lo = Math.max(5, Math.round(e.units * .025 * slow)), hi = Math.max(10, Math.round(e.units * .035 * slow * 1.15));
       const t = m => m < 60 ? `${m} 分鐘` : `${(m / 60).toFixed(1)} 小時`;
-      $("#est").innerHTML = `<div><b>${e.units}</b> 段要翻譯</div><div>預估費用約 <b>${money(e.estimate_usd)}</b>，最多約 ${money(e.high_usd)}${e.calibrated ? "（依你之前的實際花費校正）" : "（還沒有實際花費可以校正，偏保守）"}</div>
-        <div>預估時間約 <b>${t(lo)}–${t(hi)}</b></div><div class="small muted">預算上限自動設為 ${money(e.budget_usd)}，到了會先停下來問你。</div>`;
+      $("#est").innerHTML = `<div><b>${e.units}</b> 段要翻譯</div>${e.provider === "claude" ? `<div>使用你的 Claude 方案額度，<b>不另收費</b>；額度用完會自動等重置再繼續。</div>` : `<div>預估費用約 <b>${money(e.estimate_usd)}</b>，最多約 ${money(e.high_usd)}${e.calibrated ? "（依你之前的實際花費校正）" : "（還沒有實際花費可以校正，偏保守）"}</div>`}
+        <div>預估時間約 <b>${t(lo)}–${t(hi)}</b></div>${e.provider === "claude" ? "" : `<div class="small muted">預算上限自動設為 ${money(e.budget_usd)}，到了會先停下來問你。</div>`}`;
       const k = await api("settings"); $("#start").disabled = !k.set || !e.units;
     } catch (err) { $("#est").textContent = "無法估價：" + err.message; }
   }
