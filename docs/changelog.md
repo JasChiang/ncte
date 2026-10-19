@@ -808,5 +808,21 @@ open workspace/eval/<timestamp>/report.html
 - 重現：`git worktree add ../ncte-fixes review-fixes-2026-10-19 && cd ../ncte-fixes && python3 -m venv .venv && source .venv/bin/activate && pip install -e '.[dev]' && pytest && ruff check src tests && mypy src`。測試 471 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。
 
 ## review 後的修正（第 2 節）（2026-10-19，分支 review-fixes-2026-10-19，自 4c13950）
-（草稿，做完整節後改寫）
-- 2.11 設計（實作前）：新的 run 在 `create_extra_jobs` 建 job 時判斷。(1) 覆核、人物關係、角色印象、體例、定名：這次 run 沒有任何 scene_analyze／memory_update 是 pending、不是 `--force`，且這本書已有該步驟 succeeded 的 job，而且那個 job 的完成時間不早於這本書最後一次讀場景／記憶整理成功的時間（避免「上一個 run 讀了新場景但沒做到這一步」時誤跳過），就建成 skipped。(2) 對照校稿、讀者檢查：每次 succeeded 時在檢查點記 `upto_translation_id`（當時這本書最大的譯文 id）；新 run 不是 `--force`、上一次 succeeded 的同步驟 job 有這個值時，新 job 的檢查點帶 `since_translation_id`，`chunks` 只取現行譯文 id 大於它的段落；沒有這個值（從沒整本做完、或舊資料）照舊整本。續跑（resume）不重建 job，檢查點裡的 `since_translation_id` 隨統計一起保留，與 ensure_jobs／resume 不衝突。
+依修正指示第 2 節（2.1–2.12）與第 1 節留下的三件小事，全部離線；沒有用 Claude 方案額度或 OpenRouter 金鑰跑任何請求，沒有動 `~/GitHub/ncte` 與任何工作區資料庫。
+- 2.1 覆核與人物關係改用 Opus（ADR-062 補充）：`CLAUDE_READ_STAGES` 剩切場景、讀場景、記憶整理、角色印象、體例。README、設定頁照改（第 1 節留下的 (c) 一併做）。測試：預設 `stage_models` 沒有 verify、relations；README 與設定頁的 Sonnet 清單和程式一致且不含覆核、人物關係。
+- 2.2 校稿的「兩可」（ADR-063）：校稿 `kind` 加 `ambiguity`，提示詞加一條通則（原文容得下目前讀法、另一讀法至少同樣自然、說不出原文為何不能是目前讀法時歸這類；`fix` 寫另一種讀法）。程式記成 `review:proofread_ambiguity`（low、掛在當時的譯文版本），檢查點計 `ambiguities`，不重譯、不影響可驗收；對照審稿頁每段列出「兩種讀法：…」。測試：回 ambiguity 時沒有重譯、發現有記錄、審稿頁看得到。
+- 2.3 修正驗收先寫原文大意：`FixCheck` 加必填 `gist`（schema 中排在 `verdict` 前），提示詞要求先只看原文寫十五字以內的大意再判定。判定邏輯不變。測試：schema 必填且在前、提示詞的輸出範例 gist 在 verdict 前。效果要 `ncte eval fix-check`（需額度，第 5.3 節）才知道。
+- 2.4 讀者檢查附前一批譯文：同一章的前一批最後 6 段（只有 `zh`）當 `context_before`，續跑時由 `reader.tail` 取回；提示詞說明只供理解、不回報。測試：第二批起帶 `context_before`、續跑後也帶。
+- 2.5 修正驗收的前後文：`around` 改用 `_surroundings` 的完整結果（`REVIEW_CONTEXT`＝前後各 5 段，含 `at`、原文、現行譯文、說話者），提示詞改寫 `around` 說明；`ncte eval fix-check` 的案例照新格式送（只有原文）。測試：前後各 5 段、每段有原文與譯文。
+- 2.6 程式發現記譯文版本：翻譯寫入時的字面規則發現與 `model_flag:*` 帶 `translation_id`。測試：舊版本上的高嚴重度發現在有新版本後不再算成現行。
+- 2.7 修正寫入與驗收之間留紀錄：新譯文寫入的同一個交易裡記一筆 `fix_unchecked`（掛新譯文）；驗收有結果時改成結果（fixed → resolved；issue_invalid → dismissed_by_check；其他改成 `fix_still_wrong`／`fix_undecided`／`fix_regressed`／`fix_unchecked`／`fix_unverified`，不再另插一筆）。測試：驗收請求時被中斷 → `fixes_checked` 列出該段；驗收接受 → 那一筆為 resolved。
+- 2.8 實際模型 id：Claude Code 結果的 `modelUsage`（本機安裝的 2.1.303 版裡，結果訊息的 `modelUsage` 是「模型 id → 各項 token 與 costUSD」）有內容時，key 存進 `usage.models`；成本報告 `by_model` 多 `models`、HTML 報告加「Cost by model」表、網頁執行紀錄的模型欄顯示「實際：…」。沒有 `modelUsage` 時不寫。測試用 mock 輸出；真實輸出的欄位只從安裝檔的字串確認過，沒有實際跑 `claude -p` 看。
+- 2.9 Claude 方案估價：provider 為 claude 時，`run_rates`／`calibrate` 用 `usage_json.list_cost_usd` 當成本；每個步驟改用它自己設定的模型找歷史（Sonnet 讀書的請求算在 Sonnet，原本只找翻譯模型——這也影響 OpenRouter 設了 `stage_models` 或審稿模型時的估價）。網頁在每個步驟都有歷史時顯示「照定價約 US$X–Y（不另收費）」，沒有歷史不顯示金額；`--dry-run` 加一行說明金額是照定價換算。測試：有 Claude 歷史的資料庫估得出金額、讀場景用 Sonnet 的歷史、沒有歷史時網頁不給金額。
+- 2.10 校稿與讀者檢查跳過非正文：`skip_book_matter`（預設開）時兩者只取 `story_hrefs` 裡的段落（`chunks`／`tail` 的 `story`）。測試：後記段落不在兩者的批次裡，關掉後會在。
+- 2.11 新 run 不重做整本步驟（設計先寫在本節草稿，實作與之相同）：`create_extra_jobs` 建 job 時，(1) 覆核、人物關係、角色印象、體例、定名：這次 run 沒有 pending 的讀場景／記憶整理、不是 `--force`、這本書已有該步驟 succeeded 的 job，且那筆的完成時間不早於這本書最後一次讀場景／記憶整理成功的時間 → skipped。(2) 校稿、讀者檢查：整本做完（succeeded）時檢查點記 `upto_translation_id`；新 run 不是 `--force` 且上一次 succeeded 有這個值時，檢查點帶 `since_translation_id`，只看現行譯文 id 比它大的段落；從沒整本做完的照舊整本。resume 不重建 job，檢查點的值隨統計保留，與 ensure_jobs／resume 沒有衝突，所以不需要保守版本。測試（`tests/integration/test_rerun_steps.py`）：翻完的書再開一次 run，整本步驟都沒送請求、校稿與讀者檢查沒有段落、可驗收仍完整；刪掉一段的譯文再跑，只有那一段被校與讀；`--force` 或之後又讀過場景時會重做；從沒整本校過的書整本校。原本的暫停測試改用另一個資料庫做探測執行。
+- 2.12 體例跟著定名：體例完成時在 job 檢查點記下當時的譯名（`names_seen`）；定名之後若某個譯名變了，用純字串替換把體例 `voices` 裡的舊譯名換成新譯名（一次替換、長的優先；只改模型選的體例，人設的不動），然後把記下的譯名更新成現在的，續跑不會再換一次。測試：定名改了譯名後 voices 跟著換、舊譯名不再出現。
+- (a) `ncte proofread --unit-id` 不記 job（第 1 節記成 partial 會把已完成的書打回未完成）；整本照第 1 節記。ADR-055 補充同步改。`ncte reader-check` 沒有 `--unit-id` 選項，不受影響（程式路徑一樣處理）。測試改為：`--unit-id` 跑完後可驗收仍完整；partial 之後整本跑完回到完整。
+- (b) `ncte agent next` 的任務檔不再自己用英文寫一遍回答格式（與 `COMPACT_JSON` 重複），只說照指示（含其中的回答方式）回答；格式由每個任務的 instructions（系統提示詞，含 `COMPACT_JSON`）帶到。測試：整本 agent 測試裡每個任務的 instructions 都含 `COMPACT_JSON`；任務檔裡回答格式只出現一次。
+- 沒做：第 3 節以後全部；第 5 節的所有線上驗證（2.1、2.2、2.3 的效果、2.8 的真實 `modelUsage` 內容、2.9 的估價準不準）。
+- 限制：2.11 只看「有沒有新的讀場景工作」與時間先後，改了模型、提示詞或設定（例如校稿逐段判定）不會自動重做整本步驟，要用 `--force`；增量校稿的批次只含新段落，前一批當 `context_before` 的段落不一定緊鄰；讀過新場景之後的增量校稿，舊段落不會因為說話者更新而重校。2.12 是純字串替換：很短的舊譯名可能也換到別的詞裡的同樣字；兩個日文名舊譯名相同時以後者為準。2.9 的金額只在每個步驟都有足夠大（5000 字以上）的 Claude 歷史時出現。
+- 重現：`cd ../ncte-fixes && source .venv/bin/activate && pytest && ruff check src tests && mypy src`。測試 487 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。
