@@ -826,3 +826,13 @@ open workspace/eval/<timestamp>/report.html
 - 沒做：第 3 節以後全部；第 5 節的所有線上驗證（2.1、2.2、2.3 的效果、2.8 的真實 `modelUsage` 內容、2.9 的估價準不準）。
 - 限制：2.11 只看「有沒有新的讀場景工作」與時間先後，改了模型、提示詞或設定（例如校稿逐段判定）不會自動重做整本步驟，要用 `--force`；增量校稿的批次只含新段落，前一批當 `context_before` 的段落不一定緊鄰；讀過新場景之後的增量校稿，舊段落不會因為說話者更新而重校。2.12 是純字串替換：很短的舊譯名可能也換到別的詞裡的同樣字；兩個日文名舊譯名相同時以後者為準。2.9 的金額只在每個步驟都有足夠大（5000 字以上）的 Claude 歷史時出現。
 - 重現：`cd ../ncte-fixes && source .venv/bin/activate && pytest && ruff check src tests && mypy src`。測試 487 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。
+
+## review 後的修正（第 3 節）（2026-10-19，分支 review-fixes-2026-10-19，自 17ff97d）
+依修正指示第 3 節（3.1–3.3；3.4 只是說明，沒做）與第 2 節留下的一件小事，全部離線；沒有用 Claude 方案額度或 OpenRouter 金鑰跑任何請求，沒有動 `~/GitHub/ncte` 與任何工作區資料庫。設計寫在 ADR-064。
+- 3.1 規則 4 的範圍：`prompts/translate/v1.md` 規則 4 改成「後面的段落（同一批後面的 `units` 與 `context_after`）可以、也應該用來理解前面的句子；不可以做的是把後面才揭曉或才說清楚的資訊提前寫進前面的譯文（增譯），以及把 `scene`／`memory` 的推測當成事實」，懸念一句保留。測試：規則 4 有這些意思、舊的「推測或後文資訊寫進譯文」不在了。
+- 3.2 「讓前後的反應成立」：判斷順序之後、翻譯規則之前新增一節（固定規則，在快取的部分），通則涵蓋內容與說法；規則 7 末尾吐槽／模仿那句移進這一節。不放分析裡的具體句子。測試：這一節的位置、涵蓋的反應種類與「不是補資訊」，規則 7 不再有那句。
+- 3.3 `translation.read_through`（預設關）：開啟時 payload 帶 `"read_through": true`，schema 改用 `TranslationReadThroughOutput`（`read_through` 排在 `translations` 前面，必填；`strict_json_schema` 保持欄位順序，已驗證），提示詞輸出段的條件區塊（`<!-- if: read_through -->`，在本批附加說明、不在快取的部分）要求先通讀整批、列出後面段落限制前面某句譯法的地方（最多 5 條，沒有就空陣列）。程式只存：該請求第一個留下的段落的 `notes_json` 多「通讀：…」（段落代號換回段落 id），整本翻譯與修正重譯兩處寫入都存；模型自己的 `notes` 與 `model_flag` 發現的證據不混入。agent 來源依任務輸入選 schema，FakeLLM 在要求時回空陣列。測試（`tests/unit/test_read_through.py`、`tests/integration/test_style.py`）：預設關、關時 schema 與 payload 與原本相同；開時 schema 欄位順序與必填、系統提示詞有條件區塊；`render` 與 `render_parts` 開關兩種都沒有殘留的 `<!--`，條件區塊不在共用部分、共用部分不隨開關改變；代號換回段落 id、超過 5 條只留 5 條、只掛在第一段；agent 只在任務要求時接受這個欄位；整本跑完每個請求的第一段有「通讀：…」、其他段沒有。
+- (d) 體例跟著定名（2.12）時，一個字的舊譯名不替換（會換到別的詞裡，和其他地方「單字不比對」一致）。測試：「米」→「新名」不動「米飯」，兩個字以上的照換。
+- 沒做：3.4（說明，照指示不做）；第 4 節以後全部；第 5 節的所有線上驗證——3.1、3.2 的提示詞改動與 3.3 的開關都沒有用真的模型跑過，效果與會不會讓模型提前寫出後文資訊要等第 5.4 節；`read_through` 預設維持關。
+- 限制：`read_through` 的段落 id 寫在 notes 裡，網頁沒有把它連到段落；請求被拆成小批重試時，每個小批的清單各自掛在它的第一段；translate 提示詞改了，`prompt_version` 的雜湊跟著變。
+- 重現：`cd ../ncte-fixes && source .venv/bin/activate && pytest && ruff check src tests && mypy src`。測試 496 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。開關：設定檔 `translation: {read_through: true}`。
