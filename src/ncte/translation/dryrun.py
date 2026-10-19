@@ -7,7 +7,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..config import Config, reasoning_param, reasoning_setting
+from ..config import Config, proofread_passes, reasoning_param, reasoning_setting
 from ..epub.units import match_text
 from ..library import Book
 from ..llm.base import LLMClient
@@ -212,7 +212,7 @@ def _full_estimate(cfg: Config, opts: RunOptions, conns: list[sqlite3.Connection
         if breaks:
             want["scene_windows"] = chars
         if cfg.context.proofread:
-            want["proofread"] = chars * cfg.context.proofread_passes  # each pass reads the book again (ADR-066)
+            want["proofread"] = chars * proofread_passes(cfg)  # each pass reads the book again (ADR-066)
         if cfg.context.reader_pass:
             want["reader"] = chars
         for st in PER_RUN_STAGES:
@@ -237,7 +237,7 @@ def _full_estimate(cfg: Config, opts: RunOptions, conns: list[sqlite3.Connection
         else:
             share = SAMPLE_SHARE.get(f"{st}:{effort.get(st)}", SAMPLE_SHARE.get(st, 0.0))
             if st == "proofread":  # a share of one pass (ADR-066)
-                share *= cfg.context.proofread_passes
+                share *= proofread_passes(cfg)
             stages[st] = {"usd": round(base_lo * share, 4), "high_usd": round(base_hi * share * UNCALIBRATED_HIGH, 4),
                           "from": "sample share"}
     if base_lo == cost_low and not all(st in rates for st in core if st in want):

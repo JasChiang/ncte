@@ -810,8 +810,9 @@ class ContextOrchestrator(Orchestrator):
     def proofread_pass(self, *, record_job: bool = True) -> dict[str, Any]:
         """Pass 3b (ADR-051): every paragraph against its source; real errors go back to the translator. Recorded as
         a job, it keeps how far it got after each stretch (with its retranslations and their checks): paused or
-        killed, the resumed run checks on from there. With ``context.proofread_passes`` above 1 (ADR-066), each later
-        pass checks the whole current translation again once the pass before has retranslated and checked its fixes;
+        killed, the resumed run checks on from there. With more than one pass (``config.proofread_passes``: the
+        setting, else 2 on the Claude plan and 1 elsewhere; ADR-066), each later pass checks the whole current
+        translation again once the pass before has retranslated and checked its fixes;
         the checkpoint also keeps which pass it is in (``pass``) and each finished pass's counts (``passes``), and
         the job's counts are the passes added up."""
         from .review import new_stats
@@ -819,8 +820,10 @@ class ContextOrchestrator(Orchestrator):
         job = self._job("proofread", self.book.id)
         if record_job and (job is None or job["status"] not in ("pending", "running")):
             return {}
+        from ..config import proofread_passes
+
         saved = self._begin_job("proofread") if record_job else {}
-        n = self.cfg.context.proofread_passes
+        n = proofread_passes(self.cfg)
         k = int(saved.pop("pass", 1))
         done: list[dict[str, Any]] = list(saved.pop("passes", []))
         since = saved.get("since_translation_id")  # an earlier whole-book pass: only what is newer (2.11)

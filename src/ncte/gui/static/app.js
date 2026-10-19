@@ -119,7 +119,7 @@ async function settingsView() {
   const claudeCard = `<div class="card"><strong>Claude 方案</strong>
     <p>用這台電腦上已登入的 Claude Code（<code>claude</code> 指令）翻譯，使用你的 Claude 訂閱額度：不需要金鑰，NCTE 不另外收費。讀書的步驟（切場景、讀場景、記憶整理、角色印象、體例）用 Sonnet，翻譯、術語定義、定名、覆核、人物關係、規則確認、審稿、對照校稿、讀者檢查與修正驗收用 Opus。</p>
     <p>${k.set ? `${chip("c-ok", "找到 Claude Code")} <span class="small muted">${esc(k.claude)}</span>` : `${chip("c-warn", "找不到 Claude Code")} 請先安裝 <a href="https://docs.claude.com/en/docs/claude-code" target="_blank" rel="noopener">Claude Code</a>，並在終端機執行 <code>claude</code> 登入；或在下方「連線方式」改用 OpenRouter。`}</p>
-    <p class="small muted">額度用完時會自動等到重置再接著翻，不會中斷；一本書通常要好幾個小時。畫面上的金額是照定價換算的參考，不會向你收費。</p></div>`;
+    <p class="small muted">額度用完時會自動等到重置再接著翻，不會中斷；一本書通常要好幾個小時。畫面上的金額是照定價換算的參考，不會向你收費。對照校稿預設做兩輪（第一輪修完後再校整本一次，多抓一批錯；多用一些額度），OpenRouter 則預設一輪。</p></div>`;
   view.innerHTML = `<h2>設定</h2>
     ${claude ? claudeCard : local ? localCard : `<div class="card"><strong>${label} 金鑰</strong>
     ${fal ? "" : `<p>NCTE 透過 <a href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter</a> 使用翻譯模型（Gemini），費用從你的 OpenRouter 帳戶扣，NCTE 不另外收費。</p>

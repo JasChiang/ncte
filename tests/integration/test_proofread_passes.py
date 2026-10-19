@@ -78,9 +78,9 @@ def _setup(cfg, passes: int) -> None:
 
 
 def test_the_default_is_one_pass(cfg):
-    from ncte.config import ContextConfig
+    from ncte.config import ContextConfig, proofread_passes
 
-    assert ContextConfig().proofread_passes == 1
+    assert ContextConfig().proofread_passes is None and proofread_passes(cfg) == 1  # an API source: one pass
     with pytest.raises(ValueError):
         ContextConfig(proofread_passes=4)
     with pytest.raises(ValueError):
@@ -218,3 +218,43 @@ def test_the_estimate_counts_each_pass(conn, cfg, fixtures):
     two = dry_run(conn, cfg, book, opts, FakeLLM(), log=lambda m: None).stage_estimates["proofread"]
     assert two["usd"] == pytest.approx(2 * one["usd"], abs=2e-4) and two["high_usd"] == pytest.approx(
         2 * one["high_usd"], abs=2e-4)
+
+
+def test_on_the_claude_plan_proofreading_does_two_passes_unless_set(tmp_path, monkeypatch):
+    """ADR-066 (2026-10-20): on the Claude plan a second pass costs quota, not money, and found 6–8 more each time;
+    OpenRouter stays at one. What the configuration says wins, also 1."""
+    from ncte.config import load_config, proofread_passes
+
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "claude")
+    assert proofread_passes(load_config()) == 2
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "openrouter")
+    assert proofread_passes(load_config()) == 1
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "claude")
+    one = tmp_path / "one.yaml"
+    one.write_text("context:\n  proofread_passes: 1\n", encoding="utf-8")
+    assert proofread_passes(load_config(one)) == 1
+
+
+def test_the_estimate_follows_the_claude_default(conn, cfg, fixtures):
+    from ncte.translation.dryrun import dry_run
+    from ncte.translation.orchestrator import RunOptions
+
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], FakeLLM(), mode="context")
+    opts = RunOptions(mode="context", model=cfg.openrouter.model, force=True)
+    api = dry_run(conn, cfg, book, opts, FakeLLM(), log=lambda m: None).stage_estimates["proofread"]
+    cfg.openrouter.provider = "claude"
+    plan = dry_run(conn, cfg, book, opts, FakeLLM(), log=lambda m: None).stage_estimates["proofread"]
+    assert plan["usd"] == pytest.approx(2 * api["usd"], abs=2e-4)
+
+
+def test_a_run_on_the_claude_plan_proofreads_twice(conn, cfg, fixtures, monkeypatch):
+    """The run itself takes the default from its source (the fake model stands in for the Claude plan here)."""
+    from ncte.translation import orchestrator
+
+    monkeypatch.setattr(orchestrator, "check_reasoning_effort", lambda cfg, pricing: None)
+    cfg.openrouter.provider = "claude"
+    cfg.context.proofread_chunk_units = 100
+    client = FakeLLM()
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    _, cp = _job(conn, rid)
+    assert len(cp["passes"]) == 2

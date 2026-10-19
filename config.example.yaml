@@ -40,7 +40,7 @@ review:
   maximum_review_passes: 1
   fix_check: true                    # a fix after review/proofreading/reader is checked against the source; false = kept but unverified
 context:
-  proofread_passes: 1          # ADR-066: 1–3 proofreading passes; each later one checks the whole current translation again after the fixes (one pass found about half; each pass costs about one more proofreading)
+  # proofread_passes: 2        # ADR-066: 1–3 proofreading passes; each later one checks the whole current translation again after the fixes (one pass found about half; each pass costs about one more proofreading). Unset: 2 on the Claude plan, 1 on OpenRouter/fal
   term_definitions: true       # ADR-069: after reading, the model says what the recurring terms mean; sent with each request where the term occurs (false: not asked, not sent)
   read_in_one_request: false   # ADR-065: a scene's analysis and memory update from one request (read_first only; off until an A/B shows the quality holds)
 memory:

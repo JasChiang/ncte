@@ -118,8 +118,9 @@ class ContextConfig(_Strict):
     proofread: bool = True
     proofread_chunk_units: int = 60  # paragraphs per proofreading request
     # ADR-066: passes over the whole book; each later one checks the current translation again after the one before
-    # has retranslated and checked its fixes (a pass found about half of what three found together)
-    proofread_passes: int = Field(1, ge=1, le=3)
+    # has retranslated and checked its fixes (a pass found about half of what three found together). None: the
+    # source's default (``proofread_passes``): 2 on the Claude plan, 1 where a pass costs money
+    proofread_passes: int | None = Field(None, ge=1, le=3)
     # each paragraph gets a verdict (what the source says, and whether the translation says it), so none is skipped
     proofread_verdicts: bool = False
     read_first: bool = True  # ADR-023: analyse + remember every scene first, then name, then translate
@@ -277,6 +278,22 @@ def redact(text: str, key: str | None = None) -> str:
         if secret:
             text = text.replace(secret, "***")
     return re.sub(r"sk-or-[A-Za-z0-9_\-]{8,}", "sk-or-***", text)
+
+
+# On the Claude plan proofreading does two passes unless the configuration says otherwise (ADR-066, 2026-10-20): in
+# the whole-book test three passes over the same translation overlapped in 5 places, and a second pass found 6–8 more
+# each time; there a pass costs quota, not money. Elsewhere (OpenRouter, fal: a pass is paid for) it stays one. If the
+# next check finds the second pass adds only one or two, this goes back to one.
+CLAUDE_PROOFREAD_PASSES = 2
+
+
+def proofread_passes(cfg: Config) -> int:
+    """How many proofreading passes a run does: ``context.proofread_passes`` when set (``ncte proofread --passes``
+    sets it too), else the source's default."""
+    n = cfg.context.proofread_passes
+    if n is not None:
+        return n
+    return CLAUDE_PROOFREAD_PASSES if cfg.openrouter.provider == "claude" else 1
 
 
 def reasoning_setting(cfg: Config, stage: str) -> str | None:

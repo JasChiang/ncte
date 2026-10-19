@@ -283,7 +283,7 @@ ncte reader-check ./samples/book.epub                # 以不懂日文的讀者�
 ncte names terms ./samples/book.epub                 # 已讀過的書：整理術語在這本書裡的意思（ADR-069）
 ncte glossary define ./samples/book.epub 詞 "意思"     # 自己寫某個術語在這本書裡的意思（模型不會覆蓋）
 ```
-校稿預設一輪；一輪大約只抓到一半，同一個模型再校一次會抓到另一批，所以可以設 `context.proofread_passes: 2`（最多 3，或指令加 `--passes`）讓它在修完後再校整本，代價是每多一輪約多一次校稿的額度（ADR-066）。
+一輪校稿大約只抓到一半，同一個模型再校一次會抓到另一批，所以 Claude 方案預設校兩輪（第二輪在第一輪修完後再校整本；多用的是訂閱額度，不另花錢），OpenRouter／fal 預設一輪（每一輪都要付費）。要改就設 `context.proofread_passes`（1–3，設定檔寫了就照設定檔），或指令加 `--passes`（ADR-066）。
 
 自動複查由設定 `review.automatic_review: off | flagged_only | all` 控制（預設只複查被程式 QA 或說話者衝突標記的單元，最多一輪）。審稿看前後各 5 段與每句說話者。
 

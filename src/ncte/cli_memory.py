@@ -791,7 +791,7 @@ def proofread_cmd(epub: Annotated[str, typer.Argument()],
                   budget_usd: Annotated[float, typer.Option("--budget-usd")] = 2.0,
                   unit_id: Annotated[list[str] | None, typer.Option("--unit-id", help="Only these units")] = None,
                   passes: Annotated[int | None, typer.Option("--passes", min=1, max=3,
-                                                             help="Passes over the book (default: context.proofread_passes)")] = None,
+                                                             help="Passes over the book (default: context.proofread_passes; 2 on the Claude plan, else 1)")] = None,
                   fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
     """Check every paragraph against its source like a proofreader; real errors (meaning, omission, addition, speaker,
     tone, voice, house style) are retranslated with the source — ADR-051. For a book already translated. Recorded as
