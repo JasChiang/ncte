@@ -77,8 +77,9 @@ def agent_next(workspace: WS) -> None:
     schema = json.dumps(t.schema, ensure_ascii=False) if t.schema else "(see the output format in the instructions)"
     path.write_text(
         f"# Task {t.id} — stage `{t.stage}`" + (f" (think at {t.effort} effort)" if t.effort else "") + "\n\n"
-        "You are the model the NCTE translation engine is asking. Follow the instructions exactly and answer with "
-        "ONE JSON object only (no prose, no code fence), in the output format the instructions give.\n\n"
+        # how to answer is in the step's instructions (translator.COMPACT_JSON, the same for every source)
+        "You are the model the NCTE translation engine is asking. Follow the instructions exactly, including how "
+        "they say to answer.\n\n"
         f"## Instructions (system prompt)\n\n{t.instructions}\n\n"
         f"## Input (the request's JSON)\n\n```json\n{t.input}\n```\n\n"
         f"## Output JSON schema\n\n```json\n{schema}\n```\n\n"

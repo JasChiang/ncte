@@ -15,6 +15,7 @@ from ncte.agent import runner
 from ncte.agent.tasks import TaskQueue
 from ncte.llm.base import LLMRequest
 from ncte.llm.fake import FakeLLM
+from ncte.translation.translator import COMPACT_JSON
 
 
 def answer_with_fake(queue: TaskQueue, done: threading.Event, seen: list[tuple[str, str | None]]) -> None:
@@ -26,6 +27,7 @@ def answer_with_fake(queue: TaskQueue, done: threading.Event, seen: list[tuple[s
             time.sleep(0.02)
             continue
         seen.append((t.stage.split(":")[0], t.effort))
+        assert COMPACT_JSON.strip() in t.instructions, t.stage  # how to answer comes with every task's instructions
         req = LLMRequest(stage=t.stage, model=t.model, schema_name="x", json_schema=t.schema, id_codes=t.id_codes,
                          messages=[{"role": "system", "content": t.instructions}, {"role": "user", "content": t.input}])
         text = fake.complete(req).content
@@ -129,3 +131,20 @@ def test_the_engine_runs_in_its_own_process_between_the_agents_calls(tmp_path, f
     finally:
         done.set()
     assert st["status"] == "completed" and st["run_status"] == "completed", st.get("log_tail")
+
+
+def test_the_task_file_says_how_to_answer_once(tmp_path: Path):
+    """The task file carries the step's instructions (which say how to answer, ``COMPACT_JSON``) and adds no second,
+    different wording of the same rule."""
+    from typer.testing import CliRunner
+
+    from ncte.cli import app
+
+    ws = tmp_path / "ws"
+    TaskQueue(ws).put(stage="translate", model="agent/model", schema={"type": "object"}, id_codes={},
+                      messages=[{"role": "system", "content": "規則" + COMPACT_JSON}, {"role": "user", "content": "{}"}])
+    out = CliRunner().invoke(app, ["agent", "next", "-w", str(ws)])
+    assert out.exit_code == 0, out.output
+    text = Path(json.loads(out.output)["file"]).read_text(encoding="utf-8")
+    assert text.count(COMPACT_JSON.strip()) == 1
+    assert text.count("code fence") == 1 and "no prose" not in text  # only COMPACT_JSON says it
