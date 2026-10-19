@@ -902,3 +902,7 @@ open workspace/eval/<timestamp>/report.html
   - 進度列把另一個 worker 進行中的請求印成「unknown-cost」：`run_spent` 把 `cost_status` 的 `unknown` 與 `pending`（已送出、還沒回答）一起算。已修：`run_spend` 分開回傳兩者，進度列（`spent_note`）只把 `unknown` 叫 unknown-cost，進行中的另外寫「N in flight」；預算照舊把兩者都以估計計入。網頁的進度只用金額，沒有用這個數字。測試：兩筆 pending、一筆 unknown 時，每一行進度都是「(1 unknown-cost request, 2 in flight)」，`run_spent` 仍是 3 筆、金額含 pending 的估計。
   - 額度等待梯不夠長（一次上限等了 244 分鐘）：af0bb7c 已修（額度上限每 15 分鐘再問一次、最多 8 小時）。
 - 重現：另開工作區，`NCTE_LLM_PROVIDER=claude ncte -w <工作區> translate <書>.epub --mode context`（預設設定）；重校在工作區副本上用同一份 `prompts/proofread` 由 Opus 跑、只記錄（high 與 medium 各一輪）。修正的測試：`cd ../ncte-fixes && source .venv/bin/activate && pytest && ruff check src tests && mypy src`，513 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。
+
+## 整本實測後的兩項修正（2026-10-19，分支 review-fixes-2026-10-19，自 61c40a1）
+全部離線；沒有跑任何 `claude -p` 或 OpenRouter 請求。
+- `claude` 來源改用 Claude Code 的 `--json-schema`（ADR-062 補充）：`args()` 在請求有 schema 時加 `--json-schema <schema>`（`strict_json_schema` 那份），`--system-prompt` 不再附 schema 文字（`SCHEMA_HEAD` 移除），快取切分照舊；答案優先取回傳的 `structured_output`（轉回 JSON 字串交給 `parse_json_output`，Pydantic 驗證不放鬆），沒有才用 `result`；CLI 失敗且 stderr 或 `result` 說 schema 不合法時 `FatalAPIError`（附原文），不退回貼文字。測試（`tests/unit/test_claude_cli.py`）：參數含 `--json-schema` 且內容等於 schema、沒有 schema 時不帶；system 只剩固定規則、三個請求逐字相同；有 `structured_output` 時用它（`result` 不是 JSON 也一樣）、沒有時用 `result`；schema 被拒時只試一次、不等待、錯誤附原文。限制：「schema 不合法」的判斷靠字樣（`BAD_SCHEMA`），CLI 真正的錯誤訊息沒有實際看過；schema 不在提示詞之後快取比例的變化沒有量。

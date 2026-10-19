@@ -51,7 +51,8 @@ def test_a_request_is_one_plain_call_at_the_steps_level_and_nothing_is_billed(mo
     assert a[a.index("--model") + 1] == "opus" and a[a.index("--effort") + 1] == "high"
     assert a[a.index("--tools") + 1] == "" and "--no-session-persistence" in a  # no tools, nothing kept
     assert a[a.index("--system-prompt") + 1].startswith("SYS")  # the step's prompt replaces Claude Code's
-    assert calls.inputs[0] == '{"units": []}'  # the request's data only; the schema is in the system prompt
+    assert calls.inputs[0] == '{"units": []}'  # the request's data only; the schema goes as --json-schema
+    assert json.loads(a[a.index("--json-schema") + 1]) == {"type": "object"}
     assert r.cost_usd == 0.0 and r.usage["list_cost_usd"] == 0.042
     assert r.usage["prompt_tokens"] == 1503 and r.usage["completion_tokens"] == 70
     c.complete(_req(extra={"reasoning": {"max_tokens": 3000}}))  # a token cap has no level: the model's default
@@ -60,8 +61,8 @@ def test_a_request_is_one_plain_call_at_the_steps_level_and_nothing_is_billed(mo
 
 def test_the_system_prompt_is_the_same_on_every_request_of_a_step_so_it_is_cached(monkeypatch):
     """Claude Code caches the system prompt as one block: only a byte-identical one is read from the cache. The fixed
-    rules and the step's JSON schema go there; this batch's conditional rules and a retry's correction go to the
-    user message, ahead of the data."""
+    rules go there; the step's JSON schema goes as ``--json-schema`` (Claude Code checks the answer against it); this
+    batch's conditional rules and a retry's correction go to the user message, ahead of the data."""
     calls = Calls(_ok(), _ok(), _ok())
     monkeypatch.setattr(subprocess, "run", calls)
     c = ClaudeCLIClient()
@@ -78,12 +79,53 @@ def test_the_system_prompt_is_the_same_on_every_request_of_a_step_so_it_is_cache
     c.complete(req("\n## 本批資料的附加說明\nCOND A\n\n## 重要更正\n上一次的輸出未通過程式驗證：missing P3\n"))
     systems = [a[a.index("--system-prompt") + 1] for a in calls.args]
     assert systems[0] == systems[1] == systems[2]
-    assert systems[0].startswith("FIXED RULES") and json.dumps(schema, ensure_ascii=False) in systems[0]
+    assert systems[0] == fixed  # only the fixed rules: no schema text
+    assert "schema" not in systems[0] and '"properties"' not in systems[0]
+    assert all(json.loads(a[a.index("--json-schema") + 1]) == schema for a in calls.args)
     assert "COND" not in systems[0] and "重要更正" not in systems[0]
     assert all('"properties"' not in u for u in calls.inputs)  # the schema is never in the user message
     assert "COND A" in calls.inputs[0] and "COND B" in calls.inputs[1]
     assert "重要更正" in calls.inputs[2] and "missing P3" in calls.inputs[2]
     assert all(u.endswith('{"units": [1]}') for u in calls.inputs)  # the data comes last
+
+
+def test_without_a_schema_no_json_schema_is_sent(monkeypatch):
+    calls = Calls(_ok())
+    monkeypatch.setattr(subprocess, "run", calls)
+    ClaudeCLIClient().complete(_req(json_schema=None))
+    assert "--json-schema" not in calls.args[0]
+    assert calls.args[0][calls.args[0].index("--system-prompt") + 1] == "SYS"
+
+
+def test_the_structured_output_is_the_answer_when_given_and_the_result_otherwise(monkeypatch):
+    """With ``--json-schema`` Claude Code returns the parsed object as ``structured_output``; the text in ``result``
+    is used only when there is none. Either way the program's own validation runs on it (parse_json_output)."""
+    obj = {"translations": [{"unit_id": "P1", "translated_text": "妳好"}]}
+    monkeypatch.setattr(subprocess, "run", Calls(_ok("not json at all", structured_output=obj), _ok('{"a": 1}')))
+    c = ClaudeCLIClient(waits=())
+    r = c.complete(_req())
+    assert json.loads(r.content) == obj and "妳好" in r.content  # not escaped
+    assert c.complete(_req()).content == '{"a": 1}'
+
+
+def test_an_answer_that_is_only_a_structured_output_is_an_answer(monkeypatch):
+    monkeypatch.setattr(subprocess, "run", Calls(_ok("", structured_output={"translations": []})))
+    assert json.loads(ClaudeCLIClient(waits=()).complete(_req()).content) == {"translations": []}
+
+
+def test_a_schema_claude_code_rejects_stops_at_once_with_its_words(monkeypatch):
+    """A schema that Claude Code will not take is the same on every try: FatalAPIError with what it said, and no
+    falling back to pasting the schema into the prompt."""
+    for bad in (subprocess.CompletedProcess([], 1, "", "Error: Invalid JSON schema: unknown keyword 'frob'"),
+                subprocess.CompletedProcess([], 1, json.dumps({"is_error": True, "subtype": "error_during_execution",
+                                                               "result": "The provided schema is invalid: 'type'"}), "")):
+        calls = Calls(bad, _ok())
+        monkeypatch.setattr(subprocess, "run", calls)
+        waited: list[float] = []
+        with pytest.raises(FatalAPIError, match="(?i)schema") as err:
+            ClaudeCLIClient(waits=(30, 60), sleep=waited.append).complete(_req())
+        assert len(calls.args) == 1 and not waited
+        assert ("frob" in str(err.value)) or ("'type'" in str(err.value))
 
 
 def test_a_usage_limit_is_waited_out_and_a_missing_login_stops_at_once(monkeypatch):

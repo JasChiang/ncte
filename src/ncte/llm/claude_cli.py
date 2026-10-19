@@ -26,7 +26,6 @@ from .base import LLMRequest, LLMResponse
 PREFIX = "claude/"
 MODELS = ("opus", "sonnet", "haiku")  # Claude Code's aliases; a full model id after the prefix is passed as is
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
-SCHEMA_HEAD = "\n\n## 輸出的 JSON schema\n"  # how to answer is said once, in the shared rules (translator.COMPACT_JSON)
 RETRY_WAITS = (30, 60, 120, 300, 600, 900, 1800, 1800, 1800, 3600, 3600)  # seconds, for failures of other kinds
 # A usage limit is not a failure that goes away by itself: the window resets at a set time (a whole-book run met one at
 # 15:30 that reset at 19:00, longer than the ladder above). It is asked again every LIMIT_WAIT seconds, as long as it
@@ -36,6 +35,10 @@ LIMIT_MAX = 8 * 3600
 USAGE_LIMIT = ("usage limit", "session limit", "rate limit", "resets ")
 NOT_LOGGED_IN = ("not logged in", "please run /login", "invalid api key", "authentication")
 BAD_COMMAND = ("unknown option", "unknown argument", "too many arguments")  # the same on every try
+# the step's JSON schema is passed as `--json-schema` (Claude Code checks the answer against it): a schema it will not
+# take is the same on every try
+BAD_SCHEMA = ("invalid json schema", "invalid schema", "schema is invalid", "not a valid json schema",
+              "schema is not valid", "invalid --json-schema")
 USAGE_ERROR_EXIT = 2  # the CLI's exit code for a command line it rejects
 
 
@@ -83,18 +86,19 @@ class ClaudeCLIClient:
                "--exclude-dynamic-system-prompt-sections"]
         if eff := effort_of(req):
             out += ["--effort", eff]
+        if req.json_schema:  # the answer is checked by Claude Code too; the program's own validation still runs
+            out += ["--json-schema", json.dumps(req.json_schema, ensure_ascii=False)]
         return out
 
     @staticmethod
     def split(req: LLMRequest) -> tuple[str, str]:
         """(system prompt, user message). Claude Code caches the system prompt as one block, read back only when it
-        is byte-identical: it holds the rules every request of the step shares (``cached_prefix_chars``) and the step's
-        JSON schema. This batch's conditional rules and a retry's correction go to the user message, before the data."""
+        is byte-identical: it holds only the rules every request of the step shares (``cached_prefix_chars``); the
+        step's JSON schema goes as ``--json-schema`` (``args``). This batch's conditional rules and a retry's
+        correction go to the user message, before the data."""
         system = "\n".join(m["content"] for m in req.messages if m["role"] == "system")
         cut = req.cached_prefix_chars if 0 < req.cached_prefix_chars < len(system) else len(system)
         fixed, own = system[:cut], system[cut:].strip()
-        if req.json_schema:
-            fixed = fixed.rstrip() + SCHEMA_HEAD + json.dumps(req.json_schema, ensure_ascii=False)
         user = "\n".join(m["content"] for m in req.messages if m["role"] == "user")
         return fixed, (own + "\n\n" + user if own else user)
 
@@ -147,11 +151,18 @@ class ClaudeCLIClient:
             message = str(out.get("result") or stderr or text)[:500]
             if failed and any(s in message.lower() for s in NOT_LOGGED_IN):  # never in a successful answer
                 raise FatalAPIError(f"Claude Code is not logged in: {message[:200]}")
+            said = f"{stderr}\n{out.get('result') or ''}".lower()
+            if failed and req.json_schema and any(s in said for s in BAD_SCHEMA):
+                raise FatalAPIError(f"Claude Code rejected the JSON schema (--json-schema): {message[:300]}")
             if failed:
                 last = message or f"claude exited {proc.returncode}"
                 later(any(s in message.lower() for s in USAGE_LIMIT))  # a usage limit, an overloaded service: later
                 continue
-            result = str(out.get("result") or "")
+            structured = out.get("structured_output")
+            if isinstance(structured, (dict, list)):  # the parsed answer `--json-schema` asked for
+                result = json.dumps(structured, ensure_ascii=False)
+            else:
+                result = str(out.get("result") or "")
             if not result.strip():
                 raise ModelOutputError("empty answer")
             u = out.get("usage") or {}
