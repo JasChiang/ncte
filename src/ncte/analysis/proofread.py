@@ -78,6 +78,8 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
                                 "_tid": t["id"], "_at": r["ordinal"], "_href": r["resource_href"]}  # program only
         if r["id"] in actions:
             item["actions"] = actions[r["id"]]
+        if said_by_translator := json.loads(t["notes_json"] or "[]"):  # what it left for whoever checks (ADR-067)
+            item["translator_notes"] = said_by_translator
         if r["id"] in said or r["id"] in told:
             key = r["scene_id"] or str(r["ordinal"])
             if (names := names_at.get(key)) is None:  # once per scene, as known at its end (as its translation was)

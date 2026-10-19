@@ -108,6 +108,8 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
                 tids[uid] = tr["id"]
                 items.append({"unit_id": uid, "source": r["source_text"], "translation": tr["text"],
                               "flags": reasons[uid]})
+                if notes := json.loads(tr["notes_json"] or "[]"):  # what the translator left for the reviewer
+                    items[-1]["translator_notes"] = notes
         _close_jobs(orch, [u for u in chunk if u not in tids], "skipped")
         if not items:
             continue

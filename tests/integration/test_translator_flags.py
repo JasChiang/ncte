@@ -74,3 +74,28 @@ def test_ruby_and_wordplay_flags_show_on_the_side_by_side_page(conn, cfg, fixtur
                           mode="context")
     shown = [u for u in data.units(conn, book)["units"] if u["translator_flags"]]
     assert len(shown) == 1 and shown[0]["translator_flags"] == ["ruby_meaning_kept", "wordplay"]
+
+
+def test_the_translators_notes_reach_proofreading_review_and_the_page(conn, cfg, fixtures):
+    """B4 (ADR-067): the notes the translator leaves for whoever checks (not translation) come with the paragraph."""
+    from ncte.gui import data
+
+    def noting(payload, req):
+        out = default_translate(payload, req)
+        for t, u in zip(out["translations"], payload["units"], strict=True):
+            if "朝の市場" in u["source"] and "review_feedback" not in payload:
+                t["notes"] = ["市場一詞依前後文取早市"]
+        return out
+
+    proofs, reviews = [], []
+    cfg.review.automatic_review = "all"
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={
+        **RESPONDERS, "translate": noting, "proofread": lambda p, r: proofs.append(p) or {"issues": []},
+        "review": lambda p, r: reviews.append(p) or {"issues": []}}), mode="context")
+    paras = [p for s in proofs for p in s["paragraphs"]]
+    hit = [p for p in paras if "translator_notes" in p]
+    assert len(hit) == 1 and hit[0]["translator_notes"] == ["市場一詞依前後文取早市"] and "朝の市場" in hit[0]["ja"]
+    items = [i for s in reviews for i in s["items"]]
+    assert [i["translator_notes"] for i in items if "translator_notes" in i] == [["市場一詞依前後文取早市"]]
+    shown = [u for u in data.units(conn, book)["units"] if u["translator_notes"]]
+    assert len(shown) == 1 and shown[0]["translator_notes"] == ["市場一詞依前後文取早市"]

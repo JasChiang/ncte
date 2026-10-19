@@ -160,7 +160,8 @@ def units(conn: sqlite3.Connection, book: Book, *, start: int | None = None, end
                     "wordplay": found.get(r["id"], []),
                     # what the translator marked on its own text (ADR-067); the program's own marker stays home
                     "translator_flags": [x for x in json.loads(tr["flags_json"] or "[]") if x != "review_retranslation"]
-                    if tr is not None else []})
+                    if tr is not None else [],
+                    "translator_notes": json.loads(tr["notes_json"] or "[]") if tr is not None else []})
         if len(out) >= limit:
             break
     return {"units": out, "truncated": len(out) >= limit}

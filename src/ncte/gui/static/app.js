@@ -342,6 +342,7 @@ function rowHtml(u) {
       ${u.wordplay.map(w => `<div class="note">梗「${esc(w.term)}」：${esc(w.explanation)}</div>`).join("")}
       ${u.findings.map(findingLine).join("")}
       ${(u.translator_flags || []).length ? `<div class="note" title="譯者自己在這段標的記號">譯者標記：${u.translator_flags.map(f => esc(TFLAG[f] || f)).join("、")}</div>` : ""}
+      ${(u.translator_notes || []).map(n => `<div class="note muted" title="譯者留給審稿者的話，不在書裡">譯者說明：${esc(n)}</div>`).join("")}
       ${(u.readings || []).map(r => `<div class="note" title="對照校稿認為原文容得下兩種讀法，不算錯，沒有重譯">兩種讀法：${esc(r)}</div>`).join("")}</div>
     <div>${u.quotes.map(q => { const [c, l] = STATUS[q.status] || ["c-unk", q.status];
       return `<div>${esc(q.speaker || "？")} ${chip(c, l)}${q.disputed ? chip("c-warn", "有爭議") : ""}${q.second ? `<div class="muted small" title="讀完後再確認一次的結果">再確認：${esc(q.second)}</div>` : ""}</div>`; }).join("") || `<span class="muted small">敘述</span>`}</div></div>`;

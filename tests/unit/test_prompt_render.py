@@ -175,3 +175,11 @@ def test_the_rule_check_explains_the_translators_own_flags():
     assert "譯者自己" in text and "前後文" in text
     for rule in CONFIRM_MODEL_FLAGS:
         assert f"- `{rule}`" in text, rule
+
+
+def test_proofreading_and_review_are_told_what_translator_notes_are():
+    """B4 (ADR-067): the translator's notes are words for the checker, not translation."""
+    for task, payload in (("proofread", {"paragraphs": []}), ("review", {"items": []})):
+        text = load_prompt(task).render(payload)
+        line = next(x for x in text.split("\n") if "`translator_notes`" in x)
+        assert "譯者留給審稿者的話" in line and "不是譯文" in line, task
