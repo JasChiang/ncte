@@ -83,6 +83,27 @@ def test_interrupt_and_resume_no_duplicate_billing(conn, cfg, fixtures):
     assert len(latest_texts(conn, book.id)) == translatable
 
 
+def test_progress_line_reports_only_requests_whose_bill_is_unknown(conn, cfg, fixtures):
+    """With two workers the other worker's request is still waiting for its answer (``pending``): the progress line
+    called it an unknown-cost request. Only a bill that is really unknown is reported as such; requests in flight are
+    shown apart. The budget still counts both at their estimate."""
+    from ncte.translation.orchestrator import run_spent
+
+    cfg.openrouter.max_concurrency = 1
+    fake = FakeLLM()
+    book, rid, opts = start_run(conn, cfg, fixtures["basic"], fake)
+    for cost_status, status in (("pending", "sent"), ("pending", "sent"), ("unknown", "interrupted")):
+        conn.execute("INSERT INTO llm_requests(run_id, book_id, stage, request_hash, model, est_cost_usd, status, "
+                     "cost_status, created_at) VALUES (?,?,'translate','h','m',0.001,?,?,'2026-01-01')",
+                     (rid, book.id, status, cost_status))
+    conn.commit()
+    assert run_spent(conn, rid) == (pytest.approx(0.003), 3)  # the budget is unchanged
+    logs: list[str] = []
+    orchestrator_for(conn, cfg, book, rid, opts, fake, logs).run()
+    lines = [m for m in logs if "| spent" in m]
+    assert lines and all("(1 unknown-cost request, 2 in flight)" in m for m in lines), lines
+
+
 def test_budget_stop_then_resume(conn, cfg, fixtures):
     cfg.openrouter.max_concurrency = 1
     cfg.translation.unit_target_japanese_chars = 120

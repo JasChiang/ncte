@@ -179,13 +179,30 @@ def record_event(conn: sqlite3.Connection, run_id: str, event: str, source: str,
                      (run_id, utcnow(), event, source, os.getpid(), json.dumps(detail, ensure_ascii=False)))
 
 
-def run_spent(conn: sqlite3.Connection, run_id: str) -> tuple[float, int]:
+def run_spend(conn: sqlite3.Connection, run_id: str) -> tuple[float, int, int]:
+    """(spent, unknown, in_flight): a request whose bill is unknown (``unknown``) and one still waiting for its answer
+    (``pending``) both count at their estimate; they are told apart for the progress line."""
     row = conn.execute(
         "SELECT COALESCE(SUM(CASE WHEN cost_usd IS NOT NULL THEN cost_usd "
         "WHEN cost_status IN ('unknown','pending') THEN est_cost_usd ELSE 0 END),0) AS spent, "
-        "SUM(CASE WHEN cost_status IN ('unknown','pending') THEN 1 ELSE 0 END) AS unk "
+        "SUM(CASE WHEN cost_status='unknown' THEN 1 ELSE 0 END) AS unk, "
+        "SUM(CASE WHEN cost_status='pending' THEN 1 ELSE 0 END) AS pend "
         "FROM llm_requests WHERE run_id=?", (run_id,)).fetchone()
-    return float(row["spent"] or 0), int(row["unk"] or 0)
+    return float(row["spent"] or 0), int(row["unk"] or 0), int(row["pend"] or 0)
+
+
+def run_spent(conn: sqlite3.Connection, run_id: str) -> tuple[float, int]:
+    """What the budget counts: (spent, requests counted at their estimate — unknown bill or still in flight)."""
+    spent, unk, pend = run_spend(conn, run_id)
+    return spent, unk + pend
+
+
+def spent_note(conn: sqlite3.Connection, run_id: str) -> str:
+    """The progress line's ``spent ≈ $X``: requests still in flight on another worker are not "unknown cost"."""
+    spent, unk, pend = run_spend(conn, run_id)
+    parts = ([f"{unk} unknown-cost request{'s' if unk != 1 else ''}"] if unk else []) + \
+        ([f"{pend} in flight"] if pend else [])
+    return f"spent ≈ ${spent:.4f}" + (f" ({', '.join(parts)})" if parts else "")
 
 
 def run_plan_usd(conn: sqlite3.Connection, run_ids: list[str]) -> float:
@@ -839,11 +856,10 @@ class Orchestrator:
                         continue
                     raise exc
                 with self.lock:
-                    spent, unk = run_spent(self.conn, self.run_id)
+                    note = spent_note(self.conn, self.run_id)
                 assert counts is not None
                 self.log(f"[{i + 1}/{total}] {len(b.rows)} units: ok {counts['ok']}, review "
-                         f"{counts.get('needs_review', 0)}, failed {counts['failed']} | spent ≈ ${spent:.4f}"
-                         + (f" ({unk} unknown-cost requests)" if unk else ""))
+                         f"{counts.get('needs_review', 0)}, failed {counts['failed']} | {note}")
         except BudgetExceededError:
             # let in-flight batches finish so their results are committed
             self._drain(done_q, active)
