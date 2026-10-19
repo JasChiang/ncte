@@ -165,3 +165,13 @@ def test_the_judging_steps_are_told_what_the_read_pass_said_about_omitted_subjec
         text = load_prompt(task).render(payload)
         line = next(x for x in text.split("\n") if "`actions`" in x)
         assert "讀的時候" in line and "`unknown`" in line and "`inferred`" in line and "核對" in line, task
+
+
+def test_the_rule_check_explains_the_translators_own_flags():
+    """B3 (ADR-067): the confirm prompt says what each translator flag is and asks whether the translation holds."""
+    from ncte.translation.orchestrator import CONFIRM_MODEL_FLAGS
+
+    text = load_prompt("confirm").render({"items": []})
+    assert "譯者自己" in text and "前後文" in text
+    for rule in CONFIRM_MODEL_FLAGS:
+        assert f"- `{rule}`" in text, rule

@@ -35,7 +35,7 @@ from ..memory.retrieval import memory_context
 from ..qa.rules import CONFIRM_RULES, CONFIRMED
 from .cache import settle_translation
 from .context_builder import BODY_KINDS
-from .orchestrator import Batch, Orchestrator, make_batches, scene_batches
+from .orchestrator import CONFIRM_MODEL_FLAGS, Batch, Orchestrator, make_batches, scene_batches
 from .translator import call_structured
 
 VERIFY_BATCH = 25  # items per second-look request
@@ -1034,7 +1034,8 @@ class ContextOrchestrator(Orchestrator):
     def confirm_flags(self, unit_ids: list[str]) -> dict[str, int]:
         """What simple rules found (a slur, 「我」 in third-person narration…) is checked once more by the model with
         the source and the lines around it; only the real problems go on to review (「阿三」 a maid's name, 「棒子」 a
-        stick, 「你一言我一語」 an idiom are left alone). One small request per scene with flags."""
+        stick, 「你一言我一語」 an idiom are left alone). The translator's own doubts (a subject left out, an uncertain
+        speaker or term: ``CONFIRM_MODEL_FLAGS``) are asked about the same way. One small request per scene with flags."""
         from ..analysis import reader
         from ..llm.schemas import ConfirmOutput
         from .review import _speakers, _surroundings
@@ -1042,11 +1043,12 @@ class ContextOrchestrator(Orchestrator):
         if not unit_ids:
             return {}
         ph = ",".join("?" * len(unit_ids))
+        rules = (*CONFIRM_RULES, *CONFIRM_MODEL_FLAGS)  # the program's word rules and the translator's own doubts
         with self.lock:
             found = self.conn.execute(
                 f"SELECT f.unit_id, f.type, f.evidence FROM qa_findings f WHERE f.run_id=? AND f.status='open' AND "
-                f"f.severity IN ('high','error') AND f.type IN ({','.join('?' * len(CONFIRM_RULES))}) AND f.unit_id IN ({ph})",
-                (self.run_id, *CONFIRM_RULES, *unit_ids)).fetchall()
+                f"f.severity IN ('high','error') AND f.type IN ({','.join('?' * len(rules))}) AND f.unit_id IN ({ph})",
+                (self.run_id, *rules, *unit_ids)).fetchall()
             if not found:
                 return {}
             items = []

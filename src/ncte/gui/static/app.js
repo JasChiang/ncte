@@ -182,6 +182,12 @@ const ISSUE = {meaning: "意思譯錯", tone: "語氣不對", speaker: "說話�
   name_inconsistency: "譯名前後不一致", subject_object_error: "主詞或受詞弄錯", spoiler: "提前劇透", placeholder: "排版標記",
   style: "用語或文風", other: "其他", unclear: "讀不懂", wordplay: "文字遊戲（可能要譯註）", translationese: "翻譯腔", voice: "口吻不像這個角色",
   contradiction: "前後矛盾", ambiguity: "兩種讀法"};
+// what the translator can mark on its own text (the translate prompt's `flags`), in Chinese
+const TFLAG = {ruby_meaning_kept: "讀音另有含義，譯文保留了兩層意思", wordplay: "文字遊戲", subject_omitted_kept: "保留了原文省略的主詞",
+  speaker_uncertain: "不確定說話者", term_uncertain: "名稱沒有定譯，譯者自取", possible_source_error: "原文可能有誤"};
+FINDING["model_flag:subject_omitted_kept"] = "譯者保留了省略的主詞（待確認讀者不會讀錯）";
+FINDING["model_flag:speaker_uncertain"] = "譯者不確定說話者"; FINDING["model_flag:term_uncertain"] = "譯者自取的譯名";
+FINDING["model_flag:possible_source_error"] = "譯者認為原文可能有誤";
 function findingLabel(t) {
   if (FINDING[t]) return FINDING[t];
   if (t.startsWith("after_review:")) return "審稿後仍有：" + findingLabel(t.slice(13));
@@ -335,6 +341,7 @@ function rowHtml(u) {
       ${u.note ? `<div class="note">（註：${esc(u.note)}） <button class="btn small" data-act="drop-note">刪除譯註</button></div>` : ""}
       ${u.wordplay.map(w => `<div class="note">梗「${esc(w.term)}」：${esc(w.explanation)}</div>`).join("")}
       ${u.findings.map(findingLine).join("")}
+      ${(u.translator_flags || []).length ? `<div class="note" title="譯者自己在這段標的記號">譯者標記：${u.translator_flags.map(f => esc(TFLAG[f] || f)).join("、")}</div>` : ""}
       ${(u.readings || []).map(r => `<div class="note" title="對照校稿認為原文容得下兩種讀法，不算錯，沒有重譯">兩種讀法：${esc(r)}</div>`).join("")}</div>
     <div>${u.quotes.map(q => { const [c, l] = STATUS[q.status] || ["c-unk", q.status];
       return `<div>${esc(q.speaker || "？")} ${chip(c, l)}${q.disputed ? chip("c-warn", "有爭議") : ""}${q.second ? `<div class="muted small" title="讀完後再確認一次的結果">再確認：${esc(q.second)}</div>` : ""}</div>`; }).join("") || `<span class="muted small">敘述</span>`}</div></div>`;

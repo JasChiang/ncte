@@ -40,6 +40,11 @@ from .translator import Translator, UnitInput
 
 MAX_UNITS_PER_BATCH = 60
 MAX_JOB_ATTEMPTS = 3
+# the translator's own doubts (its `flags`), checked like a word rule's find: with the source and the lines around it,
+# in the scene's rule check (``confirm_flags``); only what that check finds real goes on to review (ADR-067). Named
+# ``model_flag:…`` so they never mix with the program's word rules (``qa.rules.CONFIRM_RULES``).
+MODEL_FLAGS_TO_CONFIRM = ("subject_omitted_kept", "speaker_uncertain", "term_uncertain")
+CONFIRM_MODEL_FLAGS = tuple(f"model_flag:{f}" for f in MODEL_FLAGS_TO_CONFIRM)
 
 
 @dataclass
@@ -593,7 +598,11 @@ class Orchestrator:
                     if f.severity != "info":
                         self._finding(uid, f.type, f.severity, f.evidence, translation_id=tid)
                 for flag in ur.flags:
-                    if flag in ("speaker_uncertain", "term_uncertain", "possible_source_error"):
+                    if flag in MODEL_FLAGS_TO_CONFIRM:  # high: the rule check picks it up, and review if it is real
+                        self._finding(uid, f"model_flag:{flag}", "high",
+                                      f"譯者標記 {flag}" + (f"：{'; '.join(ur.notes)}" if ur.notes else ""),
+                                      translation_id=tid)
+                    elif flag == "possible_source_error":  # reaches review through the translation's flags
                         self._finding(uid, f"model_flag:{flag}", "low", "; ".join(ur.notes)[:300], translation_id=tid)
                 self.conn.execute(
                     "UPDATE jobs SET status=?, error=NULL, updated_at=? WHERE run_id=? AND stage='translate' AND target_id=?",
