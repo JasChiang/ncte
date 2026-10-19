@@ -63,3 +63,32 @@ def test_every_task_has_a_prompt_and_every_prompt_a_task():
     assert {d.name for d in root.iterdir() if d.is_dir()} == set(TASKS)
     for t in TASKS:
         assert "<!--" not in load_prompt(t).render()
+
+
+def _bullet(text: str, key: str) -> str:
+    """The bullet that defines `key` (``- `key`：…``) up to the next bullet or heading."""
+    at = text.index(f"- `{key}`")
+    rest = text[at + 3:]
+    ends = [i for i in (rest.find("\n- "), rest.find("\n\n")) if i >= 0]
+    return text[at:at + 3 + min(ends)] if ends else text[at:]
+
+
+def test_an_omitted_subject_is_one_rule_on_three_sides():
+    """A2 (ADR-067): supplying an omitted subject the context has settled is written for the translator (do it),
+    the proofreader (missing or wrong subject is a meaning error; a settled subject is not an addition) and the fix
+    check (a settled subject is not new information)."""
+    static, _ = load_prompt("translate").render_parts({"units": []})
+    rule = _rules(static)["3"]
+    assert "接到別人身上" in rule and "已經確定" in rule and "subject_omitted_kept" in rule
+    pr = load_prompt("proofread").render({"paragraphs": []})
+    assert "主詞" in _bullet(pr, "meaning") and "另一個人" in _bullet(pr, "meaning")
+    assert "已經確定的主詞不算" in _bullet(pr, "addition") and "刻意不說" in _bullet(pr, "addition")
+    fc = load_prompt("fix_check").render({"items": []})
+    assert "已經確定是誰的主詞" in _bullet(fc, "new_error")
+
+
+def test_a_fix_with_the_wrong_tone_is_a_new_error():
+    """A3 (ADR-067): a fix whose connotation or tone does not fit the original or the character's mood is a new
+    error, as order of judgement 3 says."""
+    fc = load_prompt("fix_check").render({"items": []})
+    assert "褒貶" in _bullet(fc, "new_error") and "心情" in _bullet(fc, "new_error")
