@@ -418,3 +418,17 @@
   - `sure: false` 的換場點：故事頁與 `ncte scenes` 標「模型標需複核」與理由；不自動重切。
   - 體例的 `honorifics_reason` 存進系列體例（不送進翻譯請求），`ncte style` 與網頁譯名頁的小卡顯示；人改了敬稱方式就清掉模型的理由。
 - 限制：效果都沒有線上量過（不跑額度）。譯者旗標轉成 high 之後，旗標多的書規則確認與審稿的請求會變多，而且在確認或審稿之前這些段落算「有未處理的嚴重發現」；簡單模式（非 context）沒有規則確認，旗標直接進審稿。回答疑問的品質、`actions` 對校稿召回的影響，要整本實測才知道。
+
+
+## ADR-068（2026-10-19）：本機模型當來源（`local`）；步驟模型依前綴分流
+- 背景：使用者想評估長期改用本機模型。在 M4 Pro（64 GB）上實測四個模型（Qwen3.6-35B-A3B 4-bit、Gemma 4 26B-A4B QAT 4-bit、OpenSakura（Qwen3.6-35B-A3B 的輕小說 SFT）、Murasaki-4B），用翻譯階段的真實提示詞各跑兩段 50 段：速度 decode 39–73 tok/s、prefill 約 500–625 tok/s（整本約 5–8 小時，關思考）；沒有簡體漂移；意思準確但每 16 句有 1–2 個視角／說話者錯（Gemini 0）；妳／你在沒有讀取資料時是隨機的（Sonnet 修稿五次也一樣）。格式上：LM Studio 忽略 `chat_template_kwargs`，思考關不掉時一批 50 段想 8,000 token 都答不完；Qwen 4-bit 會把 JSON 字串收尾的 `"` 寫成 `」`（50 段壞 34–37 段），加一句回答規則後歸零；Gemma 的 JSON 結構會滑掉（每項多一個 `]`、key 寫錯），需要 grammar。
+- 決定：
+  - 新增來源 `local`（`NCTE_LLM_PROVIDER=local`、網頁「本機模型」）：任何 OpenAI 相容的本機伺服器（LM Studio、llama-server、mlx_lm.server），位址 `local_base_url`（預設 LM Studio 的 1234），模型 id `local/<伺服器的 id>`，`local/default` 是伺服器已載入的那個。價格 0、沒有 /generation、timeout 1800 秒、不需金鑰。
+  - 思考由模板控制：找得到模型的 `chat_template.jinja`（LM Studio 的模型資料夾；GGUF 從檔頭讀）就自己套模板、送 `/completions`，`enable_thinking` 只在步驟設了推理程度時為真（`stage_reasoning`），`response_format` 的 grammar 照用；找不到模板就退回 `/chat/completions` 並記一條提醒。預設不設推理程度。
+  - 回答方式與其他來源相同（每步的說明裡的 `COMPACT_JSON`）；本機只多附一句 JSON 語法提醒：字串值的界定符號是 `"` 不是 `」`。這是輸出格式的通則，不是針對某本書的規則。真流程發現寫成「字串以 ASCII 雙引號開頭與結尾」會被當成內容規則（10 段譯文以 `"` 開頭），所以改成只說界定符號。
+  - `json_object` 模式本機伺服器不收：不送 `response_format`，記為 `prompt_only`，照舊由 Pydantic 驗證。
+  - 步驟模型依前綴分流：`claude/…` 與 `local/…` 各自有來源，`stage_models`、`review_model`、`fallback_models` 可以指到另一個來源（讀取在本機、翻譯在 Claude 方案，或反過來）；執行的來源仍是主來源（紀錄與各來源專屬的路徑看的是它）。`claude` 來源不再丟掉 `local/…` 的步驟模型。
+- 不做：兩段式（OpenSakura 初稿 → 另一個模型改寫）。實測改寫模型會錨定在草稿上：Gemma 50 行只改 12 行、該改的一個不改；Sonnet 肯改（42–47 行）但妳／你仍隨機，且用量與自己翻相同。要用 OpenSakura 的準確度，位置是第二意見（兩個譯本意思不一致的段落送 fix_check），不是初稿。
+- 結果（2026-10-20，真流程序章＋第一章 1,026 段，Qwen3.6-35B-A3B 4-bit 全本機）：3 小時 29 分、389 個請求、零失敗收尾，但對照正式版你／妳相反 35 句（Gemini 同一章 1 句）；有讀取資料也幾乎不寫「妳」。所以本機模型不當主力：預設來源不變，`local` 留作實驗與混合跑（讀取、校稿在 Claude 方案，翻譯在本機）。
+- 未定：哪個本機模型能扛翻譯階段。候選是 dense 模型（Gemma 4 31B、Qwen3.8-27B）只做翻譯、或補 grammar 後端給 Gemma；回答規則那句已改寫，效果要下一次本機跑才知道。
+

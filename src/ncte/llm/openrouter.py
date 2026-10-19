@@ -208,6 +208,11 @@ class OpenRouterClient:
             msgs[0]["content"] = parts
         return msgs
 
+    @staticmethod
+    def _path(payload: dict[str, Any]) -> str:
+        """A rendered prompt goes to /completions (a local server), messages to /chat/completions."""
+        return "/completions" if "prompt" in payload else "/chat/completions"
+
     def complete(self, req: LLMRequest) -> LLMResponse:
         payload = self.build_payload(req)
         headers = self._auth()
@@ -217,7 +222,7 @@ class OpenRouterClient:
         for attempt in range(1, self.max_attempts + 1):
             t0 = time.monotonic()
             try:
-                resp = self._http.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
+                resp = self._http.post(f"{self.base_url}{self._path(payload)}", json=payload, headers=headers)
             except httpx.TimeoutException as exc:
                 possibly_billed = True  # the provider may have completed (and billed) the request
                 maybe_billed_attempts += 1

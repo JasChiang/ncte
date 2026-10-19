@@ -119,7 +119,7 @@ flowchart LR
 > 開發狀態與測試紀錄：[`docs/changelog.md`](docs/changelog.md)　決策：[`docs/decisions.md`](docs/decisions.md)　架構：[`docs/architecture.md`](docs/architecture.md)
 
 ## 隱私與權利（請先讀）
-- 翻譯時（包括從網頁介面開始的翻譯），**所需的原文段落與上下文會送到模型供應商**：Claude 方案經 Claude Code 送到 Anthropic，適用你的 Claude 帳號的資料設定；OpenRouter 則由 OpenRouter 路由給第三方模型供應商（例如 Google），各供應商的資料保留／訓練政策不同，請在 OpenRouter 帳號的 Privacy 設定中確認。目前沒有純本機模型模式。
+- 翻譯時（包括從網頁介面開始的翻譯），**所需的原文段落與上下文會送到模型供應商**：Claude 方案經 Claude Code 送到 Anthropic，適用你的 Claude 帳號的資料設定；OpenRouter 則由 OpenRouter 路由給第三方模型供應商（例如 Google），各供應商的資料保留／訓練政策不同，請在 OpenRouter 帳號的 Privacy 設定中確認。「本機模型」來源（實驗）則完全在這台電腦上跑，原文不會送出去；品質與速度看你的電腦與模型，目前還比不上 Claude 方案或 Gemini。
 - 只處理你有權使用的無 DRM EPUB。翻譯輸出不代表你取得再散布或公開分享的權利。
 - 原始 EPUB、資料庫、匯出檔都在 `./workspace/`（已列入 `.gitignore`）。API Key 不會寫入 log、報告或錯誤訊息。
 
@@ -144,6 +144,14 @@ NCTE 會自動尋找 PATH 上的 `epubcheck`、`EPUBCHECK_JAR` 環境變數或 `
 
 ### Claude 方案（預設）
 安裝 [Claude Code](https://docs.claude.com/en/docs/claude-code)，在終端機執行一次 `claude` 登入你的 Claude 帳號即可，不需要金鑰。
+
+### 本機模型（實驗）
+```bash
+export NCTE_LLM_PROVIDER=local             # 或網頁「設定 → 連線方式 → 本機模型」
+lms server start                            # LM Studio：先下載並載入一個模型；或用 llama-server / mlx_lm.server
+ncte models                                 # 列出伺服器上的模型；預設用已載入的那個（local/default）
+```
+原文不離開這台電腦、不收費；但一本書要好幾個小時，而且目前測過的本機模型在人稱、說話者判斷上都還比不上 Claude 方案或 Gemini（見 `docs/decisions.md` ADR-068）。伺服器位址可在設定檔的 `openrouter.local_base_url` 改；要讓部分步驟用 Claude 方案，`stage_models` 可以指到 `claude/sonnet`。
 
 ### OpenRouter 金鑰（不用 Claude 方案時）
 ```bash

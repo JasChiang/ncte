@@ -6,7 +6,11 @@ app:
   mode: "baseline"          # baseline | context
   lookahead_scope: "current_scene"
 openrouter:
-  provider: "openrouter"  # openrouter | fal | claude; fal uses FAL_KEY; claude = your Claude plan via `claude -p` (no key; model claude/opus, reading on claude/sonnet); agent = set only by `ncte agent` for its own runs (not accepted from NCTE_LLM_PROVIDER)
+  provider: "openrouter"  # openrouter | fal | claude | local; fal uses FAL_KEY; claude = your Claude plan via `claude -p` (no key; model claude/opus, reading on claude/sonnet); agent = set only by `ncte agent` for its own runs (not accepted from NCTE_LLM_PROVIDER)
+  # local = a model server on this computer (LM Studio, llama-server, mlx_lm.server); model local/default = the loaded one
+  # local_base_url: "http://localhost:1234"
+  # local_models_dir: "~/.lmstudio/models"      # where chat_template.jinja / GGUF files are (switches thinking off)
+  # local_chat_templates: {"some-model-id": "/path/chat_template.jinja"}  # when discovery finds none
   base_url: "https://openrouter.ai/api/v1"
   model: "google/gemini-3.8-flash"   # verified against GET /models before every run
   review_model: null        # null = same as model

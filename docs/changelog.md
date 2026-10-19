@@ -926,3 +926,16 @@ open workspace/eval/<timestamp>/report.html
   - B8 本節與 ADR-067。
 - 沒做：效果沒有線上量（不跑額度）；簡單模式沒有規則確認，譯者旗標直接進審稿；審稿沒有加 `ambiguity` 類別（只寫「兩可不算錯，不要回報」）；修正重譯產生的新譯文帶的旗標不另記發現（和以前一樣）。
 - 重現：`cd ../ncte-fixes && source .venv/bin/activate && pytest && ruff check src tests && mypy src`，549 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。新測試：`tests/unit/test_prompt_render.py`（A1–A8、B1、B3–B5 的提示詞文字）、`tests/unit/test_fix_claims.py`（A9）、`tests/integration/test_fix_check.py`（A5）、`tests/integration/test_proofread.py`（B1、B2）、`tests/integration/test_translator_flags.py`（B3、B4）、`tests/integration/test_verify.py`（B5）、`tests/integration/test_unsure_breaks.py`（B6）、`tests/integration/test_style_reason.py`（B7）。
+
+## 本機模型當來源（2026-10-19，ADR-068）
+
+- 新來源 `local`：`src/ncte/llm/local.py`（OpenAI 相容本機伺服器；模板探索與 GGUF 檔頭讀取；自己套模板送 `/completions` 以關閉思考；本機回答規則；價格 0）、`src/ncte/llm/routing.py`（依 `claude/`、`local/` 前綴分流步驟模型）。`config.py`：`provider=local`、`local_base_url`、`local_models_dir`、`local_chat_templates`、`use_local_models()`；`claude` 來源保留 `local/…` 步驟模型。`cli.py`：`make_client` 拆成主來源與分流；`openrouter.py`：有 `prompt` 的 payload 走 `/completions`。網頁：設定頁多「本機模型」卡（伺服器是否回應、列出模型）與連線方式選項；估價顯示「不收費」。相依新增 jinja2。
+- 測試：`tests/unit/test_local.py`（清單與 `local/default`、模板渲染與思考開關、grammar 與 json_object、無模板退回 chat、連不到伺服器的錯誤、資料夾／GGUF 模板、設定與分流）。`pytest`：469 passed；ruff、mypy 乾淨。
+- 實測（M4 Pro 64 GB，LM Studio，翻譯階段提示詞、第二章兩段各 50 段，不含讀取資料）：Qwen3.6-35B-A3B 4-bit prefill 約 625 tok/s、decode 70–73；Gemma 4 26B-A4B QAT 4-bit（mlx_lm.server）約 500／39；OpenSakura Q4_K_M 約 500／56–59；Murasaki-4B Q8_0 約 570／47。兩窗都沒有簡體漂移。Qwen 要靠回答規則那句才能出合法 JSON（之前 50 段壞 34–37 段）；Gemma 嚴格解析每次失敗（結構滑掉）；意思層 OpenSakura 82 句零誤譯但只會簡體、永遠沒有「妳」，Qwen／Gemma 每 16 句 1–2 個視角或說話者錯，Murasaki 漏譯與加料。妳／你沒有讀取資料時各模型都不穩（Sonnet 改寫五次：妳 2–7 處）。Strata（Qwen3.8-Flash-Next 2-bit）與兩段式改寫評估後不採用（見 ADR-068）。
+- 煙霧測試（本機來源、Qwen3.6-35B-A3B 4-bit、新工作區、`--mode context --limit-units 40`）：整個流程跑通，5 分 17 秒、22 個請求、每步一次成功（切場景、讀場景、記憶、覆核、關係、印象、體例、定名、翻譯、校稿、修正驗收、讀者檢查），沒有請求失敗或解析失敗；40 段翻 39 段（1 段翻譯失敗留原文）；校稿抓到 6 處、讀者檢查 2 處都已重譯驗收；出現 ruby 注音外洩（`《えい》`）兩處，校稿修掉。LM Studio 走 `/api/v0` 時把每個請求的 tokens/s 記進 usage。
+- 真流程（本機來源、Qwen3.6-35B-A3B 4-bit、思考關、新工作區、`--mode context --limit-units 1026`，序章＋第一章，與先前模型比較同一章）：3 小時 29 分跑完（讀取 75 分、翻譯約 40 分、校稿與讀者檢查約 75 分），389 個請求、輸入 342 萬 token、輸出 25 萬，全程不收費、Claude 方案用量沒動。9 個請求輸出被截斷（記憶 1、關係 2、校稿 3、修正驗收 3）都自動重試過關；關係判定單次平均 5 分多鐘（輸出長、解碼 70 tok/s 是硬上限）。翻 1,022 段，4 段留原文（注音殘留 2、簡體 1、代號遺失 1），10 段待人工；校稿抓 208 處修 120、讀者檢查 45 處修 34。
+  - 對照正式中文版（序章＋第一章 1,003 段對齊，同一套算法）：你／妳與正式版相反的句子本機 35、Gemini 1；本機幾乎不寫「妳」（主角對女主角整段對話全用「你」），有讀取資料也一樣。另有 10 段譯文以 ASCII 雙引號開頭（本機回答規則那句「字串以 ASCII 雙引號開頭與結尾」被當成內容規則，已改寫成只說界定符號）、4 段注音外洩。意思層抽看：大致正確，口語偏輕浮（「爽翻了」）、偶有主詞錯（§438 把「雷德」改成「你」）。
+  - 結論：Qwen3.6-35B-A3B 4-bit 能跑完整流程、格式問題可解，但你／妳判斷不能當主力；要用本機，位置是混合跑（讀取與檢查在 Claude 方案、翻譯在本機）或等更強的本機模型。
+- 限制：LM Studio 沒把 Gemma 4 的資料夾列進清單（它自己失敗的下載留了殘檔），Gemma 目前只能走 mlx_lm.server，而 mlx_lm 沒有 grammar。測試腳本與原始輸出在這次 session 的 scratchpad（bench_local.py、bench_native.py、bench_pipeline.py、bench_sonnet.py、compare.py、r_*.json），不進 repo。
+- 重現：`lms server start` 並載入模型後 `NCTE_LLM_PROVIDER=local ncte models`；`NCTE_LLM_PROVIDER=local ncte translate 書.epub --mode context --limit-units 40`。
+

@@ -87,12 +87,30 @@ def make_client(cfg: Config, *, fake: bool = False, need_key: bool = True,
         return FakeLLM(models=models)
     if cfg.openrouter.provider == "agent":
         raise NCTEError("this run is answered by an agent through tasks: continue it with `ncte agent resume -w …`")
-    if cfg.openrouter.provider == "claude":
-        from .llm.claude_cli import ClaudeCLIClient
+    return _with_routes(cfg, _primary_client(cfg, need_key=need_key, log=log), log=log)
 
-        o = cfg.openrouter
-        return ClaudeCLIClient(models=[o.model, *o.stage_models.values(), *([o.review_model] if o.review_model else [])],
-                               log=log)
+
+def _claude_client(cfg: Config, log: Callable[[str], None] | None = None) -> Any:
+    from .llm.claude_cli import ClaudeCLIClient
+
+    o = cfg.openrouter
+    return ClaudeCLIClient(models=[o.model, *o.stage_models.values(), *([o.review_model] if o.review_model else [])],
+                           log=log)
+
+
+def _local_client(cfg: Config) -> Any:
+    from .llm.local import LocalClient
+
+    o = cfg.openrouter
+    return LocalClient(o.local_base_url, models_dir=o.local_models_dir, templates=o.local_chat_templates,
+                       timeout=max(o.timeout_seconds, 1800), max_attempts=o.max_attempts)
+
+
+def _primary_client(cfg: Config, *, need_key: bool, log: Callable[[str], None] | None = None) -> Any:
+    if cfg.openrouter.provider == "claude":
+        return _claude_client(cfg, log)
+    if cfg.openrouter.provider == "local":
+        return _local_client(cfg)
     from .llm.openrouter import OpenRouterClient
 
     key = get_api_key(cfg.openrouter.provider)
@@ -106,6 +124,21 @@ def make_client(cfg: Config, *, fake: bool = False, need_key: bool = True,
         return FalOpenRouterClient(key, timeout=o.timeout_seconds, max_attempts=o.max_attempts, app_title=o.app_title)
     return OpenRouterClient(key, base_url=o.base_url, timeout=o.timeout_seconds, max_attempts=o.max_attempts,
                             app_title=o.app_title)
+
+
+def _with_routes(cfg: Config, primary: Any, log: Callable[[str], None] | None = None) -> Any:
+    """A step model on another source (``claude/…`` on a local run, ``local/…`` on a Claude run) gets its own client;
+    the run's source stays the primary."""
+    from .llm.routing import RoutingClient
+
+    o = cfg.openrouter
+    wanted = {m for m in (*o.stage_models.values(), o.review_model, *o.fallback_models) if m}
+    routes: dict[str, Any] = {}
+    if any(m.startswith("claude/") for m in wanted) and primary.name != "claude":
+        routes["claude/"] = _claude_client(cfg, log)
+    if any(m.startswith("local/") for m in wanted) and primary.name != "local":
+        routes["local/"] = _local_client(cfg)
+    return RoutingClient(primary, routes) if routes else primary
 
 
 def _book(ref: str, *, auto_import: bool = False) -> Book:
@@ -312,7 +345,7 @@ def _run(book: Book, opts: Any, *, fake: bool, as_json: bool = False, run_id: st
     if fake:
         typer.echo("⚠ using FakeLLM: output is placeholder text, not a translation")
     rid = run_id or create_run(state.conn, cfg, book, opts)
-    via = "" if fake else f"  via={ {'fal': 'fal', 'claude': 'Claude Code (plan, not billed)'}.get(client.name, 'OpenRouter')}"  # NCTE_LLM_PROVIDER in .env applies here
+    via = "" if fake else f"  via={ {'fal': 'fal', 'claude': 'Claude Code (plan, not billed)', 'local': 'local server (not billed)'}.get(client.name, 'OpenRouter')}"  # NCTE_LLM_PROVIDER in .env applies here
     typer.echo(f"run {rid}  book {book.id}  mode={opts.mode}  model={opts.model}{via}  budget=${opts.budget_usd}")
     orch = _orchestrator(cfg, client, book, rid, opts)
     summary = orch.run()

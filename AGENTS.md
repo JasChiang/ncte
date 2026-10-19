@@ -23,7 +23,7 @@ EPUBCheck 測試會在找到 `epubcheck`（PATH）、`EPUBCHECK_JAR` 或 `worksp
 
 ## 模組地圖
 - `epub/` 安全解析、單元抽取、重建、驗證、書籍資訊判斷（matter）
-- `llm/` 介面、OpenRouter／fal adapter、Claude 方案（`claude_cli`：每個請求一次 `claude -p`）、FakeLLM、schema、prompt 載入、費用
+- `llm/` 介面、OpenRouter／fal adapter、Claude 方案（`claude_cli`：每個請求一次 `claude -p`）、本機伺服器（`local`：自己套模板關思考、grammar；`routing`：步驟模型依 `claude/`、`local/` 前綴分流）、FakeLLM、schema、prompt 載入、費用
 - `agent/` agent 逐題回答：任務佇列、背景引擎、MCP 伺服器（`ncte agent …`、`ncte mcp`；skill 在 `skills/ncte-translate`）
 - `translation/` orchestrator（jobs/預算/續譯；context 模式先讀再翻：讀 → 定名 → 翻）、translator（對齊/QA/切批）、context builder、dry-run
 - `analysis/` 場景切分、對話偵測、說話者歸屬、記憶更新驗證、定名提案（naming）

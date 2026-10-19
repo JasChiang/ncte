@@ -36,7 +36,8 @@ class OpenRouterConfig(_Strict):
     # "claude": the user's Claude plan through Claude Code (`claude -p`), no key, nothing billed (ADR-062)
     # "agent": an agent in a conversation answers each request as a task (`ncte agent`, the MCP server)
     # "agent" (a run answered task by task) is set by `ncte agent` itself, never chosen by NCTE_LLM_PROVIDER
-    provider: Literal["openrouter", "fal", "claude", "agent"] = "claude"
+    # "local": a model served on this computer (LM Studio, llama-server, mlx_lm.server), nothing leaves the machine
+    provider: Literal["openrouter", "fal", "claude", "agent", "local"] = "claude"
     base_url: str = "https://openrouter.ai/api/v1"
     model: str = DEFAULT_MODEL
     review_model: str | None = None
@@ -60,6 +61,11 @@ class OpenRouterConfig(_Strict):
     stage_models: dict[str, str] = Field(default_factory=dict)
     max_output_tokens: int | None = None
     app_title: str = "NCTE"
+    # the local source: the server's OpenAI-compatible address, where model folders are (their chat templates switch
+    # thinking off), and a template file per server model id when discovery finds none
+    local_base_url: str = "http://localhost:1234"
+    local_models_dir: str | None = None
+    local_chat_templates: dict[str, str] = Field(default_factory=dict)
 
 
 class TranslationConfig(_Strict):
@@ -179,12 +185,14 @@ def load_config(path: str | Path | None = None, *, workspace: str | None = None)
         cfg.app.workspace = env_ws
     provider = os.environ.get("NCTE_LLM_PROVIDER") or _read_dotenv(Path(".env")).get("NCTE_LLM_PROVIDER")
     if provider:
-        if provider not in ("openrouter", "fal", "claude"):
-            raise ConfigError("NCTE_LLM_PROVIDER must be openrouter, fal or claude "
+        if provider not in ("openrouter", "fal", "claude", "local"):
+            raise ConfigError("NCTE_LLM_PROVIDER must be openrouter, fal, claude or local "
                               "(agent is set by `ncte agent` itself for the runs it starts)")
         cfg.openrouter.provider = provider  # type: ignore[assignment]
     if cfg.openrouter.provider == "claude":
         use_claude_models(cfg)
+    elif cfg.openrouter.provider == "local":
+        use_local_models(cfg)
     return cfg
 
 
@@ -198,19 +206,42 @@ CLAUDE_READ_MODEL = "claude/sonnet"
 CLAUDE_READ_STAGES = ("scene_windows", "scene_analyze", "memory_update", "impressions", "house_style")
 
 
+# A model id with one of these prefixes names its own source, whatever the run's source is: a step may run on the
+# Claude plan while the rest runs locally, or the other way round (the client routes by prefix)
+ROUTED_PREFIXES = ("claude/", "local/")
+LOCAL_MODEL = "local/default"  # the model the local server has loaded (else the first it lists)
+
+
+def _routed(model: str | None) -> bool:
+    return bool(model) and str(model).startswith(ROUTED_PREFIXES)
+
+
 def use_claude_models(cfg: Config) -> None:
-    """Models for the Claude provider: a configured ``claude/…`` model is kept; an API model id (the OpenRouter
-    defaults, a review or fallback model) has no meaning here and is replaced or dropped."""
+    """Models for the Claude provider: a configured ``claude/…`` (or ``local/…``) model is kept; an API model id (the
+    OpenRouter defaults, a review or fallback model) has no meaning here and is replaced or dropped."""
     o = cfg.openrouter
     if not o.model.startswith("claude/"):
         o.model = CLAUDE_MODEL
-        if not any(m.startswith("claude/") for m in o.stage_models.values()):
+        if not any(_routed(m) for m in o.stage_models.values()):
             o.stage_models = dict.fromkeys(CLAUDE_READ_STAGES, CLAUDE_READ_MODEL)
-    o.stage_models = {k: v for k, v in o.stage_models.items() if v.startswith("claude/")}
-    o.review_model = o.review_model if o.review_model and o.review_model.startswith("claude/") else None
-    o.fallback_models = [m for m in o.fallback_models if m.startswith("claude/")]
+    o.stage_models = {k: v for k, v in o.stage_models.items() if _routed(v)}
+    o.review_model = o.review_model if _routed(o.review_model) else None
+    o.fallback_models = [m for m in o.fallback_models if _routed(m)]
     o.temperature = None  # Claude Code takes no temperature
     o.reasoning_effort = o.reasoning_effort or "medium"  # as NCTE runs by default (ncte.yaml), wherever it is run
+
+
+def use_local_models(cfg: Config) -> None:
+    """Models for the local provider: a ``local/…`` (or ``claude/…``) model is kept, an API model id is replaced by the
+    model the server has loaded. No reasoning level by default: locally a thinking model spends its whole budget
+    thinking (measured 2026-10-19), so thinking is on only where ``stage_reasoning`` asks for it."""
+    o = cfg.openrouter
+    if not _routed(o.model):
+        o.model = LOCAL_MODEL
+    o.stage_models = {k: v for k, v in o.stage_models.items() if _routed(v)}
+    o.review_model = o.review_model if _routed(o.review_model) else None
+    o.fallback_models = [m for m in o.fallback_models if _routed(m)]
+    o.reasoning_effort = None if o.reasoning_effort in (None, "", "default", "medium") else o.reasoning_effort
 
 
 def _read_dotenv(path: Path) -> dict[str, str]:

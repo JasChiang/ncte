@@ -84,8 +84,24 @@ def key_status(env_path: Path, provider: str = "openrouter") -> dict[str, Any]:
 
         found = shutil.which(os.environ.get("NCTE_CLAUDE_BIN") or "claude")
         return {"provider": provider, "set": bool(found), "hint": None, "file": str(env_path.resolve()), "claude": found}
+    if provider == "local":  # no key: is a model server answering, and which model has it loaded?
+        return {"provider": provider, **local_status(), "hint": None, "file": str(env_path.resolve())}
     key = get_api_key(provider)
     return {"provider": provider, "set": bool(key), "hint": f"…{key[-4:]}" if key else None, "file": str(env_path.resolve())}
+
+
+def local_status(base_url: str | None = None) -> dict[str, Any]:
+    """Whether the local model server answers, and the chat models it lists (the loaded one first)."""
+    from ..config import load_config
+    from ..errors import LLMError
+    from ..llm.local import LocalClient
+
+    url = base_url or load_config().openrouter.local_base_url
+    try:
+        models = [m for m in LocalClient(url, timeout=5).list_models() if m["id"] != "local/default"]
+    except LLMError as exc:
+        return {"set": False, "url": url, "models": [], "error": str(exc)}
+    return {"set": True, "url": url, "models": [{"id": m["id"], "state": m["local"].get("state")} for m in models]}
 
 
 def set_key(env_path: Path, key: str, provider: str = "openrouter") -> dict[str, Any]:
@@ -111,16 +127,18 @@ def _save_env(env_path: Path, name: str, value: str) -> None:
 
 
 def set_provider(env_path: Path, cfg: Any, provider: str) -> dict[str, Any]:
-    from ..config import DEFAULT_MODEL, use_claude_models
+    from ..config import DEFAULT_MODEL, use_claude_models, use_local_models
 
-    if provider not in ("openrouter", "fal", "claude"):
+    if provider not in ("openrouter", "fal", "claude", "local"):
         raise NCTEError("未知的連線方式")
     _save_env(env_path, "NCTE_LLM_PROVIDER", provider)
     was = cfg.openrouter.provider
     cfg.openrouter.provider = provider
     if provider == "claude":
         use_claude_models(cfg)
-    elif was == "claude":  # back to an API: its default model, not a Claude Code alias
+    elif provider == "local":
+        use_local_models(cfg)
+    elif was in ("claude", "local"):  # back to an API: its default model, not another source's alias
         cfg.openrouter.model = DEFAULT_MODEL
         cfg.openrouter.stage_models = {}
         cfg.openrouter.temperature = type(cfg.openrouter)().temperature
