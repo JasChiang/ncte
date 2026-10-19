@@ -35,17 +35,15 @@ class Prompt:
     def render(self, payload: dict[str, Any] | None = None) -> str:
         """The prompt for one request: ``<!-- if: a|b|text:⟦ -->…<!-- endif -->`` blocks are kept only when the
         payload has key ``a`` or ``b`` (anywhere) or its text contains ``⟦`` — rules about data the request does not
-        carry are left out, so the model is not asked to keep them in mind. Without a payload every block is kept."""
+        carry are left out, so the model is not asked to keep them in mind. ``<!-- if: !a -->`` is the other case:
+        kept only when the payload does not have key ``a`` (an "otherwise" version of a block). Without a payload
+        every block is kept."""
         if payload is None:
             return _BLOCK.sub(lambda m: m.group(2), self.text)
         blob = json.dumps(payload, ensure_ascii=False)
 
         def keep(m: re.Match[str]) -> str:
-            for cond in m.group(1).split("|"):
-                cond = cond.strip()
-                if cond.startswith("text:") and cond[5:] in blob or f'"{cond}"' in blob:
-                    return m.group(2)
-            return ""
+            return m.group(2) if _applies(m.group(1), blob) else ""
 
         out = _BLOCK.sub(keep, self.text)
         return re.sub(r"\n{3,}", "\n\n", out)
@@ -60,8 +58,7 @@ class Prompt:
         blob = json.dumps(payload, ensure_ascii=False)
         kept = []
         for m in _BLOCK.finditer(self.text):
-            conds = [c.strip() for c in m.group(1).split("|")]
-            if any((c.startswith("text:") and c[5:] in blob) or f'"{c}"' in blob for c in conds):
+            if _applies(m.group(1), blob):
                 body = m.group(2).strip("\n")
                 if not body.startswith("## "):  # a section heading of its own is folded into the one below
                     kept.append(body)
@@ -77,6 +74,18 @@ def prompts_dirs() -> list[Path]:
     dirs.append(here.parent.parent / "prompts")  # installed wheel: ncte/prompts
     dirs.append(here.parents[3] / "prompts")  # source checkout: <repo>/prompts
     return dirs
+
+
+def _applies(conditions: str, blob: str) -> bool:
+    """Whether a block's ``a|b|text:⟦`` (any of them holds) or ``!a`` (key ``a`` absent) applies to the payload."""
+    for cond in conditions.split("|"):
+        cond = cond.strip()
+        if cond.startswith("!"):
+            if f'"{cond[1:]}"' not in blob:
+                return True
+        elif cond.startswith("text:") and cond[5:] in blob or f'"{cond}"' in blob:
+            return True
+    return False
 
 
 _FM = re.compile(r"^---\n(.*?)\n---\n", re.S)

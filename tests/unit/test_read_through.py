@@ -84,3 +84,21 @@ def test_an_agent_answer_with_the_list_is_accepted_when_the_task_asks_for_it(tmp
     plain = q.put(stage="translate", model="agent/model", schema=None, id_codes={},
                   messages=[{"role": "user", "content": json.dumps({"units": []})}])
     assert q.submit(plain, ans)  # not asked for: the answer has a field the step does not take
+
+
+def test_the_output_example_shows_the_object_the_switch_asks_for():
+    """(e) The output example is conditional: with read_through on it shows the object with read_through first,
+    otherwise the plain one; neither leaves a block marker, and the shared (cached) rules are the same either way."""
+    p = load_prompt("translate")
+    base = {"units": [{"unit_id": "u", "source": "こんにちは"}], "glossary": []}
+    on_obj = '{"read_through": ["…"], "translations": [{"unit_id": "…", "translated_text": "…"}]}'
+    off_obj = '{"translations": [{"unit_id": "…", "translated_text": "…"}]}'
+    off, on = p.render(base), p.render({**base, "read_through": True})
+    assert "<!--" not in off and "<!--" not in on
+    assert on_obj in on and off_obj not in on.replace(on_obj, "")
+    assert off_obj in off and on_obj not in off and '"read_through"' not in off
+    s_off, own_off = p.render_parts(base)
+    s_on, own_on = p.render_parts({**base, "read_through": True})
+    assert s_off == s_on and "<!--" not in s_off + own_off + own_on
+    assert '"read_through"' not in s_off and off_obj not in s_off  # the example is not in the cached part
+    assert off_obj in own_off and on_obj in own_on and off_obj not in own_on.replace(on_obj, "")

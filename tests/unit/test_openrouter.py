@@ -219,7 +219,9 @@ def test_shared_rules_cached_and_the_batch_rules_after():
     b_shared, b_own = p.render_parts({"units": [{"source": "⟦1⟧強調⟦/1⟧"}]})
     assert a_shared == b_shared and "narration" not in a_shared and "## 翻譯規則" in a_shared
     assert "`narration`" in a_own and "⟦數字⟧" in b_own and "`narration`" not in b_own
-    assert p.render_parts({"units": []})[1] == ""
+    plain = p.render_parts({"units": []})[1]  # no data rules: only the output object (it depends on read_through)
+    assert plain.splitlines()[1:] == ['- 輸出物件：{"translations": [{"unit_id": "…", "translated_text": "…"}]}']
+    assert load_prompt("verify").render_parts({"units": []})[1] == ""  # a prompt without blocks has no own part
     system = a_shared + "\n" + a_own
     req = LLMRequest(stage="translate", model="google/gemini-3.8-flash", schema_name="t", cached_prefix_chars=len(a_shared),
                      messages=[{"role": "system", "content": system}, {"role": "user", "content": "{}"}])
