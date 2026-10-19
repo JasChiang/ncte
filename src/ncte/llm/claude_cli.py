@@ -5,9 +5,10 @@ kept), the request's JSON is the user message: as close to a plain model call as
 Claude login. Nothing is billed through NCTE: ``cost_usd`` is 0. What the CLI reports as the call's list-price cost
 is kept in ``usage["list_cost_usd"]`` (with the token counts) so a run can say what it used.
 
-A failed call (a usage limit reached, the network) is tried again later: a plan's usage window resets in hours, so
-the waits grow to an hour; the run just waits meanwhile, and says so before each wait (``log``). A call that can never
-work (Claude Code rejects its own command line: exit 2, an unknown option) or no login stops at once.
+A failed call is tried again later and the run says so before each wait (``log``). A usage limit lifts at a set time:
+it is asked again every quarter hour for up to eight hours, however many times that takes. Any other failure (the
+network, an overloaded service) goes down a ladder of growing waits that ends after about four hours. A call that can
+never work (Claude Code rejects its own command line: exit 2, an unknown option) or no login stops at once.
 """
 
 from __future__ import annotations
@@ -26,7 +27,13 @@ PREFIX = "claude/"
 MODELS = ("opus", "sonnet", "haiku")  # Claude Code's aliases; a full model id after the prefix is passed as is
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
 SCHEMA_HEAD = "\n\n## 輸出的 JSON schema\n"  # how to answer is said once, in the shared rules (translator.COMPACT_JSON)
-RETRY_WAITS = (30, 60, 120, 300, 600, 900, 1800, 1800, 1800, 3600, 3600)  # seconds
+RETRY_WAITS = (30, 60, 120, 300, 600, 900, 1800, 1800, 1800, 3600, 3600)  # seconds, for failures of other kinds
+# A usage limit is not a failure that goes away by itself: the window resets at a set time (a whole-book run met one at
+# 15:30 that reset at 19:00, longer than the ladder above). It is asked again every LIMIT_WAIT seconds, as long as it
+# takes up to LIMIT_MAX, without using up the ladder.
+LIMIT_WAIT = 900
+LIMIT_MAX = 8 * 3600
+USAGE_LIMIT = ("usage limit", "session limit", "rate limit", "resets ")
 NOT_LOGGED_IN = ("not logged in", "please run /login", "invalid api key", "authentication")
 BAD_COMMAND = ("unknown option", "unknown argument", "too many arguments")  # the same on every try
 USAGE_ERROR_EXIT = 2  # the CLI's exit code for a command line it rejects
@@ -44,11 +51,12 @@ class ClaudeCLIClient:
 
     def __init__(self, *, models: list[str] | None = None, timeout: float = 1800,
                  waits: tuple[float, ...] = RETRY_WAITS, binary: str | None = None, sleep: Any = time.sleep,
-                 log: Callable[[str], None] | None = None):
+                 log: Callable[[str], None] | None = None, limit_wait: float = LIMIT_WAIT, limit_max: float = LIMIT_MAX):
         self.extra_models = [m for m in models or [] if m and m.startswith(PREFIX)]
         self.log = log  # told before each wait (the run's own log); None: silent
         self.timeout = timeout
         self.waits = waits
+        self.limit_wait, self.limit_max = limit_wait, limit_max
         self.binary = binary or os.environ.get("NCTE_CLAUDE_BIN") or "claude"
         self.sleep = sleep
 
@@ -94,16 +102,36 @@ class ClaudeCLIClient:
         system, user = self.split(req)
         start = time.monotonic()
         last = ""
-        for attempt, wait in enumerate((0.0, *self.waits), start=1):
-            if wait:
-                if self.log:
-                    self.log(f"Claude Code：等待 {wait:.0f} 秒後重試（第 {attempt} 次）：{last[:200]}")
-                self.sleep(wait)
+        ladder = iter(self.waits)
+        limit_waited = 0.0
+        attempt = 0
+
+        def later(limit: bool) -> None:
+            """Wait before the next try: a usage limit every ``limit_wait`` seconds up to ``limit_max``; anything else
+            down the ladder, which ends."""
+            nonlocal limit_waited
+            if limit:
+                limit_waited += self.limit_wait
+                if limit_waited > self.limit_max:
+                    raise RetryableAPIError(f"Claude Code's usage limit did not lift in {self.limit_max / 3600:.0f} h: {last[:300]}")
+                wait = self.limit_wait
+            else:
+                nxt = next(ladder, None)
+                if nxt is None:
+                    raise RetryableAPIError(f"Claude Code kept failing: {last[:300]}")
+                wait = nxt
+            if self.log:
+                self.log(f"Claude Code：等待 {wait:.0f} 秒後重試（第 {attempt + 1} 次）：{last[:200]}")
+            self.sleep(wait)
+
+        while True:
+            attempt += 1
             try:
                 proc = subprocess.run(self.args(req, system), input=user, capture_output=True, text=True,
                                       timeout=self.timeout)
             except subprocess.TimeoutExpired:
                 last = f"no answer within {self.timeout:.0f}s"
+                later(False)
                 continue
             except FileNotFoundError as exc:
                 raise FatalAPIError(f"Claude Code (`{self.binary}`) is not installed or not on PATH") from exc
@@ -121,7 +149,8 @@ class ClaudeCLIClient:
                 raise FatalAPIError(f"Claude Code is not logged in: {message[:200]}")
             if failed:
                 last = message or f"claude exited {proc.returncode}"
-                continue  # a usage limit reached, an overloaded service: later
+                later(any(s in message.lower() for s in USAGE_LIMIT))  # a usage limit, an overloaded service: later
+                continue
             result = str(out.get("result") or "")
             if not result.strip():
                 raise ModelOutputError("empty answer")
@@ -138,4 +167,3 @@ class ClaudeCLIClient:
             return LLMResponse(content=result, model=req.model, provider="claude", generation_id=out.get("session_id"),
                                usage=usage, cost_usd=0.0, latency_ms=int((time.monotonic() - start) * 1000),
                                finish_reason="stop", attempts=attempt, structured_mode=req.structured_mode)
-        raise RetryableAPIError(f"Claude Code kept failing: {last[:300]}")

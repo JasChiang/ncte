@@ -89,14 +89,25 @@ def test_the_system_prompt_is_the_same_on_every_request_of_a_step_so_it_is_cache
 def test_a_usage_limit_is_waited_out_and_a_missing_login_stops_at_once(monkeypatch):
     limit = subprocess.CompletedProcess([], 1, json.dumps({"subtype": "success", "is_error": True,
                                                            "result": "Usage limit reached · resets 9am"}), "")
-    calls = Calls(limit, limit, _ok())
+    # a usage limit lifts at a set time: asked again at a fixed interval, as many times as it takes, the ladder untouched
+    calls = Calls(*([limit] * 20 + [_ok()]))
     monkeypatch.setattr(subprocess, "run", calls)
     waited: list[float] = []
+    r = ClaudeCLIClient(waits=(30, 60), sleep=waited.append, limit_wait=15).complete(_req())
+    assert waited == [15] * 20 and r.attempts == 21
+
+    monkeypatch.setattr(subprocess, "run", Calls(*([limit] * 5)))  # … up to limit_max of waiting
+    with pytest.raises(RetryableAPIError, match="did not lift"):
+        ClaudeCLIClient(waits=(1,), sleep=lambda s: None, limit_wait=15, limit_max=40).complete(_req())
+
+    # any other failure goes down the ladder, which ends
+    busy = subprocess.CompletedProcess([], 1, json.dumps({"is_error": True, "result": "Overloaded, try again"}), "")
+    monkeypatch.setattr(subprocess, "run", Calls(busy, busy, _ok()))
+    waited = []
     r = ClaudeCLIClient(waits=(30, 60, 120), sleep=waited.append).complete(_req())
     assert waited == [30, 60] and r.attempts == 3
-
-    monkeypatch.setattr(subprocess, "run", Calls(limit, limit))
-    with pytest.raises(RetryableAPIError):
+    monkeypatch.setattr(subprocess, "run", Calls(busy, busy))
+    with pytest.raises(RetryableAPIError, match="kept failing"):
         ClaudeCLIClient(waits=(1,), sleep=lambda s: None).complete(_req())
 
     login = subprocess.CompletedProcess([], 1, json.dumps({"is_error": True, "result": "Not logged in · Please run /login"}), "")
@@ -226,8 +237,8 @@ def test_each_wait_is_said_before_it_starts(monkeypatch):
                                                            "result": "Usage limit reached · resets 9am"}), "")
     monkeypatch.setattr(subprocess, "run", Calls(limit, _ok()))
     said: list[str] = []
-    ClaudeCLIClient(waits=(30,), sleep=lambda s: None, log=said.append).complete(_req())
-    assert len(said) == 1 and "30" in said[0] and "Usage limit reached" in said[0]
+    ClaudeCLIClient(waits=(30,), sleep=lambda s: None, log=said.append, limit_wait=900).complete(_req())
+    assert len(said) == 1 and "900" in said[0] and "Usage limit reached" in said[0]
     monkeypatch.setattr(subprocess, "run", Calls(limit, _ok()))
     ClaudeCLIClient(waits=(30,), sleep=lambda s: None).complete(_req())  # no log given: nothing printed, no error
 
