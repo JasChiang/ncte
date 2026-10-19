@@ -158,7 +158,8 @@ def notes(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]], be
     """What the translator had for judging this stretch, as known there: the paragraphs just before it (to read, not
     to check), decided renderings, how these speakers call these people, the house rules; with ``definitions``, what
     the terms in it mean as shown by its end (ADR-069)."""
-    from ..memory.address import context_items
+    from ..memory.address import FORMS_PER_QUOTA, context_items
+    from ..memory.retrieval import batch_quota
     from ..memory.style import load_style, style_payload
     from ..memory.visibility import visible_names
     from ..translation.context_builder import glossary_payload
@@ -173,7 +174,8 @@ def notes(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]], be
     gl = glossary_payload(glossary, text, upto=(volume, end), revealed=revealed)
     names = visible_names(conn, book_id, end)
     ids = {x for p in part for x in p.get("_who", [])}
-    address = context_items(conn, book_id, start, text, ids, names, ids, upto=end)
+    address = context_items(conn, book_id, start, text, ids, names, ids, upto=end,
+                            limit=batch_quota(FORMS_PER_QUOTA, len(part)))  # a stretch of 60: as a long batch
     if address:
         out["address_terms"] = address
         gl = drop_address_forms(gl, address)

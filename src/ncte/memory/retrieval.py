@@ -169,7 +169,7 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             mem["facts"].pop(0)
         else:
             mem["this_chapter_so_far"].pop(0)
-    from .address import context_items
+    from .address import FORMS_PER_QUOTA, context_items
 
     batch_text = " ".join(r["plain_text"] for r in batch_rows)
     batch_speakers = {u["speaker_id_nullable"] for u in conn.execute(
@@ -184,7 +184,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
                                     if set(x.get("unit_ids", [])) & batch_ids]},
         "memory": mem,
     }
-    address = context_items(conn, book_id, horizon, batch_text, batch_speakers, all_names, present_ids, upto=upto)
+    address = context_items(conn, book_id, horizon, batch_text, batch_speakers, all_names, present_ids, upto=upto,
+                            limit=batch_quota(FORMS_PER_QUOTA, len(batch_rows)))
     if address:
         out["address_terms"] = address
     return out

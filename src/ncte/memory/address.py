@@ -217,11 +217,15 @@ def visible_terms(conn: sqlite3.Connection, book_id: str, horizon: int, text: st
     return sorted(out, key=lambda r: (vols.get(r["book_id"], 1.0), r["first_ordinal"]))
 
 
+FORMS_PER_QUOTA = 12  # forms of address per QUOTA_UNITS paragraphs of a request (``retrieval.batch_quota``)
+
+
 def context_items(conn: sqlite3.Connection, book_id: str, horizon: int, text: str, speakers: set[str],
-                  names: dict[str, str], present: set[str] | None = None, limit: int = 12,
+                  names: dict[str, str], present: set[str] | None = None, limit: int = FORMS_PER_QUOTA,
                   upto: int | None = None) -> list[dict[str, Any]]:
     """Translation payload: forms occurring in the batch, plus how this batch's speakers usually call the
-    characters present in the scene (the form they would use if they named them)."""
+    characters present in the scene (the form they would use if they named them). ``limit``: the most used kept; a
+    caller with a long batch raises it with the batch (``retrieval.batch_quota``, ADR-069)."""
     vols = volumes(conn)
     out = []
     for r in visible_terms(conn, book_id, horizon, text, speakers, present or set(), upto=upto):
