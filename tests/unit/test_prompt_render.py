@@ -148,3 +148,11 @@ def test_memory_enums_are_explained_with_the_schemas_values():
         assert all(f"`{c}`" in line for c in cats), task
         line = next(x for x in text.split("\n") if "`form_type`" in x)
         assert all(f"`{f}`" in line for f in forms), task
+
+
+def test_voice_and_speech_habits_yield_to_the_line():
+    """A8 (ADR-067): a character's voice is the overall manner, the house style's habits fixed renderings; where they
+    pull apart, the line's own source decides."""
+    static, _ = load_prompt("translate").render_parts({"units": []})
+    voice = next(x for x in _rules(static)["3"].split("\n") if "`characters[].voice`" in x)
+    assert "整體" in voice and "固定" in voice and "牴觸時以本句原文為準" in voice
