@@ -357,4 +357,4 @@
 - 補充（2026-10-19，review 後的修正）：
   - 提示詞快取：Claude Code 把整段 `--system-prompt` 當一個快取區塊，只有逐字相同才讀快取；原本系統提示詞＝固定規則＋本批條件段（＋重試更正），schema 附在 user 訊息，smoke run 15 個請求只有 23% 讀快取，條件段不同的翻譯請求 0 命中。改為依 `cached_prefix_chars` 切開：`--system-prompt`＝該步驟固定的規則（含回答格式）＋該步驟的 JSON schema，每個請求逐字相同；本批條件段與重試的「重要更正」放進 user 訊息、在資料之前。OpenRouter 的 `cache_control` 做法不變（ADR-043）。回答格式只說一次（`translator.COMPACT_JSON`：只輸出一個 JSON 物件、不要說明與 code fence、寫成一行、代號照原樣），所有來源共用；原本 Claude 專用的 `ANSWER_RULE` 移除。實際命中率要用額度跑 smoke 才知道，尚未量。
   - 重試：Claude Code 拒絕指令本身（exit 2、stderr 有 unknown option／unknown argument／too many arguments）每次都一樣，立即停止並附 stderr，不再等最長約 4 小時；「沒登入」的字樣只在失敗（`is_error` 或 exit 非零）時檢查，模型的回答裡出現同樣的字不算。每次等待前寫一行原因到指令列或網頁的紀錄。
-  - 模型分配的說明更正：本 ADR 前文「翻譯、定名與所有檢查用 Opus」與程式不同；程式（`CLAUDE_READ_STAGES`）是切場景、讀場景、記憶整理、覆核、人物關係、角色印象、體例用 Sonnet，其餘（翻譯、定名、規則確認、審稿、對照校稿、讀者檢查、修正驗收）用 Opus。README 與網頁照程式改。
+  - 模型分配（取代前文「預設模型」一條）：覆核與人物關係改用 Opus。這兩步整本只有幾個請求（範例那本 2–6 個），卻決定說話者、性別與人物關係，下游每一處你／妳與稱呼都靠它；用 Opus 的額外花費相對整本很小。現在 `CLAUDE_READ_STAGES` 是切場景、讀場景、記憶整理、角色印象、體例用 Sonnet；翻譯、定名、覆核、人物關係、規則確認、審稿、對照校稿、讀者檢查、修正驗收用 Opus。README 與網頁照程式改。效果尚未整本實測（ADR-062 的比較是覆核與關係在 Sonnet 時跑的）。

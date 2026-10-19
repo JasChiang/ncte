@@ -116,6 +116,7 @@ def test_the_claude_provider_reads_on_sonnet_and_translates_and_checks_on_opus(m
     assert o.reasoning_effort == "medium"  # every step says its level, also outside the repo (no ncte.yaml)
     assert o.stage_models == dict.fromkeys(CLAUDE_READ_STAGES, "claude/sonnet")
     assert "naming" not in o.stage_models and "proofread" not in o.stage_models
+    assert "verify" not in o.stage_models and "relations" not in o.stage_models  # speakers and relations on Opus
     (tmp_path / "ncte.yaml").write_text("openrouter:\n  model: claude/sonnet\n  review_model: google/x\n"
                                         "  stage_models: {proofread: claude/opus, reader: google/y}\n", encoding="utf-8")
     o = load_config(tmp_path / "ncte.yaml").openrouter  # a chosen Claude model is kept; API model ids are dropped
@@ -217,8 +218,9 @@ def test_the_command_line_and_the_page_hear_the_waits(monkeypatch, tmp_path):
     assert list(runner.log)[-1] == "等待 30 秒：額度"
 
 
-READ_LABELS = {"scene_windows": "切場景", "scene_analyze": "讀場景", "memory_update": "記憶整理", "verify": "覆核",
-               "relations": "人物關係", "impressions": "角色印象", "house_style": "體例"}
+READ_LABELS = {"scene_windows": "切場景", "scene_analyze": "讀場景", "memory_update": "記憶整理",
+               "impressions": "角色印象", "house_style": "體例"}
+OPUS_LABELS = ("覆核", "人物關係")  # few requests that decide speakers, gender and relations (ADR-062 補充)
 
 
 def test_the_page_and_the_readme_say_which_steps_run_on_sonnet():
@@ -234,6 +236,7 @@ def test_the_page_and_the_readme_say_which_steps_run_on_sonnet():
         said = text[text.index("讀書的步驟"):]
         said = said[:said.index("用 Sonnet")]
         assert all(label in said for label in READ_LABELS.values()), (path.name, said)
+        assert not any(label in said for label in OPUS_LABELS), (path.name, said)
     js = (root / "src/ncte/gui/static/app.js").read_text(encoding="utf-8")
     first = js[js.index("async function libraryView"):js.index("async function", js.index("async function libraryView") + 1)]
     assert "找到 Claude Code" in first  # the first step on the Claude plan is not an OpenRouter key

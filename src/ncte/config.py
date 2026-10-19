@@ -181,10 +181,11 @@ def load_config(path: str | Path | None = None, *, workspace: str | None = None)
 # Reading steps run on Sonnet, translating and every check on Opus (ADR-062): one whole book each way, checked by
 # Opus against the source, left 2 real errors with Sonnet reading against 4 all-Opus and 28 all-Sonnet, and reading
 # on Sonnet costs about a third. Naming stays on the translating model: Sonnet named a woman with a man's name.
+# Verify and relations run on Opus too: a handful of requests per book that settle speakers, gender and relations,
+# which every later 你／妳 and form of address leans on.
 CLAUDE_MODEL = "claude/opus"
 CLAUDE_READ_MODEL = "claude/sonnet"
-CLAUDE_READ_STAGES = ("scene_windows", "scene_analyze", "memory_update", "verify", "relations", "impressions",
-                      "house_style")
+CLAUDE_READ_STAGES = ("scene_windows", "scene_analyze", "memory_update", "impressions", "house_style")
 
 
 def use_claude_models(cfg: Config) -> None:
