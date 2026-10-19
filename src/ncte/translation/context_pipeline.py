@@ -534,15 +534,19 @@ class ContextOrchestrator(Orchestrator):
             return {}
         saved = self._begin_job("reader") if record_job else {}
         after = saved.pop("done_until_ordinal", None)
+        wanted = set(self.opts.unit_ids) if self.opts.unit_ids else None
         with self.lock:
-            parts = reader.chunks(self.conn, self.book.id, set(self.opts.unit_ids) if self.opts.unit_ids else None,
-                                  after=after)
+            parts = reader.chunks(self.conn, self.book.id, wanted, after=after)
+            prev = reader.tail(self.conn, self.book.id, after, wanted) if after is not None else []
         prompt = load_prompt("reader")
         stats = {**new_stats(read=0, blocked=0, failed=0), **saved}
         for part in parts:
             if self._paused("reader's look"):
                 return stats
-            self._reader_part(part, prompt, stats)
+            # the end of the stretch before, in the same chapter: read to follow the story, not reported on
+            before = [p for p in prev[-reader.BEFORE_UNITS:] if p["_href"] == part[0]["_href"]]
+            prev = part
+            self._reader_part(part, prompt, stats, before)
             if record_job:
                 self._set_job("reader", self.book.id, "running", None,
                               {"done_until_ordinal": part[-1]["_at"], **stats})
@@ -555,7 +559,8 @@ class ContextOrchestrator(Orchestrator):
         # a stretch refused or failed was not looked at; with chosen paragraphs only, the book was not looked at whole
         return "partial" if stats["blocked"] or stats["failed"] or self.opts.unit_ids else "succeeded"
 
-    def _reader_part(self, part: list[dict[str, Any]], prompt: Any, stats: dict[str, int]) -> None:
+    def _reader_part(self, part: list[dict[str, Any]], prompt: Any, stats: dict[str, int],
+                     before: list[dict[str, Any]] | None = None) -> None:
         from ..analysis import reader
         from ..llm.schemas import ReaderOutput
         from .review import _retranslate_with_feedback
@@ -566,7 +571,8 @@ class ContextOrchestrator(Orchestrator):
         try:  # 120 paragraphs at a time: the content filter may refuse a part; it is then read in halves
             parsed = call_in_parts(lambda pl: self._llm("reader", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
                                    {"task": "reader", "paragraphs": [{k: v for k, v in p.items() if not k.startswith("_")}
-                                                                     for p in part], "characters": cast},
+                                                                     for p in part], "characters": cast,
+                                    **({"context_before": [{"zh": b["zh"]} for b in before]} if before else {})},
                                    "paragraphs", blocked)
         except FatalAPIError:
             raise

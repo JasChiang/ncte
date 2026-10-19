@@ -19,6 +19,7 @@ from ..memory.repository import character_basics
 from ..translation.cache import latest_texts
 
 CHUNK_UNITS = 120  # paragraphs per request (one stretch of reading)
+BEFORE_UNITS = 6  # paragraphs before the stretch, given to read (not reported on)
 _KANA = re.compile("[ぁ-ゟァ-ヺ]{2,}")
 # the source talks about words themselves: a likely play on sound or writing
 _ABOUT_WORDS = re.compile(r"名前|名字|読み|響き|発音|漢字|平仮名|ひらがな|片仮名|カタカナ|ダジャレ|駄洒落|語呂|同じ字|同じ音|聞き間違")
@@ -41,7 +42,8 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
             out.append(cur)
             cur = []
         href = r["resource_href"]
-        item: dict[str, Any] = {"unit_id": r["id"], "zh": PH_RE.sub("", t["text"]), "_tid": t["id"], "_at": r["ordinal"]}
+        item: dict[str, Any] = {"unit_id": r["id"], "zh": PH_RE.sub("", t["text"]), "_tid": t["id"], "_at": r["ordinal"],
+                                "_href": r["resource_href"]}
         look = hint(r, t["text"])
         if look:
             item["look"] = look
@@ -49,6 +51,24 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
     if cur:
         out.append(cur)
     return out
+
+
+def tail(conn: sqlite3.Connection, book_id: str, upto: int, unit_ids: set[str] | None = None,
+         n: int = BEFORE_UNITS) -> list[dict[str, Any]]:
+    """The last ``n`` translated paragraphs up to ``upto`` (as ``chunks`` gives them): the stretch before, for a pass
+    resumed after it."""
+    best = latest_texts(conn, book_id)
+    out: list[dict[str, Any]] = []
+    for r in conn.execute("SELECT * FROM units WHERE book_id=? AND translatable=1 AND kind IN ('text','heading') AND "
+                          "spine_index IS NOT NULL AND ordinal<=? ORDER BY ordinal DESC", (book_id, upto)):
+        t = best.get(r["id"])
+        if t is None or (unit_ids is not None and r["id"] not in unit_ids):
+            continue
+        out.append({"unit_id": r["id"], "zh": PH_RE.sub("", t["text"]), "_tid": t["id"], "_at": r["ordinal"],
+                    "_href": r["resource_href"]})
+        if len(out) >= n:
+            break
+    return out[::-1]
 
 
 def hint(unit: sqlite3.Row, text: str) -> str | None:
