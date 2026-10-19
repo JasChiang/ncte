@@ -132,3 +132,19 @@ def test_a_guessed_listener_or_gender_does_not_make_a_neutral_you_wrong():
     assert "（推測）" in _bullet(pr, "speaker") and "不分性別的「你」不算錯" in _bullet(pr, "speaker")
     rd = load_prompt("reader").render({"paragraphs": []})
     assert "(inferred)" in _bullet(rd, "voice") and "不據此回報" in _bullet(rd, "voice")
+
+
+def test_memory_enums_are_explained_with_the_schemas_values():
+    """A7 (ADR-067): glossary_candidates.category and name_links.form_type list exactly the schema's values."""
+    from typing import get_args
+
+    from ncte.llm.schemas import GlossaryCandidate, NameLink
+
+    cats = get_args(GlossaryCandidate.model_fields["category"].annotation)
+    forms = get_args(NameLink.model_fields["form_type"].annotation)
+    for task in ("memory_update", "scene_read"):
+        text = load_prompt(task).render()
+        line = next(x for x in text.split("\n") if "`category`" in x and "glossary_candidates" in x)
+        assert all(f"`{c}`" in line for c in cats), task
+        line = next(x for x in text.split("\n") if "`form_type`" in x)
+        assert all(f"`{f}`" in line for f in forms), task
