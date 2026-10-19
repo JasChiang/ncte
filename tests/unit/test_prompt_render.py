@@ -123,3 +123,12 @@ def test_review_knows_tone_voice_other_and_two_readings():
     for kind in ("tone", "voice", "other"):
         ReviewIssue(unit_id="u", issue_type=kind, severity="medium", evidence="e", suggestion="s",
                     needs_retranslation=True)
+
+
+def test_a_guessed_listener_or_gender_does_not_make_a_neutral_you_wrong():
+    """A6 (ADR-067): the translator uses the neutral 你 when the listener or gender is only inferred; proofreading
+    and the reader's look do not report that as an error."""
+    pr = load_prompt("proofread").render({"paragraphs": []})
+    assert "（推測）" in _bullet(pr, "speaker") and "不分性別的「你」不算錯" in _bullet(pr, "speaker")
+    rd = load_prompt("reader").render({"paragraphs": []})
+    assert "(inferred)" in _bullet(rd, "voice") and "不據此回報" in _bullet(rd, "voice")
