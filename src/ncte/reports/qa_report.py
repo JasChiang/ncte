@@ -54,6 +54,10 @@ def book_status(conn: sqlite3.Connection, book_id: str) -> dict[str, Any]:
         "(SELECT COALESCE(SUM(COALESCE(q.cost_usd, CASE WHEN q.cost_status IN ('unknown','pending') "
         "THEN q.est_cost_usd ELSE 0 END)),0) FROM llm_requests q WHERE q.run_id=r.id) AS cost_usd "
         "FROM runs r WHERE r.book_id=? ORDER BY r.started_at", (book_id,))]
+    for r in runs:  # the model ids Claude Code really ran its aliases on (ADR-062), when it said so
+        r["models_used"] = [m[0] for m in conn.execute(
+            "SELECT DISTINCT j.value FROM llm_requests q, json_each(q.usage_json, '$.models') j WHERE q.run_id=? "
+            "AND json_type(q.usage_json, '$.models')='array' ORDER BY j.value", (r["id"],))]
     return {"units_by_kind": {f"{r['kind']}{'' if r['translatable'] else ' (kept original)'}": r["n"] for r in units},
             "translatable": translatable, "translated": len(best), "remaining": translatable - len(best),
             "translation_status": statuses, "runs": runs,

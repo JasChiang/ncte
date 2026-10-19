@@ -128,10 +128,13 @@ class ClaudeCLIClient:
             u = out.get("usage") or {}
             cache_write = int(u.get("cache_creation_input_tokens") or 0)
             cache_read = int(u.get("cache_read_input_tokens") or 0)
-            usage = {"prompt_tokens": int(u.get("input_tokens") or 0) + cache_write + cache_read,
+            usage: dict[str, Any] = {"prompt_tokens": int(u.get("input_tokens") or 0) + cache_write + cache_read,
                      "completion_tokens": int(u.get("output_tokens") or 0),
                      "cache_write_tokens": cache_write, "cache_read_tokens": cache_read,
                      "list_cost_usd": float(out.get("total_cost_usd") or 0), "effort": effort_of(req)}
+            # the model ids the alias was really run on, as the result's per-model counts name them (when given)
+            if isinstance(out.get("modelUsage"), dict) and out["modelUsage"]:
+                usage["models"] = [str(k) for k in out["modelUsage"]]
             return LLMResponse(content=result, model=req.model, provider="claude", generation_id=out.get("session_id"),
                                usage=usage, cost_usd=0.0, latency_ms=int((time.monotonic() - start) * 1000),
                                finish_reason="stop", attempts=attempt, structured_mode=req.structured_mode)

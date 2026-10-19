@@ -66,6 +66,9 @@ def cost_report(conn: sqlite3.Connection, *, run_id: str | None = None, book_id:
             b["cost_usd"] += cost
             b["prompt_tokens"] += pt
             b["completion_tokens"] += ct
+        if u.get("models"):  # the model ids a Claude Code alias was really run on
+            b = by_model[r["model"]]
+            b["models"] = sorted(set(b.get("models", [])) | {str(m) for m in u["models"]})
     tot["total_cost_upper_usd"] = round(tot["cost_reported_usd"] + tot["cost_estimated_usd"]
                                         + tot["cost_unknown_estimate_usd"], 6)
     for k in ("cost_reported_usd", "cost_estimated_usd", "cost_unknown_estimate_usd"):

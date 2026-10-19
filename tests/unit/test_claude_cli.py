@@ -248,3 +248,53 @@ def test_agent_is_not_a_source_chosen_by_environment(monkeypatch):
     monkeypatch.setenv("NCTE_LLM_PROVIDER", "agent")
     with pytest.raises(ConfigError, match="ncte agent"):
         load_config()
+
+
+def _model_usage(model_id: str) -> dict[str, Any]:
+    # the shape of the result's ``modelUsage`` in the installed Claude Code (2.1.303): model id → per-model counts
+    return {model_id: {"inputTokens": 3, "outputTokens": 70, "cacheReadInputTokens": 500,
+                       "cacheCreationInputTokens": 1000, "webSearchRequests": 0, "costUSD": 0.042}}
+
+
+def test_the_model_claude_code_really_used_is_kept(monkeypatch):
+    """2.8: an alias (opus, sonnet) names whatever model Claude Code maps it to; the result's ``modelUsage`` says
+    which, and it is kept with the usage. No ``modelUsage``: nothing is made up."""
+    monkeypatch.setattr(subprocess, "run", Calls(_ok(modelUsage=_model_usage("claude-opus-test-1")), _ok()))
+    c = ClaudeCLIClient(waits=())
+    assert c.complete(_req()).usage["models"] == ["claude-opus-test-1"]
+    assert "models" not in c.complete(_req()).usage
+
+
+class ModelReporting(FakeBacked):
+    def run(self, args: list[str], *, input: str, **kw: Any) -> subprocess.CompletedProcess[str]:
+        alias = args[args.index("--model") + 1]
+        return _ok(self.fake.complete(self.local.req).content, modelUsage=_model_usage(f"claude-{alias}-test-1"))
+
+
+def test_reports_and_the_page_show_the_models_really_used(monkeypatch, tmp_path, fixtures):
+    from ncte.memory.db import connect, migrate
+    from ncte.reports.cost_report import cost_report
+    from ncte.reports.html_report import render_html
+    from ncte.reports.qa_report import book_status, qa_report
+
+    from ..helpers import run_book
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "claude")
+    cfg = load_config(workspace=str(tmp_path / "ws"))
+    client = ModelReporting()
+    monkeypatch.setattr(subprocess, "run", client.run)
+    conn = connect(tmp_path / "t.db")
+    migrate(conn)
+    book, rid, summary = run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    cost = cost_report(conn, run_id=rid)
+    assert cost["by_model"]["claude/opus"]["models"] == ["claude-opus-test-1"]
+    assert cost["by_model"]["claude/sonnet"]["models"] == ["claude-sonnet-test-1"]
+    assert "claude-opus-test-1" in render_html("t", cost, qa_report(conn, book_id=book.id))
+    run = next(r for r in book_status(conn, book.id)["runs"] if r["id"] == rid)
+    assert run["models_used"] == ["claude-opus-test-1", "claude-sonnet-test-1"]
+    from pathlib import Path
+
+    import ncte
+    js = (Path(ncte.__file__).resolve().parents[2] / "src/ncte/gui/static/app.js").read_text(encoding="utf-8")
+    assert "models_used" in js

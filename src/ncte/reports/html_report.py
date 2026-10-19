@@ -56,6 +56,10 @@ def render_html(title: str, cost: dict[str, Any], qa: dict[str, Any], status: di
                      f"<tr><td>{escape(k)}</td><td>{v['requests']}</td><td>{v['cost_usd']:.6f}</td>"
                      f"<td>{v['prompt_tokens']}</td><td>{v['completion_tokens']}</td></tr>"
                      for k, v in cost["by_stage"].items()) + "</table></div>")
+    parts.append("<h2>Cost by model</h2><div class='wrap'><table><tr><th>model</th><th>model ids reported</th>"
+                 "<th>requests</th><th>cost USD</th></tr>" + "".join(
+                     f"<tr><td>{escape(k)}</td><td>{escape(', '.join(v.get('models', [])))}</td><td>{v['requests']}</td>"
+                     f"<td>{v['cost_usd']:.6f}</td></tr>" for k, v in cost["by_model"].items()) + "</table></div>")
     parts.append("<h2>Billing status of requests</h2>" + _kv_table(cost["by_cost_status"]))
     parts.append("<h2>Structured output mode</h2>" + _kv_table(cost["structured_modes"]))
     if status:
