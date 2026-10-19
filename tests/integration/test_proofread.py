@@ -161,7 +161,7 @@ def test_a_second_reading_is_recorded_for_a_person_and_not_retranslated(conn, cf
     assert not conn.execute(f"SELECT 1 FROM translations WHERE unit_id IN ({marks}) AND flags_json LIKE "
                             "'%review_retranslation%'", [f["unit_id"] for f in found]).fetchone()
     job = conn.execute("SELECT checkpoint_json FROM jobs WHERE run_id=? AND stage='proofread'", (rid,)).fetchone()
-    assert '"ambiguities": %d' % len(seen) in job["checkpoint_json"] and '"retranslated": 0' in job["checkpoint_json"]
+    assert f'"ambiguities": {len(seen)}' in job["checkpoint_json"] and '"retranslated": 0' in job["checkpoint_json"]
     # the review page shows it as a second reading
     shown = [u for u in data.units(conn, book)["units"] if u["readings"]]
     assert {u["id"] for u in shown} == {f["unit_id"] for f in found}

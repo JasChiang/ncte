@@ -56,7 +56,7 @@ def test_a_retranslation_that_repeats_the_error_is_not_fixed(conn, cfg, tmp_path
 
     def still_wrong(payload, req):
         checks.append(payload)
-        return {"checks": [{"unit_id": i["unit_id"], "verdict": "still_wrong", "new_error": "",
+        return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "still_wrong", "new_error": "",
                             "reason": "原文「来なかった」是否定，譯文仍是「來了」"} for i in payload["items"]]}
 
     book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=None, fix_check=still_wrong, seen=seen)
@@ -107,7 +107,7 @@ def test_a_checked_fix_resolves_only_its_issue(conn, cfg, tmp_path):
 
 def test_a_fix_that_breaks_something_else_is_not_the_books_text(conn, cfg, tmp_path):
     def regressed(payload, req):
-        return {"checks": [{"unit_id": i["unit_id"], "verdict": "fixed", "new_error": "主詞從「她」變成「他」",
+        return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "fixed", "new_error": "主詞從「她」變成「他」",
                             "reason": "否定改對了"} for i in payload["items"]]}
 
     book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text="他沒有來。", fix_check=regressed)
@@ -121,7 +121,7 @@ def test_a_fix_that_breaks_something_else_is_not_the_books_text(conn, cfg, tmp_p
 
 def test_the_checker_can_say_the_issue_was_not_an_error(conn, cfg, tmp_path):
     def invalid(payload, req):
-        return {"checks": [{"unit_id": i["unit_id"], "verdict": "issue_invalid", "new_error": "", "reason": "原文就是這樣"}
+        return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "issue_invalid", "new_error": "", "reason": "原文就是這樣"}
                            for i in payload["items"]]}
 
     book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=None, fix_check=invalid)
@@ -181,7 +181,7 @@ def test_proofreading_counts_only_what_it_checked_and_checks_its_fixes(conn, cfg
 
     def check(payload, req):
         checks.append(payload)
-        return {"checks": [{"unit_id": i["unit_id"], "verdict": "still_wrong", "new_error": "", "reason": "仍是肯定"}
+        return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "still_wrong", "new_error": "", "reason": "仍是肯定"}
                            for i in payload["items"]]}
 
     cfg.context.reader_pass = False
@@ -267,7 +267,7 @@ def test_the_fix_check_knows_who_speaks_to_whom(conn, cfg, fixtures):
 
     def check(payload, req):
         seen.append(payload)
-        return {"checks": [{"unit_id": i["unit_id"], "verdict": "undecided", "new_error": "", "reason": "t"}
+        return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "undecided", "new_error": "", "reason": "t"}
                            for i in payload["items"]]}
 
     cfg.context.reader_pass = False
@@ -294,7 +294,7 @@ def test_the_fix_check_reads_the_note_that_goes_into_the_book(conn, cfg, tmp_pat
 
     def check(payload, req):
         checks.extend(payload["items"])
-        return {"checks": [{"unit_id": i["unit_id"], "verdict": "still_wrong", "new_error": "", "reason": "正文仍是肯定"}
+        return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "still_wrong", "new_error": "", "reason": "正文仍是肯定"}
                            for i in payload["items"]]}
 
     run_book(conn, cfg, small_book(tmp_path), FakeLLM(responders={"translate": translate, "review": negation_review,
@@ -306,7 +306,7 @@ def test_the_fix_check_reads_the_note_that_goes_into_the_book(conn, cfg, tmp_pat
 def test_when_the_old_text_was_right_it_stays(conn, cfg, tmp_path):
     """The source allows the old reading: the issue is dismissed and the old text is kept, not the new wording."""
     def invalid(payload, req):
-        return {"checks": [{"unit_id": i["unit_id"], "verdict": "issue_invalid", "new_error": "",
+        return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "issue_invalid", "new_error": "",
                             "reason": "兩種讀法原文都說得通"} for i in payload["items"]]}
 
     book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=RIGHT, fix_check=invalid)
@@ -324,7 +324,7 @@ def test_a_word_rule_on_the_fix_is_judged_by_the_check_not_counted_against_it(co
 
     def fixed(payload, req):
         checks.append(payload)
-        return {"checks": [{"unit_id": i["unit_id"], "verdict": "fixed", "new_error": "",
+        return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "fixed", "new_error": "",
                             "reason": "原文「来なかった」是否定，改譯已是否定"} for i in payload["items"]]}
 
     book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text="　她沒有來 again。", fix_check=fixed)
@@ -337,3 +337,16 @@ def test_a_word_rule_on_the_fix_is_judged_by_the_check_not_counted_against_it(co
                             (uid,)).fetchone()
     assert conn.execute("SELECT status FROM qa_findings WHERE unit_id=? AND type='after_review:latin_word'",
                         (uid,)).fetchone()["status"] == "dismissed_by_check"
+
+
+def test_the_check_writes_what_the_source_says_before_its_verdict():
+    """2.3: the check first puts the source in its own words (``gist``), then compares before and after; the schema
+    asks for the gist first, so it is written before the verdict."""
+    from ncte.llm.prompt_loader import load_prompt
+    from ncte.llm.schemas import FixCheckOutput, strict_json_schema
+
+    item = strict_json_schema(FixCheckOutput)["properties"]["checks"]["items"]
+    assert "gist" in item["required"]
+    assert list(item["properties"]).index("gist") < list(item["properties"]).index("verdict")
+    text = load_prompt("fix_check").render({})
+    assert "`gist`" in text and text.index('"gist"') < text.index('"verdict"')

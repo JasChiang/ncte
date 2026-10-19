@@ -147,7 +147,7 @@ def default_confirm(payload: dict[str, Any], req: Any) -> dict[str, Any]:
 
 def default_fix_check(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     """A checker that accepts a changed text and cannot settle an unchanged one."""
-    return {"checks": [{"unit_id": i["unit_id"], "verdict": "fixed" if i["after"] != i["before"] else "undecided",
+    return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "fixed" if i["after"] != i["before"] else "undecided",
                         "new_error": "", "reason": "fake"} for i in payload.get("items", [])]}
 
 

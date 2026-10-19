@@ -43,7 +43,7 @@ def test_closing_a_still_wrong_fix_is_the_counted_error():
     fs = load_fix_set()
 
     def check(cid: str, verdict: str, new_error: str = "") -> FixCheck:
-        return FixCheck(unit_id=cid, verdict=verdict, new_error=new_error, reason="r")  # type: ignore[arg-type]
+        return FixCheck(unit_id=cid, gist="g", verdict=verdict, new_error=new_error, reason="r")  # type: ignore[arg-type]
 
     perfect = {c.id: check(c.id, "fixed" if c.gold == "regressed" else c.gold, "x" if c.gold == "regressed" else "")
                for c in fs.cases}
@@ -76,7 +76,7 @@ def test_the_comparison_runs_each_model_within_budget(cfg, tmp_path):
 
     def judge(payload, req):
         seen.append(payload)
-        return {"checks": [{"unit_id": i["unit_id"], "verdict": "fixed", "new_error": "", "reason": "r"}
+        return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "fixed", "new_error": "", "reason": "r"}
                            for i in payload["items"]]}
 
     client = FakeLLM(models=["a/one", "b/two"], responders={"fix_check": judge})
@@ -122,7 +122,7 @@ def test_a_fix_goes_back_as_a_run_sends_it_and_is_judged(cfg, tmp_path):
 
     def judge(pl, req):
         judged.append(pl)
-        return {"checks": [{"unit_id": i["unit_id"], "verdict": "fixed", "new_error": "", "reason": "r"}
+        return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "fixed", "new_error": "", "reason": "r"}
                            for i in pl["items"]]}
 
     client = FakeLLM(models=["t/one", "j/two"], responders={"translate": fixer, "fix_check": judge})

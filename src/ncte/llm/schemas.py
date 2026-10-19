@@ -423,6 +423,9 @@ class ConfirmOutput(_M):
 # ------------------------------------------------------------ after a fix: did it fix what was found?
 class FixCheck(_M):
     unit_id: str
+    # what the source says, in a few words, written from the source alone before comparing before and after; first
+    # in the schema so it is written before the verdict
+    gist: str
     # fixed: the issue is gone · issue_invalid: the source shows the issue was not an error · still_wrong: the new text
     # still has it · undecided: the source does not settle it
     verdict: Literal["fixed", "issue_invalid", "still_wrong", "undecided"]
