@@ -642,10 +642,12 @@ class Orchestrator:
                 self.propose_names()
             elif self.opts.gender_only:
                 self.scan_genders()
-            elif self.opts.reader_only:
-                self.reader_pass(record_job=False)
+            elif self.opts.reader_only:  # recorded like a run's own pass: what "acceptable" reads (ADR-055)
+                self._own_job("reader")
+                self.reader_pass()
             elif self.opts.proofread_only:
-                self.proofread_pass(record_job=False)
+                self._own_job("proofread")
+                self.proofread_pass()
             elif self.opts.house_style_only:
                 self.house_style_pass(record_job=False)
             elif self.opts.relations_only:
@@ -675,6 +677,16 @@ class Orchestrator:
         summary = self.summary(status)
         self._set_run_status(summary.status, summary)
         return summary
+
+    def _own_job(self, stage: str) -> None:
+        """A run that only proofreads or only reads like a reader records that pass as a job on the book, kept until
+        done (``ncte resume`` goes on from its checkpoint); a pass over chosen paragraphs is never more than partial."""
+        with self.lock, Transaction(self.conn):
+            if self.conn.execute("SELECT 1 FROM jobs WHERE run_id=? AND stage=? AND target_id=?",
+                                 (self.run_id, stage, self.book.id)).fetchone() is None:
+                self.conn.execute("INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) "
+                                  "VALUES (?,?,?,?,?,?,?)", (self.book.id, self.run_id, stage, self.book.id, 0,
+                                                             "pending", utcnow()))
 
     def body_positions(self) -> dict[int, int]:
         with self.lock:

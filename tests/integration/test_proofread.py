@@ -86,3 +86,50 @@ def test_with_verdicts_every_paragraph_is_answered_for(conn, cfg, fixtures):
     job = conn.execute("SELECT checkpoint_json FROM jobs WHERE run_id=? AND stage='proofread'", (rid,)).fetchone()
     total = sum(len(p["paragraphs"]) for p in seen)
     assert f'"no_verdict": {total - len(seen)}' in job["checkpoint_json"]
+
+
+def test_the_commands_record_their_pass_so_a_whole_book_rerun_makes_it_complete(tmp_path, fixtures):
+    """`ncte proofread` and `ncte reader-check` record a job of their own: run on chosen paragraphs only, the pass is
+    partial (the book was not checked whole); a later whole-book run that succeeds makes it complete again."""
+    from typer.testing import CliRunner
+
+    from ncte.cli import app
+    from ncte.config import Config
+    from ncte.reports.acceptance import acceptance
+    from ncte.workspace import Workspace
+
+    ws, epub, r = tmp_path / "ws", str(fixtures["basic"]), CliRunner()
+    assert r.invoke(app, ["-w", str(ws), "translate", epub, "--fake", "--mode", "context"]).exit_code == 0
+    cfg = Config()
+    cfg.app.workspace = str(ws)
+
+    def db(sql: str = "", stage: str = "proofread") -> tuple[str, bool, str]:
+        w = Workspace(cfg)
+        try:
+            conn, book = w.open_book(epub)
+            if sql:
+                conn.execute(sql, (book.id, stage))
+                conn.commit()
+            last = conn.execute("SELECT status FROM jobs WHERE book_id=? AND stage=? ORDER BY id DESC LIMIT 1",
+                                (book.id, stage)).fetchone()[0]
+            ok = acceptance(conn, book.id)["checks"][f"{stage}_complete"]["ok"]
+            uid = conn.execute("SELECT id FROM units WHERE book_id=? AND kind='text' AND translatable=1 "
+                               "ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()[0]
+            return last, ok, uid
+        finally:
+            w.close()
+
+    last, ok, uid = db()
+    assert (last, ok) == ("succeeded", True)
+    out = r.invoke(app, ["-w", str(ws), "proofread", epub, "--fake", "--unit-id", uid])
+    assert out.exit_code == 0, out.output
+    assert db()[:2] == ("partial", False)  # chosen paragraphs only: recorded, never complete
+    out = r.invoke(app, ["-w", str(ws), "proofread", epub, "--fake"])
+    assert out.exit_code == 0, out.output
+    assert db()[:2] == ("succeeded", True)  # the whole book again: complete
+
+    # an earlier reader's look left partial (a stretch refused): the command over the whole book completes it
+    assert db("UPDATE jobs SET status='partial' WHERE book_id=? AND stage=?", "reader")[:2] == ("partial", False)
+    out = r.invoke(app, ["-w", str(ws), "reader-check", epub, "--fake"])
+    assert out.exit_code == 0, out.output
+    assert db(stage="reader")[:2] == ("succeeded", True)

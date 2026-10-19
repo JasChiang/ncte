@@ -746,7 +746,8 @@ def reader_check(epub: Annotated[str, typer.Argument()],
                  budget_usd: Annotated[float, typer.Option("--budget-usd")] = 1.0,
                  fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
     """Read the translation like a reader who knows no Japanese; what a reader would stumble on is retranslated with
-    the source (or given a translator's note) — ADR-038. For a book already translated."""
+    the source (or given a translator's note) — ADR-038. For a book already translated. Recorded as the book's
+    reader's-look pass (what "acceptable" reads)."""
     from .cli import _run
     from .translation.orchestrator import RunOptions
 
@@ -763,7 +764,8 @@ def proofread_cmd(epub: Annotated[str, typer.Argument()],
                   unit_id: Annotated[list[str] | None, typer.Option("--unit-id", help="Only these units")] = None,
                   fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
     """Check every paragraph against its source like a proofreader; real errors (meaning, omission, addition, speaker,
-    tone, voice, house style) are retranslated with the source — ADR-051. For a book already translated."""
+    tone, voice, house style) are retranslated with the source — ADR-051. For a book already translated. Recorded as
+    the book's proofreading pass (what "acceptable" reads); with --unit-id it is partial, never complete."""
     from .cli import _run
     from .translation.orchestrator import RunOptions
 
