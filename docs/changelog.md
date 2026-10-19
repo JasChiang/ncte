@@ -806,3 +806,7 @@ open workspace/eval/<timestamp>/report.html
 - 沒做：第 2 節以後全部（另外處理）；1.1 的快取效果沒有線上量（指示第 5.1 節，需額度）；README 的時間與額度數字沒有換成新數字（等第 5.2 節整本實測）。
 - 限制：校稿檢查點以 ordinal 記「做到哪」，續跑前若有段落被重新匯入或改譯，續跑只看檢查點之後的段落；平行化（第 4 節）之前一次一批，檢查點只會連續前進。
 - 重現：`git worktree add ../ncte-fixes review-fixes-2026-10-19 && cd ../ncte-fixes && python3 -m venv .venv && source .venv/bin/activate && pip install -e '.[dev]' && pytest && ruff check src tests && mypy src`。測試 471 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。
+
+## review 後的修正（第 2 節）（2026-10-19，分支 review-fixes-2026-10-19，自 4c13950）
+（草稿，做完整節後改寫）
+- 2.11 設計（實作前）：新的 run 在 `create_extra_jobs` 建 job 時判斷。(1) 覆核、人物關係、角色印象、體例、定名：這次 run 沒有任何 scene_analyze／memory_update 是 pending、不是 `--force`，且這本書已有該步驟 succeeded 的 job，而且那個 job 的完成時間不早於這本書最後一次讀場景／記憶整理成功的時間（避免「上一個 run 讀了新場景但沒做到這一步」時誤跳過），就建成 skipped。(2) 對照校稿、讀者檢查：每次 succeeded 時在檢查點記 `upto_translation_id`（當時這本書最大的譯文 id）；新 run 不是 `--force`、上一次 succeeded 的同步驟 job 有這個值時，新 job 的檢查點帶 `since_translation_id`，`chunks` 只取現行譯文 id 大於它的段落；沒有這個值（從沒整本做完、或舊資料）照舊整本。續跑（resume）不重建 job，檢查點裡的 `since_translation_id` 隨統計一起保留，與 ensure_jobs／resume 不衝突。

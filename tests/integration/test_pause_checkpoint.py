@@ -123,10 +123,14 @@ def test_the_readers_look_goes_on_from_its_checkpoint(conn, cfg, fixtures, monke
                                         ("relations", "ncte.analysis.relations.PAIRS_PER_REQUEST"),
                                         ("impressions", "ncte.analysis.impressions.PER_REQUEST")])
 def test_a_pause_in_a_whole_book_step_is_kept_and_the_step_is_done_on_resume(conn, cfg, fixtures, monkeypatch,
-                                                                            stage, size):
+                                                                            stage, size, tmp_path):
+    from ncte.memory.db import connect, migrate
+
     monkeypatch.setattr(size, 1)  # one item per request: a pause can fall between two
     probe = Counting(responders=dict(RESPONDERS))
-    _run(conn, cfg, fixtures, probe)
+    other = connect(tmp_path / "probe.db")  # its own database: a book done there would not redo the step (2.11)
+    migrate(other)
+    _run(other, cfg, fixtures, probe)
     if probe.asked.get(stage, 0) < 2:
         pytest.skip(f"the sample book asks {stage} fewer than two times")
     client = Stopping(stage, 1, responders=dict(RESPONDERS))

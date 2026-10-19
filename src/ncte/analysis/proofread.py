@@ -32,11 +32,12 @@ _UNITS = ("SELECT * FROM units WHERE book_id=? AND translatable=1 AND kind IN ('
 
 def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = None,
            size: int = CHUNK_UNITS, after: int | None = None,
-           story: set[str] | None = None) -> list[list[dict[str, Any]]]:
+           story: set[str] | None = None, since: int | None = None) -> list[list[dict[str, Any]]]:
     """Consecutive translated paragraphs, chapter by chapter, each with its source and who says its lines.
     ``after``: only paragraphs after this ordinal (a resumed pass; a stretch starts afresh after each one checked, so
     the stretches are the same as in the first run). ``story``: only paragraphs of these files (the story without
-    covers, table of contents, afterword or colophon, ADR-024, when ``context.skip_book_matter``); None: every file."""
+    covers, table of contents, afterword or colophon, ADR-024, when ``context.skip_book_matter``); None: every file.
+    ``since``: only paragraphs whose current translation is newer than this translation id (2.11)."""
     from ..memory.visibility import form_positions, visible_names
 
     best = latest_texts(conn, book_id)
@@ -62,6 +63,8 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
         t = best.get(r["id"])
         if t is None or (unit_ids is not None and r["id"] not in unit_ids) or (story is not None and
                                                                              r["resource_href"] not in story):
+            continue
+        if since is not None and t["id"] <= since:  # looked at in an earlier whole pass, unchanged since
             continue
         if cur and (r["resource_href"] != href and len(cur) >= size // 3 or len(cur) >= size):
             out.append(cur)

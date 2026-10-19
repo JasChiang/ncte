@@ -26,10 +26,12 @@ _ABOUT_WORDS = re.compile(r"名前|名字|読み|響き|発音|漢字|平仮名|
 
 
 def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = None,
-           after: int | None = None, story: set[str] | None = None) -> list[list[dict[str, Any]]]:
+           after: int | None = None, story: set[str] | None = None,
+           since: int | None = None) -> list[list[dict[str, Any]]]:
     """Consecutive translated paragraphs, chapter by chapter, in reading order. ``after``: only paragraphs after this
     ordinal (a resumed pass). ``story``: only paragraphs of these files (book matter left out, ADR-024, when
-    ``context.skip_book_matter``); None: story and book matter alike."""
+    ``context.skip_book_matter``); None: story and book matter alike. ``since``: only paragraphs whose current
+    translation is newer than this translation id (2.11)."""
     best = latest_texts(conn, book_id)
     out: list[list[dict[str, Any]]] = []
     cur: list[dict[str, Any]] = []
@@ -39,6 +41,8 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
         t = best.get(r["id"])
         if t is None or (unit_ids is not None and r["id"] not in unit_ids) or (story is not None and
                                                                              r["resource_href"] not in story):
+            continue
+        if since is not None and t["id"] <= since:  # looked at in an earlier whole pass, unchanged since
             continue
         if cur and (r["resource_href"] != href and len(cur) >= CHUNK_UNITS // 3 or len(cur) >= CHUNK_UNITS):
             out.append(cur)

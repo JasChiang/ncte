@@ -206,33 +206,41 @@ class ContextOrchestrator(Orchestrator):
                 self.conn.execute(
                     "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
                     (self.book.id, self.run_id, stage, sid, seq, st, utcnow()))
+        # nothing to read in this run: a whole-book step done since the book was last read is not done again (2.11)
+        reading = self.conn.execute("SELECT 1 FROM jobs WHERE run_id=? AND stage IN ('scene_analyze','memory_update') "
+                                    "AND status='pending'", (self.run_id,)).fetchone() is not None
+        last_read = self.conn.execute("SELECT MAX(updated_at) FROM jobs WHERE book_id=? AND stage IN "
+                                      "('scene_analyze','memory_update') AND status='succeeded'",
+                                      (self.book.id,)).fetchone()[0]
+
+        def add(stage: str, seq: int) -> None:
+            status, cp = "pending", {}
+            if not self.opts.force:
+                done = self.conn.execute("SELECT updated_at, checkpoint_json FROM jobs WHERE book_id=? AND stage=? AND "
+                                         "target_id=? AND status='succeeded' ORDER BY id DESC LIMIT 1",
+                                         (self.book.id, stage, self.book.id)).fetchone()
+                if done is not None and stage in ("proofread", "reader"):
+                    # only what was translated since the book was last gone over whole
+                    upto = json.loads(done["checkpoint_json"] or "{}").get("upto_translation_id")
+                    if upto is not None:
+                        cp = {"since_translation_id": upto}
+                elif done is not None and not reading and (last_read is None or done["updated_at"] >= last_read):
+                    status = "skipped"
+            self.conn.execute(
+                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, checkpoint_json, updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (self.book.id, self.run_id, stage, self.book.id, seq, status, json.dumps(cp), utcnow()))
+
         if self.cfg.context.read_first and not self.opts.unit_ids:
-            self.conn.execute(
-                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
-                (self.book.id, self.run_id, "verify", self.book.id, len(scene_ids), "pending", utcnow()))
-        if self.cfg.context.read_first and not self.opts.unit_ids:
-            self.conn.execute(
-                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
-                (self.book.id, self.run_id, "relations", self.book.id, len(scene_ids), "pending", utcnow()))
-            self.conn.execute(
-                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
-                (self.book.id, self.run_id, "impressions", self.book.id, len(scene_ids), "pending", utcnow()))
-            self.conn.execute(
-                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
-                (self.book.id, self.run_id, "house_style", self.book.id, len(scene_ids), "pending", utcnow()))
+            for stage in ("verify", "relations", "impressions", "house_style"):
+                add(stage, len(scene_ids))
         if self.cfg.context.proofread and not self.opts.unit_ids:
-            self.conn.execute(
-                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
-                (self.book.id, self.run_id, "proofread", self.book.id, len(scene_ids) + 1, "pending", utcnow()))
+            add("proofread", len(scene_ids) + 1)
         if self.cfg.context.reader_pass and not self.opts.unit_ids:
-            self.conn.execute(
-                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
-                (self.book.id, self.run_id, "reader", self.book.id, len(scene_ids) + 1, "pending", utcnow()))
+            add("reader", len(scene_ids) + 1)
         if self.cfg.context.read_first and self.cfg.context.naming != "off" and not self.opts.unit_ids:
             # naming is a whole-volume step; retranslating chosen units keeps the existing renderings
-            self.conn.execute(
-                "INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES (?,?,?,?,?,?,?)",
-                (self.book.id, self.run_id, "naming", self.book.id, len(scene_ids), "pending", utcnow()))
+            add("naming", len(scene_ids))
 
     def _job(self, stage: str, sid: str) -> sqlite3.Row | None:
         with self.lock:
@@ -537,7 +545,8 @@ class ContextOrchestrator(Orchestrator):
         wanted = set(self.opts.unit_ids) if self.opts.unit_ids else None
         with self.lock:
             story = self._story_files()
-            parts = reader.chunks(self.conn, self.book.id, wanted, after=after, story=story)
+            parts = reader.chunks(self.conn, self.book.id, wanted, after=after, story=story,
+                                  since=saved.get("since_translation_id"))
             prev = reader.tail(self.conn, self.book.id, after, wanted, story=story) if after is not None else []
         prompt = load_prompt("reader")
         stats = {**new_stats(read=0, blocked=0, failed=0), **saved}
@@ -552,9 +561,16 @@ class ContextOrchestrator(Orchestrator):
                 self._set_job("reader", self.book.id, "running", None,
                               {"done_until_ordinal": part[-1]["_at"], **stats})
         if record_job:  # a stretch refused or failed was not read: the pass is partial, not done
-            self._set_job("reader", self.book.id, self._pass_status(stats), None, stats)
+            self._set_job("reader", self.book.id, self._pass_status(stats), None,
+                          {**stats, "upto_translation_id": self._last_translation_id()})
         self.log(f"reader's look: {stats}")
         return stats
+
+    def _last_translation_id(self) -> int:
+        """The newest translation of this book: a pass done whole looks next time only at what is newer (2.11)."""
+        with self.lock:
+            return int(self.conn.execute("SELECT COALESCE(MAX(t.id), 0) FROM translations t JOIN units u ON "
+                                         "u.id=t.unit_id WHERE u.book_id=?", (self.book.id,)).fetchone()[0])
 
     def _story_files(self) -> set[str] | None:
         """The files proofreading and the reader's look go through: the story only (ADR-024) unless book matter is
@@ -638,7 +654,7 @@ class ContextOrchestrator(Orchestrator):
         with self.lock:
             story = self._story_files()
             parts = proofread.chunks(self.conn, self.book.id, wanted, size=self.cfg.context.proofread_chunk_units,
-                                     after=after, story=story)
+                                     after=after, story=story, since=saved.get("since_translation_id"))
             prev = proofread.tail(self.conn, self.book.id, after, wanted, story=story) if after is not None else []
         prompt = load_prompt("proofread")
         stats = {**new_stats(checked=0, blocked=0, failed=0), **saved}
@@ -653,7 +669,8 @@ class ContextOrchestrator(Orchestrator):
                 self._set_job("proofread", self.book.id, "running", None,
                               {"done_until_ordinal": part[-1]["_at"], **stats})
         if record_job:  # a stretch refused or failed was not checked: the pass is partial, not done
-            self._set_job("proofread", self.book.id, self._pass_status(stats), None, stats)
+            self._set_job("proofread", self.book.id, self._pass_status(stats), None,
+                          {**stats, "upto_translation_id": self._last_translation_id()})
         self.log(f"proofreading: {stats}")
         return stats
 
