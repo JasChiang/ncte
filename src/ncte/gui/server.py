@@ -73,6 +73,8 @@ class App:
                 return data.glossary(conn, book)
             if what == "style":
                 return data.house_style(conn, book)
+            if what == "terms":
+                return data.term_definitions(conn, book)
             if what == "proposals":
                 return data.proposals(conn, book, include_done=q.get("all") == "1")
             if what == "run":

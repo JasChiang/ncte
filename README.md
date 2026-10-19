@@ -17,7 +17,7 @@ flowchart LR
 
 1. **匯入、切場景**：安全檢查後切成段落，依目錄分章；每一章由模型讀過後決定場景從哪裡換。
 2. **讀全書**：一個場景一個場景讀，記下誰在說話、對誰說、角色與性別、誰怎麼叫誰、敘述人稱、人物關係、劇情事實，都要附原文證據。模型是譯者，負責讀和判斷；程式是它的筆記本，負責記錄、核對證據確實在原文裡、控制「讀到哪裡知道什麼」。
-3. **覆核**：模型自己標出沒把握的判斷、證據核對不過的判斷、只有稱呼沒有名字的人物（「姊姊」是不是某位已知角色）、群體的成員，帶前後文再看一次；接著歸納人物關係、決定譯名。
+3. **覆核**：模型自己標出沒把握的判斷、證據核對不過的判斷、只有稱呼沒有名字的人物（「姊姊」是不是某位已知角色）、群體的成員，帶前後文再看一次；接著歸納人物關係、整理書中反覆出現的術語在這本書裡的意思（附原文證據；翻譯與校稿遇到這個詞時附上）、決定譯名。
 4. **翻譯**：一個場景一個請求，只附「讀到這裡為止」已知的資訊，不劇透。
 5. **檢查、審稿**：程式檢查殘留假名、簡體字、你／妳等，模型確認後修正；翻完後逐段對照原文校稿，再像只讀中文的讀者讀一次，卡住的地方改寫或加譯註。每個修正都會再對照原文驗收一次：沒確認修好的不算修好，留給你看。
 6. **匯出**：重建 EPUB，用 EPUBCheck 驗證，並列出「可驗收」還缺什麼（見下方〈匯出不等於完成〉）。
@@ -101,7 +101,7 @@ flowchart LR
 4. 翻完在概況頁按「匯出 EPUB」→「下載」。「對照審稿」可以逐段修改譯文。
 
 模型與推理程度不用選（推理一般 medium；做判斷的步驟——對照校稿、人物關係、覆核、修正驗收——用 high）：
-- Claude 方案：讀書的步驟（切場景、讀場景、記憶整理、角色印象、體例）用 Sonnet，翻譯、定名、覆核、人物關係、規則確認、審稿、對照校稿、讀者檢查與修正驗收用 Opus（比較見上方〈整本比較〉）。若把翻譯改成 Sonnet，翻譯也用 high：小樣本測試裡 Sonnet 在 medium 會看到後文的線索卻沒用上，high 才譯對（設定檔自己寫了 `translate` 的推理程度就照你寫的）。
+- Claude 方案：讀書的步驟（切場景、讀場景、記憶整理、角色印象、體例）用 Sonnet，翻譯、術語定義、定名、覆核、人物關係、規則確認、審稿、對照校稿、讀者檢查與修正驗收用 Opus（比較見上方〈整本比較〉）。若把翻譯改成 Sonnet，翻譯也用 high：小樣本測試裡 Sonnet 在 medium 會看到後文的線索卻沒用上，high 才譯對（設定檔自己寫了 `translate` 的推理程度就照你寫的）。
 - OpenRouter：`google/gemini-3.8-flash`。同一章節的比較裡，更便宜的模型會忽略角色性別（你／妳）、或整批改寫成簡體（[`docs/changelog.md`](docs/changelog.md)）。
 
 ### Claude 方案怎麼運作
@@ -280,6 +280,8 @@ ncte review ./samples/book.epub --scope flagged --budget-usd 0.5
 ncte proofread ./samples/book.epub                   # 逐段對照原文校稿，真正的錯誤交回翻譯（ADR-051）
 ncte proofread ./samples/book.epub --passes 2        # 校兩輪：第二輪在第一輪修完後再校整本（ADR-066）
 ncte reader-check ./samples/book.epub                # 以不懂日文的讀者身分讀中文，看不懂的地方對照原文修正或加註（ADR-038）
+ncte names terms ./samples/book.epub                 # 已讀過的書：整理術語在這本書裡的意思（ADR-069）
+ncte glossary define ./samples/book.epub 詞 "意思"     # 自己寫某個術語在這本書裡的意思（模型不會覆蓋）
 ```
 校稿預設一輪；一輪大約只抓到一半，同一個模型再校一次會抓到另一批，所以可以設 `context.proofread_passes: 2`（最多 3，或指令加 `--passes`）讓它在修完後再校整本，代價是每多一輪約多一次校稿的額度（ADR-066）。
 
@@ -353,13 +355,13 @@ src/ncte/  cli.py cli_memory.py cli_agent.py config.py library.py workspace.py s
   agent/       tasks client runner mcp_server（agent 逐題回答：`ncte agent …`、`ncte mcp`）
   translation/ orchestrator context_pipeline translator context_builder review rename edits cache dryrun
   analysis/    scene scene_windows split_read dialogue speaker narration reference_resolution memory_update verify
-               relations impressions house_style naming proofread reader
-  memory/      db repository retrieval visibility entities address style
+               relations impressions house_style terms naming proofread reader
+  memory/      db repository retrieval visibility entities address style terms
   gui/         server data actions manage runner static/
   qa/          rules recheck second_person typeset
   reports/     cost_report qa_report html_report codex acceptance
   eval/        dataset metrics runner data/ncte_eval_v1.json
-prompts/<task>/v1.md   版本化 prompt（scenes / scene_windows / scene_analyze / memory_update / verify / relations / impressions / house_style /
+prompts/<task>/v1.md   版本化 prompt（scenes / scene_windows / scene_analyze / memory_update / verify / relations / impressions / house_style / terms /
                        naming / translate / confirm / review / fix_check / proofread / reader）；修改後下一次執行生效（`ncte gui` 要重開），
                        同一主版本內修改不會讓舊譯文失效
 NCTE.command           Finder 雙擊啟動網頁介面

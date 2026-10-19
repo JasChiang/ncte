@@ -147,6 +147,11 @@ def default_fix_check(payload: dict[str, Any], req: Any) -> dict[str, Any]:
                         "new_error": "", "reason": "fake"} for i in payload.get("items", [])]}
 
 
+def default_terms(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+    """Defines nothing (a term without enough material may be left out)."""
+    return {"terms": []}
+
+
 def default_scene_read(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:
     """Both reads in one answer (``context.read_in_one_request``)."""
     return {"analysis": default_scene_analyze(payload, req), "memory": default_memory_update(payload, req)}
@@ -168,6 +173,7 @@ DEFAULTS: dict[str, Responder] = {
     "confirm": default_confirm,
     "impressions": default_impressions,
     "fix_check": default_fix_check,
+    "terms": default_terms,
 }
 
 

@@ -123,7 +123,7 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
         payload = {"task": "review", "items": items, "context": around,
                    "characters": ctx.get("characters", []), "scene": ctx.get("scene", {}),
                    "glossary": ctx.get("glossary", [])}
-        for key in ("address_terms", "style"):
+        for key in ("address_terms", "style", "term_definitions"):
             if ctx.get(key):
                 payload[key] = ctx[key]
         est = orch._estimate(payload, sum(len(x["source"]) for x in items) // 2, "review")
@@ -564,6 +564,14 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
             cast = proofread.cast(conn, orch.book.id, [{"ja": r["plain_text"], "_who": sorted(who), "_at": r["ordinal"]}
                                                        for r, *_ in chunk])
         payload: dict[str, Any] = {"task": "fix_check", "items": items}
+        if orch.cfg.context.term_definitions:  # what the terms in these paragraphs mean, as shown there (ADR-069)
+            from ..memory.terms import definitions_for
+
+            with orch.lock:
+                defs = {d["ja"]: d for r, *_ in chunk for d in definitions_for(conn, orch.book.id, r["plain_text"],
+                                                                               r["ordinal"])}
+            if defs:
+                payload["term_definitions"] = list(defs.values())
         if cast:
             # with the way of speaking and the house style's habits, as proofreading has them: a tone or voice fix
             # is judged against the same card it was found with

@@ -27,6 +27,9 @@ translate (context, read first — default)
      model writes identity / feeling / same-person relations from where each begins, high reasoning
      (ADR-039, ADR-045, ADR-046, ADR-048, ADR-049, ADR-050)
      impressions: personality, voice and place in the story of the main characters (ADR-045)
+     terms: what the recurring glossary terms (not names) mean in this book, from example sentences and the facts
+     that mention them (found by string match); the answer cites them, the program checks the codes and shows a
+     definition from the latest evidence it cites; sent as term_definitions where the term occurs (ADR-069)
   4. naming: renderings for names and address terms; the model's choice is kept, the program checks (ADR-035)
   5. translate, per scene in reading order, with memory/retrieval (visibility-filtered characters, relations,
      examples, speaker status, summaries, facts, props, the scene's narration)
@@ -68,4 +71,4 @@ gui    ──► gui/server (127.0.0.1, token) ── data (reads; source quotes
 `books, resources, units, scenes, scene_overrides, glossary, runs, jobs, translations, llm_requests, qa_findings,
 human_edits, model_snapshots` (migration 1) · `characters, utterances, speaker_hypotheses, speech_examples, facts,
 chapter_summaries, prop_states, memory_rejections, memory_fts` (migration 2) · 之後：系列（series）、實體連結（entity_links）、
-稱呼（address_terms、address_observations、form_senses）、定名提案（naming_proposals）、譯註（reader_notes）、性別（character_gender，migration 12–13）、人物關係（relations、讀時記錄 relation_notes，migration 16–18）、角色印象（character_impressions）、群體成員（group_members，migration 20–21）。
+稱呼（address_terms、address_observations、form_senses）、定名提案（naming_proposals）、譯註（reader_notes）、性別（character_gender，migration 12–13）、人物關係（relations、讀時記錄 relation_notes，migration 16–18）、角色印象（character_impressions）、術語的意思（term_definitions，migration 31）、群體成員（group_members，migration 20–21）。

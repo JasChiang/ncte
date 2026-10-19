@@ -66,6 +66,7 @@ class RunOptions:
     relations_only: bool = False  # `ncte names relations` (ADR-039, a book already read)
     verify_only: bool = False  # `ncte names verify` (ADR-033/046, a book already read)
     impressions_only: bool = False  # `ncte names impressions` (ADR-045, a book already read)
+    terms_only: bool = False  # `ncte names terms` (ADR-069, a book already read)
     rebreak_only: bool = False  # `ncte scenes --rebreak`: choose the scene breaks again (ADR-036; books cut before it)
 
 
@@ -691,6 +692,8 @@ class Orchestrator:
                 self.rebreak()
             elif self.opts.impressions_only:
                 self.impressions_pass(record_job=False)
+            elif self.opts.terms_only:
+                self.terms_pass(record_job=False)
             else:
                 self.ensure_jobs()
                 self.execute()
@@ -779,6 +782,9 @@ class Orchestrator:
 
     def verify_pass(self, *, record_job: bool = True) -> None:
         raise NCTEError("the second look needs context mode")
+
+    def terms_pass(self, *, record_job: bool = True) -> dict[str, int]:
+        raise NCTEError("term definitions need context mode")
 
     def scan_genders(self) -> None:
         raise NCTEError("gender scan needs context mode")

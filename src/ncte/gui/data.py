@@ -404,6 +404,18 @@ def house_style(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
             "rules": list(st.rules), "voices": dict(st.voices), "auto": st.auto, "default": st.is_default()}
 
 
+def term_definitions(conn: sqlite3.Connection, book: Book) -> list[dict[str, Any]]:
+    """What the book's recurring terms mean (ADR-069), as the translator is given them, with where each is shown from
+    (``revealed_at``: a paragraph's position) and whose it is (the model's or a person's)."""
+    from ..memory.terms import all_definitions
+
+    zh = {r[0]: r[1] for r in conn.execute(f"SELECT source_term, target_term FROM glossary WHERE {SERIES_SCOPE}",
+                                           (book.id,))}
+    return [{"ja": r["source_term"], "zh": zh.get(r["source_term"], ""), "definition": r["definition"],
+             "contrast_with": r["contrast_with"] or "", "origin": r["origin"], "revealed_at": r["revealed_ordinal"]}
+            for r in all_definitions(conn, book.id)]
+
+
 def proposals(conn: sqlite3.Connection, book: Book, *, include_done: bool = False) -> list[dict[str, Any]]:
     """Proposals with their example sentences; each example also carries the current translation of its paragraph
     (when it has been translated), so a choice can be checked against how the line reads in Chinese now."""

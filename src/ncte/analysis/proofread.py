@@ -153,9 +153,11 @@ def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> 
 
 
 def notes(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]], before: list[dict[str, Any]], *,
-          glossary: list[dict[str, Any]], volume: float, revealed: dict[str, tuple[float, int]]) -> dict[str, Any]:
+          glossary: list[dict[str, Any]], volume: float, revealed: dict[str, tuple[float, int]],
+          definitions: bool = False) -> dict[str, Any]:
     """What the translator had for judging this stretch, as known there: the paragraphs just before it (to read, not
-    to check), decided renderings, how these speakers call these people, the house rules."""
+    to check), decided renderings, how these speakers call these people, the house rules; with ``definitions``, what
+    the terms in it mean as shown by its end (ADR-069)."""
     from ..memory.address import context_items
     from ..memory.style import load_style, style_payload
     from ..memory.visibility import visible_names
@@ -179,6 +181,11 @@ def notes(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]], be
         out["glossary"] = gl
     if style := style_payload(load_style(conn, book_id), text, [names[x] for x in ids if x in names]):
         out["style"] = style
+    if definitions:
+        from ..memory.terms import definitions_for
+
+        if defs := definitions_for(conn, book_id, text, end):
+            out["term_definitions"] = defs
     return out
 
 

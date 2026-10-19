@@ -117,7 +117,7 @@ async function settingsView() {
     <p>${k.set ? `${chip("c-ok", "伺服器有回應")} <span class="small muted">${esc(k.url)}</span>` : `${chip("c-warn", "連不到模型伺服器")} <span class="small muted">${esc(k.url)}${k.error ? "：" + esc(k.error) : ""}</span>`}</p>
     ${k.set ? `<p class="small">可用模型：${(k.models || []).map(m => `<code>${esc(m.id)}</code>${m.state === "loaded" ? "（已載入）" : ""}`).join("、") || "無"}。預設用已載入的那個（<code>local/default</code>）。</p>` : `<p class="small muted">LM Studio：下載一個模型後在終端機執行 <code>lms server start</code> 並載入模型；伺服器位址可在設定檔的 <code>local_base_url</code> 改。</p>`}</div>`;
   const claudeCard = `<div class="card"><strong>Claude 方案</strong>
-    <p>用這台電腦上已登入的 Claude Code（<code>claude</code> 指令）翻譯，使用你的 Claude 訂閱額度：不需要金鑰，NCTE 不另外收費。讀書的步驟（切場景、讀場景、記憶整理、角色印象、體例）用 Sonnet，翻譯、定名、覆核、人物關係、規則確認、審稿、對照校稿、讀者檢查與修正驗收用 Opus。</p>
+    <p>用這台電腦上已登入的 Claude Code（<code>claude</code> 指令）翻譯，使用你的 Claude 訂閱額度：不需要金鑰，NCTE 不另外收費。讀書的步驟（切場景、讀場景、記憶整理、角色印象、體例）用 Sonnet，翻譯、術語定義、定名、覆核、人物關係、規則確認、審稿、對照校稿、讀者檢查與修正驗收用 Opus。</p>
     <p>${k.set ? `${chip("c-ok", "找到 Claude Code")} <span class="small muted">${esc(k.claude)}</span>` : `${chip("c-warn", "找不到 Claude Code")} 請先安裝 <a href="https://docs.claude.com/en/docs/claude-code" target="_blank" rel="noopener">Claude Code</a>，並在終端機執行 <code>claude</code> 登入；或在下方「連線方式」改用 OpenRouter。`}</p>
     <p class="small muted">額度用完時會自動等到重置再接著翻，不會中斷；一本書通常要好幾個小時。畫面上的金額是照定價換算的參考，不會向你收費。</p></div>`;
   view.innerHTML = `<h2>設定</h2>
@@ -230,10 +230,10 @@ async function runCard(id, o) {
   const exportBtns = o.translated ? `<button class="btn ${r && r.status === "completed" ? "primary big" : ""}" id="exp">匯出並下載 EPUB</button> <span id="expres" class="small"></span>` : "";
   // where the run is, in words, and about how long is left (from the share of the work done so far)
   // shares of a whole book's time (2026-10-18: read 56 min, check/cast/naming 12, translate 43, proofread 77, reader 5)
-  const WEIGHT = {read: .29, verify: .02, cast: .03, naming: .01, translate: .22, review: .01, proofread: .39, reader: .03};
+  const WEIGHT = {read: .29, verify: .02, cast: .03, terms: .01, naming: .01, translate: .22, review: .01, proofread: .39, reader: .03};
   const stages = p.stages || [], cur = stages.find(s => s.done < s.total);
   const SAY = {read: s => `讀全書：第 ${s.done + 1} / ${s.total} 項（先讀完整本，這時還看不到譯文）`, verify: () => "讀完了，正在覆核有疑點的地方",
-    cast: () => "整理人物關係與角色印象", naming: () => "決定名字與稱呼的譯法", translate: s => `翻譯：${s.done} / ${s.total} 批`,
+    cast: () => "整理人物關係與角色印象", terms: () => "整理書中術語的意思", naming: () => "決定名字與稱呼的譯法", translate: s => `翻譯：${s.done} / ${s.total} 批`,
     review: () => "審稿：重看被標出問題的段落", proofread: s => `對照校稿：逐段對照原文找誤譯（${s.done} / ${s.total}）`, reader: () => "像讀者一樣把譯文讀一遍，修正讀不順的地方"};
   const share = stages.reduce((n, s) => n + (WEIGHT[s.key] || 0) * s.done / s.total, 0) / Math.max(.01, stages.reduce((n, s) => n + (WEIGHT[s.key] || 0), 0));
   const elapsed = r && r.started_at ? (Date.now() - Date.parse(r.started_at)) / 60000 : 0;
@@ -418,12 +418,17 @@ async function readView(id) {
 // ------------------------------------------------------------ naming
 let namesAll = false, lastRename = null;
 async function namesView(id) {
-  const [rows, st] = await Promise.all([api(`book/${id}/proposals${namesAll ? "?all=1" : ""}`), api(`book/${id}/style`).catch(() => null)]);
+  const [rows, st, terms] = await Promise.all([api(`book/${id}/proposals${namesAll ? "?all=1" : ""}`), api(`book/${id}/style`).catch(() => null),
+    api(`book/${id}/terms`).catch(() => [])]);
   const pend = rows.filter(r => r.status === "pending");
   // the house style (ADR-053): how honorifics are handled and why, small, under the names
   const styleCard = st && !st.default ? `<details class="card small"><summary><strong>全書體例</strong> <span class="muted">${st.auto ? "（模型讀完全書後定的）" : "（人工設定）"}</span></summary>
     <div>敬稱：${esc(st.honorifics_zh)}</div>${st.reason ? `<div class="muted">理由：${esc(st.reason)}</div>` : ""}
     ${st.rules.length ? `<div style="margin-top:4px">規則：${st.rules.map(r => esc(r)).join("；")}</div>` : ""}</details>` : "";
+  // what the book's recurring terms mean (ADR-069), as the translator gets them where the term occurs
+  const termsCard = (terms || []).length ? `<details class="card small"><summary><strong>術語的意思</strong> <span class="muted">（${terms.length} 個；讀完全書後整理，翻譯與校稿時附給模型參考）</span></summary>
+    ${terms.map(t => `<div style="margin-top:4px"><span class="ja">${esc(t.ja)}</span>${t.zh ? ` → ${esc(t.zh)}` : ""}　${esc(t.definition)}${t.contrast_with ? ` <span class="muted">（對照：${esc(t.contrast_with)}）</span>` : ""}
+      <span class="muted">${t.origin === "human" ? "人工" : `§${t.revealed_at} 起`}</span></div>`).join("")}</details>` : "";
   const banner = lastRename ? `<div class="card" style="border-color:var(--accent)">
       <strong>已翻譯的 ${lastRename.affected} 段還在用舊譯法「${esc(lastRename.old)}」</strong>（${esc(lastRename.label)} → ${esc(lastRename.zh)}）
       <div class="row" style="gap:8px;margin-top:8px"><button class="btn primary" id="rnReplace">直接把「${esc(lastRename.old)}」換成「${esc(lastRename.zh)}」</button>
@@ -447,7 +452,7 @@ async function namesView(id) {
       ${r.context.length ? `<details ${r.status === "pending" ? "open" : ""} style="margin-top:6px"><summary class="small muted">${r.context.some(c => c.zh) ? "原文例句與目前譯文" : "原文例句（尚未翻譯）"}</summary>
         ${r.context.map(c => `<div class="small" style="margin-top:4px"><div class="ja">§${c.at}　${esc(c.text)}</div>
           ${c.zh ? `<div class="muted">　目前譯文：${esc(c.zh)}</div>` : ""}</div>`).join("")}</details>` : ""}</div>`).join("")
-    || `<p class="muted">沒有待決定的譯法。翻譯前的「定名」階段會在這裡列出需要你選的名字與稱呼。</p>`}${styleCard}`;
+    || `<p class="muted">沒有待決定的譯法。翻譯前的「定名」階段會在這裡列出需要你選的名字與稱呼。</p>`}${styleCard}${termsCard}`;
   const choose = async (pid, zh) => {
     try {
       const r = await api(`book/${id}/proposals/${pid}/decide`, {zh}); invalidate(id); toast(`${r.label} → ${r.zh}`);

@@ -669,6 +669,22 @@ DROP TABLE character_impressions;
 ALTER TABLE character_impressions_by_stretch RENAME TO character_impressions;
 CREATE INDEX idx_impressions_character ON character_impressions(character_id, since_ordinal);
 """),
+    (31, "what a recurring term means in this book, from cited evidence, shown from where that evidence is (ADR-069)", """
+CREATE TABLE term_definitions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id TEXT NOT NULL,
+    source_term TEXT NOT NULL,
+    definition TEXT NOT NULL,
+    contrast_with TEXT,
+    evidence_json TEXT NOT NULL DEFAULT '[]',
+    since_ordinal INTEGER NOT NULL DEFAULT 0,
+    revealed_ordinal INTEGER NOT NULL DEFAULT 0,
+    origin TEXT NOT NULL DEFAULT 'model',
+    run_id TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE(book_id, source_term)
+);
+"""),
 ]
 
 

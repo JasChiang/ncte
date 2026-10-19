@@ -303,6 +303,22 @@ class NamingOutput(_M):
     characters: list[NamingCharacter] = Field(default_factory=list)
 
 
+# ------------------------------------------------------------------ terms (ADR-069)
+# What a recurring term means in this book, from the example sentences and facts the request gives (their codes in
+# ``evidence``; ``revealed_from``: the one from which the definition holds). Comments, not docstrings: a docstring
+# would go into the JSON schema the model reads.
+class TermDefinitionOut(_M):
+    ref: str
+    definition: str
+    evidence: list[str]
+    revealed_from: str
+    contrast_with: str = ""
+
+
+class TermsOutput(_M):
+    terms: list[TermDefinitionOut]
+
+
 # ------------------------------------------------------------------ review
 IssueType = Literal["mistranslation", "omission", "addition", "speaker_error", "name_inconsistency",
                     "subject_object_error", "spoiler", "placeholder", "tone", "voice", "style", "other"]
@@ -467,6 +483,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "confirm": ConfirmOutput,
     "impressions": ImpressionsOutput,
     "fix_check": FixCheckOutput,
+    "terms": TermsOutput,
 }
 
 

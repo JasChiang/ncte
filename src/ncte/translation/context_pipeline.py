@@ -239,6 +239,8 @@ class ContextOrchestrator(Orchestrator):
         if self.cfg.context.read_first and not self.opts.unit_ids:
             for stage in ("verify", "relations", "impressions", "house_style"):
                 add(stage, len(scene_ids))
+            if self.cfg.context.term_definitions:
+                add("terms", len(scene_ids))
         if self.cfg.context.proofread and not self.opts.unit_ids:
             add("proofread", len(scene_ids) + 1)
         if self.cfg.context.reader_pass and not self.opts.unit_ids:
@@ -378,6 +380,8 @@ class ContextOrchestrator(Orchestrator):
                 self.impressions_pass()
             if not self._stop_reason:
                 self.house_style_pass()  # before naming: forms of address follow the honorific policy
+            if not self._stop_reason:
+                self.terms_pass()  # once everything is read; before naming, which may pause for a person (ADR-069)
             if self._stop_reason or not self.naming_pass():
                 return
             self.style_follows_naming()
@@ -580,6 +584,56 @@ class ContextOrchestrator(Orchestrator):
         if record_job:
             self._set_job("house_style", self.book.id, "succeeded", None, {**stats, "names_seen": seen})
         self.log(f"house style: {stats}")
+        return stats
+
+    def terms_pass(self, *, record_job: bool = True) -> dict[str, int]:
+        """After reading (ADR-069): the recurring terms of the glossary, with example sentences and the facts that
+        mention them (found by string match), put to the model a few dozen at a time; it says what each means in this
+        book, citing them. A request the content filter refuses is asked in halves, down to one term."""
+        from ..analysis import terms
+        from ..llm.schemas import TermsOutput
+
+        if not self.cfg.context.term_definitions:
+            return {}
+        job = self._job("terms", self.book.id)
+        if record_job and (job is None or job["status"] not in ("pending", "running")):
+            return {}
+        if record_job:
+            self._begin_job("terms")
+        with self.lock:
+            groups = terms.requests(self.conn, self.book.id)
+        prompt = load_prompt("terms")
+        stats: dict[str, int] = {"asked": sum(len(lk["_terms"]) for _, lk in groups), "blocked": 0, "failed": 0}
+        results: list[tuple[TermsOutput, dict[str, Any]]] = []
+        cut = False
+        for req, lk in groups:
+            if self._stop_reason:
+                cut = True
+                break
+            blocked: list[str] = []
+            try:
+                parsed = call_in_parts(lambda pl: self._llm("terms", prompt, pl, []), req, "terms", blocked, min_part=1)
+            except FatalAPIError:
+                raise
+            except LLMError as exc:  # those terms stay as they were
+                self._finding(None, "terms_failed", "low", str(exc)[:300])
+                stats["failed"] += len(lk["_terms"])
+                continue
+            for ref in blocked:
+                self._finding(None, "terms_blocked", "low",
+                              f"the content filter refused the material of 「{lk['_terms'].get(ref, ref)}」")
+            stats["blocked"] += len(blocked)
+            if parsed is not None:
+                assert isinstance(parsed, TermsOutput)
+                results.append((parsed, {**lk, "_blocked": set(blocked)}))
+        if cut and self._paused("terms"):  # kept all at once: asked again on resume
+            return stats
+        if results:
+            with self.lock:
+                stats.update(terms.apply(self.conn, self.book.id, results, self.run_id))
+        if record_job:
+            self._set_job("terms", self.book.id, "succeeded", None, stats)
+        self.log(f"terms: {stats}")
         return stats
 
     def style_follows_naming(self) -> dict[str, str]:
@@ -832,7 +886,8 @@ class ContextOrchestrator(Orchestrator):
         with self.lock:
             cast = proofread.cast(self.conn, self.book.id, part)
             extra = proofread.notes(self.conn, self.book.id, part, before, glossary=self.glossary,
-                                    volume=self.volume, revealed=self.link_revealed)
+                                    volume=self.volume, revealed=self.link_revealed,
+                                    definitions=self.cfg.context.term_definitions)
         visible = [{k: v for k, v in p.items() if not k.startswith("_")} for p in part]
         blocked: list[str] = []
         try:  # the content filter may refuse a stretch; it is then checked in halves
@@ -1298,6 +1353,14 @@ class ContextOrchestrator(Orchestrator):
             mem = memory_context(self.conn, self.book.id, scene=scene, batch_rows=batch.rows,
                                  max_evidence=self.cfg.memory.max_retrieved_evidence)
         ctx.update(mem)
+        if self.cfg.context.term_definitions:  # what the book's terms mean, once their evidence is reached (ADR-069)
+            from ..memory.terms import definitions_for
+
+            text = " ".join([r["plain_text"] for r in batch.rows] + [c["source"] for c in ctx.get("context_before", [])
+                                                                     + ctx.get("context_after", [])])
+            with self.lock:
+                if defs := definitions_for(self.conn, self.book.id, text, batch.rows[-1]["ordinal"]):
+                    ctx["term_definitions"] = defs
         from ..analysis.narration import for_scene
 
         with self.lock:  # ADR-040: whose voice tells this scene (the read pass's judgement, else the whole book's)

@@ -195,6 +195,30 @@ def glossary_set(epub: Annotated[str, typer.Argument()], source: Annotated[str, 
                    "`ncte retranslate --unit-id …` to update them")
 
 
+@glossary_app.command("define")
+def glossary_define(epub: Annotated[str, typer.Argument()], term: Annotated[str, typer.Argument()],
+                    definition: Annotated[str, typer.Argument(help="what it means in this book; empty: list them")] = "",
+                    contrast: Annotated[str, typer.Option("--contrast", help="a term it must be told apart from")] = "",
+                    drop: Annotated[bool, typer.Option("--drop", help="remove this term's definition")] = False) -> None:
+    """What a term means in this book (ADR-069), as a person writes it: sent with every request where the term occurs,
+    from the start of the book, and never replaced by the model's."""
+    from .memory.terms import all_definitions, set_definition
+
+    book = _book(epub)
+    if drop:
+        with Transaction(state.conn):
+            state.conn.execute("DELETE FROM term_definitions WHERE book_id=? AND source_term=?", (book.id, term))
+        typer.echo(f"{term}: definition removed")
+        return
+    if definition.strip():
+        with Transaction(state.conn):
+            set_definition(state.conn, book.id, term, definition, contrast_with=contrast)
+    for r in all_definitions(state.conn, book.id):
+        if r["source_term"] == term or not definition.strip():
+            who = "person" if r["origin"] == "human" else f"model, from §{r['revealed_ordinal']}"
+            typer.echo(f"{r['source_term']}: {r['definition']}  [{who}]")
+
+
 @glossary_app.command("impact")
 def glossary_impact_cmd(epub: Annotated[str, typer.Argument()], source: Annotated[str, typer.Argument()],
                         as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
@@ -829,6 +853,22 @@ def names_impressions(epub: Annotated[str, typer.Argument()],
     book = _book(epub)
     opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
                       client="fake" if fake else cfg.openrouter.provider, impressions_only=True)
+    _run(book, opts, fake=fake, cfg=cfg)
+
+
+@names_app.command("terms")
+def names_terms(epub: Annotated[str, typer.Argument()],
+                budget_usd: Annotated[float, typer.Option("--budget-usd")] = 0.3,
+                fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
+    """What the book's recurring terms mean (ADR-069), for a book already read: from example sentences and the facts
+    that mention them. A definition a person wrote (`ncte glossary define`) is kept."""
+    from .cli import _run
+    from .translation.orchestrator import RunOptions
+
+    cfg = state.cfg
+    book = _book(epub)
+    opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
+                      client="fake" if fake else cfg.openrouter.provider, terms_only=True)
     _run(book, opts, fake=fake, cfg=cfg)
 
 

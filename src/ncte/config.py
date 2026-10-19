@@ -129,6 +129,10 @@ class ContextConfig(_Strict):
     # ADR-023/035: propose renderings; auto (default) = keep the model's choice after program checks and go on
     # (change them later in the web UI); review = pause for a person's choices
     naming: Literal["review", "auto", "off"] = "auto"
+    # ADR-069: after reading, the model says what the book's recurring terms mean (from example sentences and the facts
+    # that mention them); the definitions go with every request that translates or judges a passage where the term
+    # occurs, from where their evidence is. Off: nothing is asked and no definition is sent
+    term_definitions: bool = True
     skip_book_matter: bool = True  # ADR-024: no story analysis for covers, TOC, afterword, colophon (still translated)
 
 
