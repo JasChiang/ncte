@@ -874,3 +874,31 @@ open workspace/eval/<timestamp>/report.html
 - 結論（ADR-064 補充）：規則 4 的新措辭與「讓前後的反應成立」保留；`read_through` 預設維持關（看到了沒用上，單開它沒有改善）；Sonnet 翻譯要推理 high 才用得上後文線索。
 - 依 5.4 加的預設：Claude 方案、翻譯模型是 `claude/sonnet`（`--model` 或設定檔）時，`stage_reasoning` 沒有設 `translate` 就用 high；Opus 翻譯不變，使用者自己設的優先。README〈不用指令的用法〉與 `config.example.yaml` 加了說明。測試（`tests/unit/test_claude_cli.py`）：預設 Opus 時翻譯仍是 medium；`--model claude/sonnet` 或設定檔 `model: claude/sonnet` 時翻譯請求帶 `--effort high`；設定檔寫 `translate: medium` 時維持 medium；讀書步驟不受影響。測試 510 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。
 - 重現：5.1 `NCTE_LLM_PROVIDER=claude ncte -w <新工作區> translate tests/fixtures/basic.epub --mode context --budget-usd 5`（另開 worktree 在 4c13950，翻譯 Opus、讀書 Sonnet），再看 `llm_requests.usage_json` 的 `cache_read_input_tokens`／`cache_creation_input_tokens`；5.3 `NCTE_LLM_PROVIDER=claude ncte eval fix-check --cases fix_check_v2`（4c13950 與 17ff97d 各跑）；5.4 見 `exp54/report.md` 的指令（`ncte -w runs/<名>/ws -c cfg/<v>.yaml retranslate <書> --unit-id …（725 個）--mode context --model claude/sonnet`）。
+
+## 整本實測：新的 claude 來源（2026-10-19，分支 af0bb7c 之前的 1e79e5a）
+修正指示第 5.2 節：奇幻戀愛那本（ADR-062 那本）整本 3,689 段，用新的 `claude` 來源（每個請求一次 `claude -p`）、預設設定——Sonnet 讀（切場景、讀場景、記憶整理、角色印象、體例），Opus 翻譯與所有檢查；fix_check、proofread、relations、verify 推理 high，其餘 medium；`max_concurrency` 2。另開的工作區，run `r_20261019060551_ff098e`；以下時間為台北時間，數字取自該工作區的資料庫（`llm_requests`、`jobs`、`qa_findings`）。金額都是照定價換算（Claude 方案不另收費）。
+- 時間：14:05 開始、19:43 結束。中間撞到 session 額度上限，兩個校稿請求各等了 244 分鐘，到 19:00 重置後接著跑完。實際工作時間約 1.6 小時：
+  - 切場景＋讀場景＋記憶整理 48 分（14:08–14:56，依序）；
+  - 覆核、人物關係、角色印象、體例、定名 7 分；
+  - 翻譯第一遍 21 分（15:03–15:24，63 個請求，跨章併發 2）；
+  - 校稿、修正、讀者檢查、目錄約 20 分（大部分在 19:38–19:43）。
+  - 延遲加總 616 分，扣掉兩個卡在等待的請求（各 244 分）為 128 分，等於一次一個請求所需的時間；併發 2 省了約四分之一（讀的階段依序，而且占最大）。
+- 請求與用量：396 個請求——scene_windows 27、scene_analyze 66、memory_update 72、verify 4、relations 6、impressions 3、house_style 1、naming 1、translate 84（含重譯）、confirm 7、review 7、proofread 67、fix_check 18、reader 33。照定價 US$43.21：translate 16.98、proofread 7.84、scene_analyze 5.75、memory_update 4.82、reader 2.49，其餘合計約 5.3。輸入裡 cache read 占 25%、cache write 75%；輸出 850,444 token。實際模型 id（`modelUsage`）：claude-sonnet-5-5、claude-opus-5-5。這次沒有量 `/usage` 的額度百分比。
+- 流程結果：
+  - 校稿 3,563 段，抓 11 處：修好 9、原譯本來就對 1、仍錯 1；另記 5 處兩可、沒有改（§289、§1498、§1722、§1749、§3616）。
+  - 讀者檢查 8 處：修好 5、原譯本來就對 2、改壞 1（退回原譯）。
+  - 匯出成功：3,689 段全有譯文、hash 不符 0；EPUBCheck 未安裝，沒有驗。
+  - 可驗收 NOT YET：`no_needs_review`=1、`fixes_checked`=1（仍錯與改壞各一段，留給人）。
+- 品質重校（ADR-062 的方法：Opus 用同一份校稿提示詞重校最終譯文，只記錄不改；在工作區的副本上跑，3,563 段）：
+  - proofread high：6 處——§1216（「這個詞」／「那句話」）、§1749（兩種讀法）、§2278（低語者的主詞）、§2507（飄飄然的貶義）、§2959（「恐怕只有」／「必定有」一頭）、§3454（被動，以及補上「那些魔獸」）——另 2 處兩可。和流程自己校稿的 11 處只重疊 §1216：同一份提示詞、同一個模型，再跑一輪就多抓 5 處。
+  - proofread medium：8 處——§124（逆接的「けど」譯成單純肯定）、§356（身に覚えはない→毫無頭緒）、§1462（「これは…」的客套感嘆）、§1749（「魔法じゃなくて…」的讀法）、§2507（飄飄然的貶義）、§2959（「恐怕只有」／「應該有」一頭）、§3454（被動與「那些魔獸」）、§3570（待っとけ→「給我等著」的威脅意味）——另 2 處兩可。
+  - 兩輪重疊 4 處（§1749、§2507、§2959、§3454）：兩輪都抓到，最可能是真錯。兩輪重校合計 10 處不重複，加上流程自己校稿的 11 處共 20 處不重複（三者之間只有 §1216 重複）。抓到的多半是褒貶、語氣、固定句型這類 `docs/todo.md` 早就記的校稿盲點。
+  - 和 ADR-062 的基準比：基準「2 處」是 ncte-agent drive、校稿 medium、舊的校稿提示詞。同設定（medium）比是 8 對 2，但兩個數字各自的雜訊就有三四處（同一份譯文、同一個模型，high 與 medium 兩輪只重疊 4 處），校稿提示詞的版本也不同（褒貶與語氣的規則是 10-18 加的），所以只能說沒有證據變好，也不能說變差。
+  - 結論：校稿一輪的召回約一半，重跑一輪就多撈一批，是比改提示詞更直接的做法；代價是一輪校稿（這本約 US$8）。
+  - 來源：當次 scratchpad 的 `reproof2-result.json`（high）與 `reproof2-medium-result.json`（medium），沒有放進 repo。
+- 跑出來的問題：
+  - 15 個回答沒過驗證、重送：memory_update 8、proofread 3、verify 2、scene_analyze 1、translate 1。其中 11 個是合法 JSON，但多了 schema 沒有的欄位之類；4 個是 JSON 本身壞掉。s_016_02 的記憶整理兩次都失敗，那一場沒有記憶。要不要讓輸出模型忽略未知欄位，留給使用者決定，這次沒改。
+  - 5 個段落的 translate job 停在 needs_review，最新譯文卻是 succeeded：規則確認判為誤報時只改了譯文、沒改 job。已修（`cache.settle_translation`：譯文從 needs_review 改成 succeeded 時，同一個交易裡把寫它的那個 run 的 translate job 一起改；規則確認、`ncte recheck`、審稿的 `_clear_confirmed`、修正驗收判 issue_invalid 時都走它；issue_invalid 而舊譯文因為還有其他高嚴重度發現仍是 needs_review 時，job 不再被改成 succeeded）。測試：FakeLLM 讓規則確認判誤報後，那一段的譯文與 job 都是 succeeded，沒有「job needs_review、譯文 succeeded」的段落；recheck 清掉的譯文，job 也跟著改。
+  - 進度列把另一個 worker 進行中的請求印成「unknown-cost」：`run_spent` 把 `cost_status` 的 `unknown` 與 `pending`（已送出、還沒回答）一起算。已修：`run_spend` 分開回傳兩者，進度列（`spent_note`）只把 `unknown` 叫 unknown-cost，進行中的另外寫「N in flight」；預算照舊把兩者都以估計計入。網頁的進度只用金額，沒有用這個數字。測試：兩筆 pending、一筆 unknown 時，每一行進度都是「(1 unknown-cost request, 2 in flight)」，`run_spent` 仍是 3 筆、金額含 pending 的估計。
+  - 額度等待梯不夠長（一次上限等了 244 分鐘）：af0bb7c 已修（額度上限每 15 分鐘再問一次、最多 8 小時）。
+- 重現：另開工作區，`NCTE_LLM_PROVIDER=claude ncte -w <工作區> translate <書>.epub --mode context`（預設設定）；重校在工作區副本上用同一份 `prompts/proofread` 由 Opus 跑、只記錄（high 與 medium 各一輪）。修正的測試：`cd ../ncte-fixes && source .venv/bin/activate && pytest && ruff check src tests && mypy src`，513 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。
