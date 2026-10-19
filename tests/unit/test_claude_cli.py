@@ -298,3 +298,47 @@ def test_reports_and_the_page_show_the_models_really_used(monkeypatch, tmp_path,
     import ncte
     js = (Path(ncte.__file__).resolve().parents[2] / "src/ncte/gui/static/app.js").read_text(encoding="utf-8")
     assert "models_used" in js
+
+
+def test_the_claude_plan_gets_a_list_price_estimate_from_earlier_runs(monkeypatch, tmp_path, fixtures):
+    """2.9: nothing is billed on the Claude plan (``cost_usd`` 0), so the rates come from what each request would
+    have cost at list price (``usage.list_cost_usd``), each step on its own model (reading on Sonnet); the page says
+    「照定價約 US$X–Y（不另收費）」. No history: no figure (as before)."""
+    import functools
+
+    from ncte.gui.runner import estimate_view
+    from ncte.memory.db import connect, migrate
+    from ncte.translation import dryrun
+    from ncte.translation.orchestrator import RunOptions
+
+    from ..helpers import run_book
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "claude")
+    cfg = load_config(workspace=str(tmp_path / "ws"))
+    conn = connect(tmp_path / "t.db")
+    migrate(conn)
+    client = FakeBacked()
+    opts = RunOptions(mode="context", model=cfg.openrouter.model, force=True, client="claude")
+    before = dryrun.dry_run(conn, cfg, *_book(conn, cfg, fixtures), opts, client, log=lambda m: None)
+    assert estimate_view(before, "claude").get("plan_low_usd") is None  # no history: nothing to say
+    monkeypatch.setattr(subprocess, "run", client.run)
+    book, rid, summary = run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    monkeypatch.setattr(dryrun, "run_rates", functools.partial(dryrun.run_rates, min_chars=1))  # the sample is small
+    plan = dryrun.dry_run(conn, cfg, book, opts, client, log=lambda m: None)
+    assert plan.stage_estimates["translate"]["from"].endswith("earlier run(s)")
+    assert plan.stage_estimates["scene_analyze"]["from"].endswith("earlier run(s)")  # Sonnet's requests count
+    assert plan.estimate_high_usd >= plan.estimate_usd > 0
+    view = estimate_view(plan, "claude")
+    assert view["plan_low_usd"] == round(plan.estimate_usd, 2) and view["plan_high_usd"] == round(plan.estimate_high_usd, 2)
+    from pathlib import Path
+
+    import ncte
+    js = (Path(ncte.__file__).resolve().parents[2] / "src/ncte/gui/static/app.js").read_text(encoding="utf-8")
+    assert "plan_low_usd" in js and "照定價約" in js
+
+
+def _book(conn, cfg, fixtures):
+    from ncte.library import import_book
+
+    return (import_book(conn, cfg, fixtures["basic"])[0],)

@@ -156,7 +156,8 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
     from .orchestrator import reasoning_label
 
     calib = calibrate(history or [conn], opts.model, cfg.openrouter.reasoning_effort, provider=cfg.openrouter.provider,
-                      per_stage={st: reasoning_label(reasoning_param(reasoning_setting(cfg, st))) for st in stage_chars})
+                      per_stage={st: reasoning_label(reasoning_param(reasoning_setting(cfg, st))) for st in stage_chars},
+                      stage_models=_stage_models(cfg, opts, stage_chars))
     calibrated = None
     if all(s in calib for s in stage_chars):
         calibrated = round(sum(calib[s]["usd_per_char"] * n for s, n in stage_chars.items()), 4)
@@ -166,6 +167,9 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
     if client.name == "fal":
         notes.append("fal: OpenRouter catalog prices are reference estimates; final fal billing may differ. "
                      "Fal balance and generation reconciliation are not available in this adapter.")
+    if cfg.openrouter.provider == "claude":
+        notes.append("Claude plan: nothing is billed; the dollar figures are what the requests would cost at list "
+                     "price, from earlier Claude-plan runs (0 without them).")
     if breaks:
         notes.append(f"includes {breaks} scene-cutting requests before reading")
     if old_revision:
@@ -184,6 +188,13 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
         calibration={s: {k: v for k, v in c.items() if k != "usd_per_char"} for s, c in calib.items()},
         reasoning_effort=cfg.openrouter.reasoning_effort, estimate_usd=full["typical"],
         estimate_high_usd=full["high"], stage_estimates=full["stages"])
+
+
+def _stage_models(cfg: Config, opts: RunOptions, stages: Any) -> dict[str, str]:
+    """The steps that run on a model other than the run's (``stage_models``, the review model)."""
+    from ..config import stage_model
+
+    return {st: m for st in stages if (m := stage_model(cfg, st, opts.model)) != opts.model}
 
 
 def _full_estimate(cfg: Config, opts: RunOptions, conns: list[sqlite3.Connection], stage_chars: dict[str, int],
@@ -205,7 +216,7 @@ def _full_estimate(cfg: Config, opts: RunOptions, conns: list[sqlite3.Connection
             want[st] = chars
     effort = {st: reasoning_label(reasoning_param(reasoning_setting(cfg, st))) for st in want}
     rates = run_rates(conns, opts.model, cfg.openrouter.reasoning_effort, provider=cfg.openrouter.provider,
-                      per_stage=effort)
+                      per_stage=effort, stage_models=_stage_models(cfg, opts, want))
     stages: dict[str, dict[str, Any]] = {}
     core = ("translate", "scene_analyze", "memory_update")
     if all(st in rates for st in core if st in want):
@@ -243,22 +254,39 @@ def _sizer(conn: sqlite3.Connection) -> Any:
     return size
 
 
+def _cost_sql(provider: str) -> str:
+    """What a request cost: the bill; on the Claude plan (nothing billed) what it would have cost at list price."""
+    if provider == "claude":
+        return "CAST(json_extract(usage_json, '$.list_cost_usd') AS REAL)"
+    return "cost_usd"
+
+
+def _requests(conn: sqlite3.Connection, cols: str, model: str, provider: str,
+              stage_models: dict[str, str] | None) -> list[sqlite3.Row]:
+    """Succeeded requests with a known cost on this provider, each step on the model it is set to use."""
+    cost = _cost_sql(provider)
+    models = sorted({model, *(stage_models or {}).values()})
+    rows = conn.execute(
+        f"SELECT {cols}, model, {cost} AS cost FROM llm_requests WHERE model IN ({','.join('?' * len(models))}) AND "
+        f"status='succeeded' AND cost_status IN ('reported','reported_generation') AND {cost} IS NOT NULL "
+        "AND run_id IN (SELECT id FROM runs WHERE "
+        "COALESCE(json_extract(config_json, '$.openrouter.provider'), 'openrouter') = ?)", (*models, provider)).fetchall()
+    return [r for r in rows if r["model"] == (stage_models or {}).get(r["stage"].split(":")[0], model)]
+
+
 def run_rates(conns: list[sqlite3.Connection], model: str, effort: str | None, *, provider: str = "openrouter",
               per_stage: dict[str, str | None] | None = None, min_chars: int = 5000,
-              recent: int = 10) -> dict[str, dict[str, Any]]:
+              recent: int = 10, stage_models: dict[str, str] | None = None) -> dict[str, dict[str, Any]]:
     """Cost per character of each step, run by run, from earlier requests with the same model and reasoning setting.
     A step that reads paragraphs is divided by the characters it read; a once-a-run step by the characters the run
     translated (only runs that read the book, so a proofreading-only rerun does not count as a book). Small runs are
     left out (their fixed overhead per request makes a character look dear), and only the ``recent`` latest runs of
-    a step count (prompts change)."""
+    a step count (prompts change). ``stage_models``: steps that run on another model (their requests count on it).
+    On the Claude plan the cost is the list-price equivalent (``usage.list_cost_usd``; nothing is billed)."""
     per: dict[str, list[tuple[str, float, float]]] = {}  # stage → [(run, cost, chars)]
     seen: set[str] = set()  # a run is counted once (a copied workspace carries the same runs)
     for conn in conns:
-        rows = conn.execute(
-            "SELECT run_id, stage, cost_usd, unit_ids_json, reasoning_effort FROM llm_requests WHERE model=? AND "
-            "status='succeeded' AND cost_status IN ('reported','reported_generation') AND cost_usd IS NOT NULL "
-            "AND run_id IN (SELECT id FROM runs WHERE "
-            "COALESCE(json_extract(config_json, '$.openrouter.provider'), 'openrouter') = ?)", (model, provider)).fetchall()
+        rows = _requests(conn, "run_id, stage, unit_ids_json, reasoning_effort", model, provider, stage_models)
         size = _sizer(conn)
         runs: dict[str, dict[str, list[float]]] = {}
         translated: dict[str, set[str]] = {}
@@ -270,7 +298,7 @@ def run_rates(conns: list[sqlite3.Connection], model: str, effort: str | None, *
             if r["reasoning_effort"] != (per_stage or {}).get(st, effort):
                 continue
             a = runs.setdefault(r["run_id"], {}).setdefault(st, [0.0, 0.0])
-            a[0] += float(r["cost_usd"])
+            a[0] += float(r["cost"])
             a[1] += size(ids) if st in PER_CHAR_STAGES else 0
         for run, by_stage in runs.items():
             if run in seen:
@@ -293,24 +321,20 @@ def run_rates(conns: list[sqlite3.Connection], model: str, effort: str | None, *
 
 def calibrate(conns: list[sqlite3.Connection], model: str, effort: str | None, *, min_requests: int = 3,
               min_chars: int = 500, provider: str = "openrouter",
-              per_stage: dict[str, str | None] | None = None) -> dict[str, dict[str, Any]]:
+              per_stage: dict[str, str | None] | None = None,
+              stage_models: dict[str, str] | None = None) -> dict[str, dict[str, Any]]:
     """Actual cost per source character, per stage, from earlier requests with the same model and
     reasoning setting (any book, any series; ``per_stage`` when steps use their own). Only stages with enough
     samples are returned."""
     agg: dict[str, list[float]] = {}  # stage → [requests, cost, chars]
     for conn in conns:
-        _calibrate_one(conn, model, effort, agg, provider, per_stage or {})
+        _calibrate_one(conn, model, effort, agg, provider, per_stage or {}, stage_models)
     return _calibration_result(agg, min_requests, min_chars)
 
 
 def _calibrate_one(conn: sqlite3.Connection, model: str, effort: str | None, agg: dict[str, list[float]], provider: str,
-                   per_stage: dict[str, str | None]) -> None:
-    rows = conn.execute(
-        "SELECT stage, cost_usd, unit_ids_json, reasoning_effort FROM llm_requests WHERE model=? AND "
-        "status='succeeded' AND cost_status IN ('reported','reported_generation') AND cost_usd IS NOT NULL "
-        "AND run_id IN (SELECT id FROM runs WHERE "
-        "COALESCE(json_extract(config_json, '$.openrouter.provider'), 'openrouter') = ?)",
-        (model, provider)).fetchall()
+                   per_stage: dict[str, str | None], stage_models: dict[str, str] | None = None) -> None:
+    rows = _requests(conn, "stage, unit_ids_json, reasoning_effort", model, provider, stage_models)
     for r in rows:
         if r["reasoning_effort"] != per_stage.get(r["stage"].split(":")[0], effort):
             continue
@@ -321,7 +345,7 @@ def _calibrate_one(conn: sqlite3.Connection, model: str, effort: str | None, agg
         chars = sum(len(match_text(x[0])) for x in conn.execute(f"SELECT plain_text FROM units WHERE id IN ({ph})", ids))
         a = agg.setdefault(r["stage"], [0.0, 0.0, 0.0])
         a[0] += 1
-        a[1] += float(r["cost_usd"])
+        a[1] += float(r["cost"])
         a[2] += chars
 
 

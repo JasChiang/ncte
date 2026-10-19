@@ -74,11 +74,7 @@ class Runner:
         history = [ws.series_conn(r[0]) for r in ws.lib.execute("SELECT id FROM series").fetchall()]
         plan = dry_run(conn, self.cfg, book, self.options(self.cfg.openrouter.per_book_budget_usd),
                        self.client_factory(self.cfg), log=lambda m: None, history=history)
-        calibrated = all(e["from"] != "token model" for e in plan.stage_estimates.values())
-        return {"units": plan.units_to_translate, "cached": plan.units_cached, "estimate_usd": round(plan.estimate_usd, 2),
-                "calibrated": calibrated, "low_usd": round(plan.estimate_usd, 2),
-                "high_usd": round(plan.estimate_high_usd, 2), "budget_usd": budget_for(plan.estimate_high_usd),
-                "model": plan.model, "reasoning_effort": plan.reasoning_effort, "provider": self.cfg.openrouter.provider}
+        return estimate_view(plan, self.cfg.openrouter.provider)
 
     def start(self, ws: Any, ref: str) -> str:
         from ..translation.orchestrator import create_run
@@ -207,6 +203,20 @@ class Runner:
                 "elsewhere": elsewhere,
                 "log": list(self.log)[-8:] if live or self.run_id == row["id"] else [],
                 "error": self.error if self.run_id == row["id"] else None}
+
+
+def estimate_view(plan: Any, provider: str) -> dict[str, Any]:
+    """What the page shows before a run. On the Claude plan nothing is billed: from earlier runs' list-price
+    equivalents it says what the run would cost at list price (``plan_low_usd``–``plan_high_usd``); with no history
+    for every step it says nothing about money."""
+    calibrated = bool(plan.stage_estimates) and all(e["from"] != "token model" for e in plan.stage_estimates.values())
+    out = {"units": plan.units_to_translate, "cached": plan.units_cached, "estimate_usd": round(plan.estimate_usd, 2),
+           "calibrated": calibrated, "low_usd": round(plan.estimate_usd, 2),
+           "high_usd": round(plan.estimate_high_usd, 2), "budget_usd": budget_for(plan.estimate_high_usd),
+           "model": plan.model, "reasoning_effort": plan.reasoning_effort, "provider": provider}
+    if provider == "claude" and calibrated and plan.estimate_usd > 0:
+        out["plan_low_usd"], out["plan_high_usd"] = round(plan.estimate_usd, 2), round(plan.estimate_high_usd, 2)
+    return out
 
 
 def budget_for(estimate: float) -> float:

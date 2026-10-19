@@ -280,7 +280,7 @@ async function runCard(id, o) {
       const slow = e.provider === "claude" ? 2.5 : 1;
       const lo = Math.max(5, Math.round(e.units * .025 * slow)), hi = Math.max(10, Math.round(e.units * .035 * slow * 1.15));
       const t = m => m < 60 ? `${m} 分鐘` : `${(m / 60).toFixed(1)} 小時`;
-      $("#est").innerHTML = `<div><b>${e.units}</b> 段要翻譯</div>${e.provider === "claude" ? `<div>使用你的 Claude 方案額度，<b>不另收費</b>；額度用完會自動等重置再繼續。</div>` : `<div>預估費用約 <b>${money(e.estimate_usd)}</b>，最多約 ${money(e.high_usd)}${e.calibrated ? "（依你之前的實際花費校正）" : "（還沒有實際花費可以校正，偏保守）"}</div>`}
+      $("#est").innerHTML = `<div><b>${e.units}</b> 段要翻譯</div>${e.provider === "claude" ? `<div>使用你的 Claude 方案額度，<b>不另收費</b>；額度用完會自動等重置再繼續。</div>${e.plan_low_usd != null ? `<div>照定價約 <b>${money(e.plan_low_usd)}–${money(e.plan_high_usd)}</b>（不另收費；依你之前的 Claude 方案執行換算）</div>` : ""}` : `<div>預估費用約 <b>${money(e.estimate_usd)}</b>，最多約 ${money(e.high_usd)}${e.calibrated ? "（依你之前的實際花費校正）" : "（還沒有實際花費可以校正，偏保守）"}</div>`}
         <div>預估時間約 <b>${t(lo)}–${t(hi)}</b></div>${e.provider === "claude" ? "" : `<div class="small muted">預算上限自動設為 ${money(e.budget_usd)}，到了會先停下來問你。</div>`}`;
       const k = await api("settings"); $("#start").disabled = !k.set || !e.units;
     } catch (err) { $("#est").textContent = "無法估價：" + err.message; }
