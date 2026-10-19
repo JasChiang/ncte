@@ -107,3 +107,19 @@ def test_the_order_of_judgement_is_shared_by_the_steps_that_judge():
             ("translate", "proofread", "naming", "house_style", "review", "fix_check")}
     assert len(set(same.values())) == 1
     assert "1. **意思正確**" in same["review"] and "6. **最少介入**" in same["fix_check"]
+
+
+def test_review_knows_tone_voice_other_and_two_readings():
+    """A5 (ADR-067): review has the proofreader's tone and voice kinds, mentions other, and does not report a reading
+    the source allows as a mistranslation."""
+    from ncte.llm.schemas import ReviewIssue
+
+    rv = load_prompt("review").render({"items": []})
+    pr = load_prompt("proofread").render({"paragraphs": []})
+    for kind in ("tone", "voice"):
+        assert _bullet(rv, kind).split("：", 1)[1] == _bullet(pr, kind).split("：", 1)[1]
+    assert "`other`" in rv
+    assert "說不出原文為什麼不能是目前的讀法" in rv and "不要報成 `mistranslation`" in rv
+    for kind in ("tone", "voice", "other"):
+        ReviewIssue(unit_id="u", issue_type=kind, severity="medium", evidence="e", suggestion="s",
+                    needs_retranslation=True)

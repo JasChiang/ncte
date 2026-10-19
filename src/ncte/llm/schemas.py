@@ -305,7 +305,7 @@ class NamingOutput(_M):
 
 # ------------------------------------------------------------------ review
 IssueType = Literal["mistranslation", "omission", "addition", "speaker_error", "name_inconsistency",
-                    "subject_object_error", "spoiler", "placeholder", "style", "other"]
+                    "subject_object_error", "spoiler", "placeholder", "tone", "voice", "style", "other"]
 
 
 class ReviewIssue(_M):

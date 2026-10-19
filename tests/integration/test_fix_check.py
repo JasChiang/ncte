@@ -406,3 +406,27 @@ def acceptance_units(conn, book_id):
     from ncte.reports.acceptance import acceptance
 
     return acceptance(conn, book_id)["checks"]["fixes_checked"]["units"]
+
+
+def test_a_tone_issue_from_review_is_fixed_and_checked_like_the_others(conn, cfg, tmp_path):
+    """A5 (ADR-067): review can report tone and voice; medium or above goes back to the translator and to the check,
+    with the reviewer's evidence and suggestion (not a claim about what the source means)."""
+    checks: list = []
+
+    def tone_review(payload, req):
+        return {"issues": [{"unit_id": i["unit_id"], "issue_type": "tone", "severity": "medium",
+                            "evidence": "原文平淡的否定，譯文像在指責", "suggestion": RIGHT, "needs_retranslation": True}
+                           for i in payload["items"] if "来なかった" in i["source"]]}
+
+    def check(payload, req):
+        checks.append(payload)
+        return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "fixed", "new_error": "", "reason": "r"}
+                           for i in payload["items"]]}
+
+    cfg.review.automatic_review = "all"
+    book, _, _ = run_book(conn, cfg, small_book(tmp_path), FakeLLM(responders={
+        "translate": translator(RIGHT), "review": tone_review, "fix_check": check}))
+    uid = unit_of(conn, book, "来なかった")
+    assert conn.execute("SELECT status FROM qa_findings WHERE unit_id=? AND type='review:tone'",
+                        (uid,)).fetchone()["status"] == "resolved"
+    assert any("像在指責" in x for x in checks[0]["items"][0]["issues"])
