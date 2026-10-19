@@ -909,3 +909,20 @@ open workspace/eval/<timestamp>/report.html
 - 校稿輪數 `context.proofread_passes`（ADR-066，預設 1，現行行為不變）：`ContextOrchestrator.proofread_pass` 拆成每輪一次的 `_proofread_once`；第 k 輪（k≥2）在前一輪的重譯與修正驗收做完後對整本現行譯文再校（範圍同第一輪），發現照常重譯與驗收、兩可照常只記錄。檢查點記 `pass` 與 `passes`（每輪統計），輪與輪之間先寫檢查點；job 統計為各輪加總加上 `passes`；`upto_translation_id` 在最後一輪結束時記。`ncte proofread --passes N`（1–3）覆寫設定；估價的校稿字數（以及沒有紀錄時的樣本比例）乘上輪數。`config.example.yaml` 與 README〈品質控制與人工校正〉各加一句。測試（`tests/integration/test_proofread_passes.py`）：預設 1、範圍 1–3；兩輪時第二輪看的是整本（段落與第一輪相同）、而且是第一輪重譯後的譯文，兩輪的發現都在、重譯數與發現數是兩輪合計、`passes` 各輪各自的數字；一輪時校稿請求數等於批數、檢查點沒有 `pass`／`passes`；第二輪第二批暫停、第二批被殺、第二輪第一批被殺三種情況，續跑都只校第二輪還沒校的批次、沒有發現重複；指令 `--passes 2` 記兩輪、`--passes 4` 被拒；估價的校稿兩輪是一輪的兩倍。
 - 重現：`cd ../ncte-fixes && source .venv/bin/activate && pytest && ruff check src tests && mypy src`，525 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。
 
+
+## 判錯步驟的原則對齊與資料接線（2026-10-19，分支 review-fixes-2026-10-19，自 7c31791；ADR-067）
+全部離線；沒有跑任何 `claude -p` 或 OpenRouter 請求。提示詞都在 v1 內改（`prompt_version` 的雜湊跟著變）。
+- (A) 提示詞對齊
+  - A1 刪 `prompts/scenes/v1.md`：程式沒有載入；task 名單、schema（`SceneBreaksOutput`）、FakeLLM 的假回答一起拿掉。測試：每個 task 都有提示詞、每份提示詞都有 task，全部無條件 render 不留標記。
+  - A2 補主詞同一原則三邊：譯者規則 3、校稿 `meaning`／`addition`、修正驗收 `new_error`。A3 修正驗收 `new_error` 加褒貶與語氣。A4 判斷順序加進審稿與修正驗收（六個提示詞逐字相同，測試比對）。A5 審稿加 `tone`、`voice`（文字與校稿相同，測試比對）、兩可判準、`other`；`IssueType` 加 `tone`、`voice`；測試：審稿報 tone medium 會送修、修正驗收拿到審稿者的說明與建議、驗收通過後結案。A6 校稿 `speaker`、讀者檢查 `voice`：對象或性別只是推測時不分性別的「你」不算錯（校稿這條也涵蓋了性別 `(inferred)`）。A7 記憶整理與合成讀場景的 `category`、`form_type` 每個值一句說明（測試：值和 schema 一致）。A8 譯者 `voice` 與 `style.voices` 牴觸時以本句原文為準。A9 送修正驗收的建議去掉 `proofread.FIX_NOTE`／`reader.FIX_NOTE`（`review._claim`）。
+- (B) 接線
+  - B1 `memory.retrieval.unit_actions`：場景 `actions` 的人物 id 換成場景結尾看得到的名字，給校稿每段（只給有的段）與修正驗收每項；兩份提示詞各加一行說明。
+  - B2 修正驗收的人物卡帶 `voice`、`habits`（同 `proofread.cast`）；提示詞說明只用來判語氣、口吻。
+  - B3 譯者旗標 `subject_omitted_kept`、`speaker_uncertain`、`term_uncertain` 記成 `model_flag:…` high，由該場景的規則確認一起問（`orchestrator.CONFIRM_MODEL_FLAGS`，和 `qa.rules.CONFIRM_RULES` 分開）；判假 dismissed_by_check、判真進審稿；confirm 提示詞加三條說明。網頁對照審稿頁列出譯者標記（`ruby_meaning_kept`、`wordplay` 等）。`possible_source_error` 不變。
+  - B4 譯者 `notes` 送到校稿（`translator_notes`）、審稿（items）與對照審稿頁；提示詞說明不是譯文。
+  - B5 覆核多 `question`：讀場景的 `uncertainties` 附前後原文與場景人物；回答寫進場景 `state_json`；翻譯與審稿的 `scene.uncertainties` 帶 `answer`／`answer_who`；回答過的不再問；故事頁顯示。`VerifyItem` 加可選的 `character_id`。verify、translate、review 提示詞各補說明。
+  - B6 `sure: false` 的換場點：故事頁標「模型標需複核」與理由，`ncte scenes`（文字與 `--json` 的 `unsure`）也標；不重切。
+  - B7 `SeriesStyle.honorifics_reason`：體例存下理由（不送進翻譯請求，`style_payload` 不變），`ncte style` 印出，網頁譯名頁下方小卡顯示體例；人改敬稱方式時清掉。
+  - B8 本節與 ADR-067。
+- 沒做：效果沒有線上量（不跑額度）；簡單模式沒有規則確認，譯者旗標直接進審稿；審稿沒有加 `ambiguity` 類別（只寫「兩可不算錯，不要回報」）；修正重譯產生的新譯文帶的旗標不另記發現（和以前一樣）。
+- 重現：`cd ../ncte-fixes && source .venv/bin/activate && pytest && ruff check src tests && mypy src`，549 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。新測試：`tests/unit/test_prompt_render.py`（A1–A8、B1、B3–B5 的提示詞文字）、`tests/unit/test_fix_claims.py`（A9）、`tests/integration/test_fix_check.py`（A5）、`tests/integration/test_proofread.py`（B1、B2）、`tests/integration/test_translator_flags.py`（B3、B4）、`tests/integration/test_verify.py`（B5）、`tests/integration/test_unsure_breaks.py`（B6）、`tests/integration/test_style_reason.py`（B7）。

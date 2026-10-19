@@ -403,3 +403,18 @@
 - 為什麼預設維持 1：多一輪就多一份校稿的額度（以及它帶出的重譯與修正驗收），Claude 方案上是訂閱額度、OpenRouter 上是錢；要不要花由使用者決定。開法：設定檔 `context: {proofread_passes: 2}`，或對已翻好的書跑 `ncte proofread 書.epub --passes 2`。
 - 限制：第二輪抓到的有多少是真錯、會不會把第一輪修好的又改回去，都還沒整本實測；數據只有一本書、三輪校稿。讀者檢查仍只一輪，在最後一輪校稿之後。網頁沒有這個設定的開關（照設定檔）。
 
+
+## ADR-067（2026-10-19）：判錯的步驟和譯者用同一套原則；讀與譯已有的資料送到接收端
+- 背景：整本實測（changelog「整本實測：新的 claude 來源」）三輪校稿（流程一輪、事後重校兩輪）抓到的錯幾乎不重疊；「原文省略主詞、中文照省略後讀者把動作接到別人身上」這一類，四輪只抓到一次。對照提示詞與程式：同一條原則只寫在譯者那一邊（譯者知道「不確定時保留省略」，校稿、修正驗收卻不知道「前後文已確定的主詞補上不算增譯」），審稿沒有判斷順序、沒有 tone／voice 類別、也沒有「兩可不算錯」；讀場景已經存下的資料（省略主詞的句子 `actions`、模型自己提的疑問 `uncertainties`、換場點的 `sure`、體例的 `honorifics_reason`）與譯者已經產出的旗標、`notes`，大多沒有送到判錯的步驟或網頁——譯者的 `subject_omitted_kept` 等旗標從來沒有人讀。
+- 原則：
+  1. 同一條原則寫在每個相關步驟，各寫它那個角色的一面：譯者「什麼時候補、什麼時候保留」，校稿「補錯或沒補是哪一類錯、補對的不是增譯」，修正驗收「補對的不是新資訊」。判斷順序（六條）翻譯、校稿、定名、體例、審稿、修正驗收共用，逐字相同。提示詞只寫通則，不寫個案，同一主版本 v1 內改。
+  2. 資料送到，程式不判斷（ADR-059）：程式把讀的時候的判斷（附確定程度）、譯者的旗標與說明交給下一個看的模型或人；可以把旗標轉成待確認的項目、把人物 id 換成當時看得到的名字，但不判斷對錯。
+- 決定：
+  - 提示詞：譯者規則 3 補「省略會讓讀者接到別人身上時，用前後文已確定的人補上；不確定才保留並標 `subject_omitted_kept`」；校稿 `meaning`／`addition`、修正驗收 `new_error` 各寫對應的一面；修正驗收的 `new_error` 加褒貶與語氣；審稿與修正驗收加判斷順序；審稿加 `tone`、`voice`（定義與校稿相同，`issue_type` 枚舉加兩個值；medium 以上照常送修，修正驗收收到的是審稿者的說明與建議）、「兩可」的判準與 `other`；校稿 `speaker` 與讀者檢查 `voice`：對象或性別只是推測時，不分性別的「你」不算錯；記憶整理的 `category`、`form_type` 每個值一句說明；譯者的 `voice` 與體例的說話習慣牴觸時以本句原文為準。沒有程式載入的 `prompts/scenes`（ADR-036 的舊切法，ADR-059 拿掉）連同它的 task、schema、假回答一起刪除。
+  - 接線：校稿每段、修正驗收每項多 `actions`（讀場景的省略主詞句：誰做的、對誰、確定程度，名字取場景結尾看得到的）；修正驗收的人物卡多 `voice`、`habits`（和校稿同一份）；送修正驗收的建議去掉給譯者看的樣板（`FIX_NOTE`）。
+  - 譯者旗標：`subject_omitted_kept`、`speaker_uncertain`、`term_uncertain` 記成 `model_flag:…`（severity high），在該場景的規則確認（`confirm_flags`）和程式規則一起問；判假 `dismissed_by_check`，判真照規則確認的既有做法進審稿（標 `confirmed`，審稿沒報也會送修，修正照常對照原文驗收）。名單 `orchestrator.CONFIRM_MODEL_FLAGS` 和 `qa.rules.CONFIRM_RULES` 分開。`possible_source_error` 不變。`ruby_meaning_kept`、`wordplay` 與其他旗標在網頁對照審稿頁顯示。
+  - 譯者的 `notes` 送到校稿（`translator_notes`）、審稿（items 的 `translator_notes`）與對照審稿頁；提示詞說明那是給審稿者的話、不是譯文。
+  - 讀場景的 `uncertainties`：覆核多一種 `question`（附疑問、前後原文、場景人物）；回答（一句＋可選的 `character_id`）寫進該場景 `state_json` 的那一條（`answer`、`answer_reason`、`answer_character_id`），翻譯與審稿的 `scene.uncertainties` 帶上 `answer` 與 `answer_who`（只在那時看得到的名字）；回答過的不再問；故事頁顯示問題與回答。
+  - `sure: false` 的換場點：故事頁與 `ncte scenes` 標「模型標需複核」與理由；不自動重切。
+  - 體例的 `honorifics_reason` 存進系列體例（不送進翻譯請求），`ncte style` 與網頁譯名頁的小卡顯示；人改了敬稱方式就清掉模型的理由。
+- 限制：效果都沒有線上量過（不跑額度）。譯者旗標轉成 high 之後，旗標多的書規則確認與審稿的請求會變多，而且在確認或審稿之前這些段落算「有未處理的嚴重發現」；簡單模式（非 context）沒有規則確認，旗標直接進審稿。回答疑問的品質、`actions` 對校稿召回的影響，要整本實測才知道。
