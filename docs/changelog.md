@@ -788,3 +788,9 @@ open workspace/eval/<timestamp>/report.html
 - 修正（依上面的實測）：①重譯後程式字面規則（`CONFIRM_RULES`：可能多加名字、英文字、敘述用「我」…）找到的疑點改交給修正檢查一起判斷（`program_flags`），檢查判定已修正且沒有新錯時不再被程式蓋掉，該疑點記為 `dismissed_by_check`；其他高嚴重度規則照舊擋下。②新增 `foreign_script`（error，自動重送）：譯文出現原文沒有的西里爾、希臘、韓文、泰文等字母。③規則確認判定為真的字面疑點會標記（`CONFIRMED`），審稿無論回報什麼都交回翻譯依確認理由重譯，不再因審稿只報了別的低嚴重度問題而被清掉。④複數你們／妳們原本就有程式比對；這次對兩位女性用「你們」是規則確認（模型）判為不是錯，非程式缺漏。
 - 省錢：輸出格式中「預設為空」的欄位（flags、notes、translator_note、未要求的逐段判定 `checked`…）改為可省略，翻譯提示詞要求沒內容就不寫；預設值有意義的欄位（確定程度、種類）仍必填，省略不會把推測升級。所有請求要求 JSON 寫成一行（不縮排）。快取命中率未改（需付費實測）。
 - 估價與網頁：沒有紀錄的步驟改用整本實測的比例；網頁時間進度依整本實測各步驟所占時間；切場景時顯示「準備中」而不是「收尾中」；設定頁說明改為一本約 US$8–11。測試 450 passed。
+
+## Claude 方案當模型；agent、MCP、skill 併回（2026-10-19，ADR-062）
+- 先在獨立 repo（ncte-agent）驗證，同一本書整本：全 Sonnet、全 Opus、Sonnet 讀＋Opus 翻各跑一次（每個請求一次 `claude -p`），再由 Opus 用同一套校稿標準重校三本最終譯文（只記錄問題）：影響理解的錯 28／4／2。照定價換算 US$37.7／60.3／38.9（不實際收費）；本週額度三本加對話約 13 個百分點，重校三本約 2 個百分點。過程中修掉：引擎同時送出的請求可能拿到同一個任務編號（Sonnet 那本因此中斷）；每步的推理程度沒有傳給 `claude -p`（三本都在預設程度下跑，校稿與修正檢查沒有用 high）。
+- 新增模型來源 `claude`（`llm/claude_cli.py`）：設定 `NCTE_LLM_PROVIDER=claude` 或網頁「設定 → 連線方式 → Claude 方案」。預設 Opus 翻譯、定名與檢查，Sonnet 讀書。網頁不顯示預算，改顯示照定價換算的金額（不另收費）；時間估計放寬（整本約 6 小時，等額度重置的時間另計）。
+- `ncte agent …`、`ncte mcp`、`skills/ncte-translate` 從 ncte-agent 搬入（`src/ncte/agent/`、`cli_agent.py`）；任務帶推理程度；引擎程序一啟動就結束時狀態顯示錯誤，不會停在「starting」；EPUB 不存在時 `start` 直接報錯。
+- 測試：`tests/unit/test_claude_cli.py`（送出的參數、推理程度、不收費、等額度、沒登入、預設模型、整本範例書）、`tests/integration/test_agent.py`（整本、背景程序、同時送出的請求、MCP 工具）、網頁的 Claude 方案設定與金額顯示。

@@ -57,7 +57,11 @@ def overview(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
     flagged = conn.execute("SELECT COUNT(DISTINCT unit_id) FROM qa_findings WHERE book_id=? AND status='open' AND "
                            "severity!='low' AND unit_id IS NOT NULL", (book.id,)).fetchone()[0]
     unknown = conn.execute("SELECT COUNT(*) FROM utterances WHERE book_id=? AND status='unknown'", (book.id,)).fetchone()[0]
+    from ..translation.orchestrator import run_plan_usd
+
+    plan = run_plan_usd(conn, [r[0] for r in conn.execute("SELECT id FROM runs WHERE book_id=?", (book.id,))])
     return {"book_id": book.id, "title": book.title, **st, "spent_usd": round(sum(r["cost_usd"] or 0 for r in st["runs"]), 4),
+            "plan_usd": round(plan, 2),
             "flagged_units": flagged, "unknown_speakers": unknown, "pending_names": len(pending(conn, book.id)),
             "notes": sum(1 for t in best.values() if t["translator_note"] and t["status"] != "human"),
             "human_edits": sum(1 for t in best.values() if t["status"] == "human")}

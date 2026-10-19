@@ -18,6 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+agent = ["mcp>=2.3"]  # `ncte mcp`: the agent commands as MCP tools
 dev = [
   "pytest>=8.0",
   "ruff>=0.5",

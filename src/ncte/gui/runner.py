@@ -8,6 +8,7 @@ whether to continue, showing what was spent and what is still left.
 
 from __future__ import annotations
 
+import json
 import threading
 from collections import deque
 from collections.abc import Callable
@@ -70,7 +71,7 @@ class Runner:
         return {"units": plan.units_to_translate, "cached": plan.units_cached, "estimate_usd": round(plan.estimate_usd, 2),
                 "calibrated": calibrated, "low_usd": round(plan.estimate_usd, 2),
                 "high_usd": round(plan.estimate_high_usd, 2), "budget_usd": budget_for(plan.estimate_high_usd),
-                "model": plan.model, "reasoning_effort": plan.reasoning_effort}
+                "model": plan.model, "reasoning_effort": plan.reasoning_effort, "provider": self.cfg.openrouter.provider}
 
     def start(self, ws: Any, ref: str) -> str:
         from ..translation.orchestrator import create_run
@@ -148,7 +149,7 @@ class Runner:
 
     # ------------------------------------------------------------ progress
     def progress(self, ws: Any, conn: Any, book_id: str) -> dict[str, Any]:
-        from ..translation.orchestrator import run_spent
+        from ..translation.orchestrator import run_plan_usd, run_spent
 
         # the latest run that translates (a review-only or gender-scan pass is not "the translation")
         row = conn.execute("SELECT r.* FROM runs r WHERE r.book_id=? AND EXISTS (SELECT 1 FROM jobs j WHERE j.run_id=r.id "
@@ -191,8 +192,10 @@ class Runner:
                 except Exception:
                     self._left[row["id"]] = 0.0
             left = self._left[row["id"]]
+        provider = (json.loads(row["config_json"]).get("_run_options") or {}).get("client")
         return {"run": {"id": row["id"], "status": status, "budget_usd": row["budget_usd"], "spent_usd": round(spent, 4),
-                        "left_usd": left, "model": row["model"], "started_at": row["started_at"]},
+                        "left_usd": left, "model": row["model"], "started_at": row["started_at"], "provider": provider,
+                        "plan_usd": round(run_plan_usd(conn, [row["id"]]), 2)},
                 "stages": stages, "busy": live, "other_busy": (self.busy and not live) or elsewhere is not None,
                 "elsewhere": elsewhere,
                 "log": list(self.log)[-8:] if live or self.run_id == row["id"] else [],

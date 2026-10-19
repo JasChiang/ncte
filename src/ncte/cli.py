@@ -81,6 +81,13 @@ def make_client(cfg: Config, *, fake: bool = False, need_key: bool = True) -> An
 
         models = list({cfg.openrouter.model, *(cfg.openrouter.fallback_models or [])})
         return FakeLLM(models=models)
+    if cfg.openrouter.provider == "agent":
+        raise NCTEError("this run is answered by an agent through tasks: continue it with `ncte agent resume -w …`")
+    if cfg.openrouter.provider == "claude":
+        from .llm.claude_cli import ClaudeCLIClient
+
+        o = cfg.openrouter
+        return ClaudeCLIClient(models=[o.model, *o.stage_models.values(), *([o.review_model] if o.review_model else [])])
     from .llm.openrouter import OpenRouterClient
 
     key = get_api_key(cfg.openrouter.provider)
@@ -300,7 +307,7 @@ def _run(book: Book, opts: Any, *, fake: bool, as_json: bool = False, run_id: st
     if fake:
         typer.echo("⚠ using FakeLLM: output is placeholder text, not a translation")
     rid = run_id or create_run(state.conn, cfg, book, opts)
-    via = "" if fake else f"  via={'fal' if client.name == 'fal' else 'OpenRouter'}"  # NCTE_LLM_PROVIDER in .env applies here
+    via = "" if fake else f"  via={ {'fal': 'fal', 'claude': 'Claude Code (plan, not billed)'}.get(client.name, 'OpenRouter')}"  # NCTE_LLM_PROVIDER in .env applies here
     typer.echo(f"run {rid}  book {book.id}  mode={opts.mode}  model={opts.model}{via}  budget=${opts.budget_usd}")
     orch = _orchestrator(cfg, client, book, rid, opts)
     summary = orch.run()
@@ -513,7 +520,7 @@ def main() -> None:
         sys.exit(1)
 
 
-from . import cli_memory  # noqa: E402,F401  (registers memory / QA / eval commands on `app`)
+from . import cli_agent, cli_memory  # noqa: E402,F401  (registers memory / QA / eval / agent commands on `app`)
 
 if __name__ == "__main__":
     main()

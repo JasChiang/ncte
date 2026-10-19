@@ -33,7 +33,9 @@ class AppConfig(_Strict):
 
 
 class OpenRouterConfig(_Strict):
-    provider: Literal["openrouter", "fal"] = "openrouter"
+    # "claude": the user's Claude plan through Claude Code (`claude -p`), no key, nothing billed (ADR-062)
+    # "agent": an agent in a conversation answers each request as a task (`ncte agent`, the MCP server)
+    provider: Literal["openrouter", "fal", "claude", "agent"] = "openrouter"
     base_url: str = "https://openrouter.ai/api/v1"
     model: str = DEFAULT_MODEL
     review_model: str | None = None
@@ -51,8 +53,9 @@ class OpenRouterConfig(_Strict):
     # "low" | "medium" | "high" | "default" (the model's own) | "max:N" (at most N reasoning tokens)
     stage_reasoning: dict[str, str] = Field(default_factory=dict)
     # per step, another model (checked against /models at start, priced on its own): a step that judges whether
-    # something is wrong (fix_check, proofread, review…) need not share the translator's blind spots. Reading and
-    # translating keep the run's model (one voice, one set of notes); "translate" here is refused.
+    # something is wrong (fix_check, proofread, review…) need not share the translator's blind spots, and reading
+    # steps may run on a cheaper model (the Claude provider reads on Sonnet, ADR-062). "translate" here is refused:
+    # the run's model translates (one voice).
     stage_models: dict[str, str] = Field(default_factory=dict)
     max_output_tokens: int | None = None
     app_title: str = "NCTE"
@@ -165,10 +168,35 @@ def load_config(path: str | Path | None = None, *, workspace: str | None = None)
         cfg.app.workspace = env_ws
     provider = os.environ.get("NCTE_LLM_PROVIDER") or _read_dotenv(Path(".env")).get("NCTE_LLM_PROVIDER")
     if provider:
-        if provider not in ("openrouter", "fal"):
-            raise ConfigError("NCTE_LLM_PROVIDER must be openrouter or fal")
-        cfg.openrouter.provider = "fal" if provider == "fal" else "openrouter"
+        if provider not in ("openrouter", "fal", "claude"):
+            raise ConfigError("NCTE_LLM_PROVIDER must be openrouter, fal or claude")
+        cfg.openrouter.provider = provider  # type: ignore[assignment]
+    if cfg.openrouter.provider == "claude":
+        use_claude_models(cfg)
     return cfg
+
+
+# Reading steps run on Sonnet, translating and every check on Opus (ADR-062): one whole book each way, checked by
+# Opus against the source, left 2 real errors with Sonnet reading against 4 all-Opus and 28 all-Sonnet, and reading
+# on Sonnet costs about a third. Naming stays on the translating model: Sonnet named a woman with a man's name.
+CLAUDE_MODEL = "claude/opus"
+CLAUDE_READ_MODEL = "claude/sonnet"
+CLAUDE_READ_STAGES = ("scene_windows", "scene_analyze", "memory_update", "verify", "relations", "impressions",
+                      "house_style")
+
+
+def use_claude_models(cfg: Config) -> None:
+    """Models for the Claude provider: a configured ``claude/…`` model is kept; an API model id (the OpenRouter
+    defaults, a review or fallback model) has no meaning here and is replaced or dropped."""
+    o = cfg.openrouter
+    if not o.model.startswith("claude/"):
+        o.model = CLAUDE_MODEL
+        if not any(m.startswith("claude/") for m in o.stage_models.values()):
+            o.stage_models = dict.fromkeys(CLAUDE_READ_STAGES, CLAUDE_READ_MODEL)
+    o.stage_models = {k: v for k, v in o.stage_models.items() if v.startswith("claude/")}
+    o.review_model = o.review_model if o.review_model and o.review_model.startswith("claude/") else None
+    o.fallback_models = [m for m in o.fallback_models if m.startswith("claude/")]
+    o.temperature = None  # Claude Code takes no temperature
 
 
 def _read_dotenv(path: Path) -> dict[str, str]:

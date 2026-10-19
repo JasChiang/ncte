@@ -186,3 +186,37 @@ def test_page_does_not_continue_a_run_the_cli_is_working_on(site, fixtures):
     finally:
         cli.release()
     assert call(f"/api/book/{bid}/run")[1]["run"]["status"] == "interrupted"  # the CLI ended: resumable
+
+
+def test_the_claude_plan_needs_no_key_and_shows_list_price_instead_of_a_bill(site, fixtures, monkeypatch, tmp_path):
+    from ncte.config import CLAUDE_MODEL, DEFAULT_MODEL
+
+    call, app, _, tmp = site
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "openrouter")  # restored after the test (the server writes it)
+    fake_bin = tmp_path / "claude"
+    fake_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_bin.chmod(0o755)
+    monkeypatch.setenv("NCTE_CLAUDE_BIN", str(fake_bin))
+    out = call("/api/settings/provider", {"provider": "claude"})[1]
+    assert out["provider"] == "claude" and out["set"] and out["claude"] == str(fake_bin)
+    o = app.ws.cfg.openrouter
+    assert o.model == CLAUDE_MODEL and o.stage_models and o.temperature is None
+    assert call("/api/settings/key", {"key": "sk-or-v1-" + "d" * 40})[0] == 400  # no key on the plan
+    # a finished run on the plan: nothing spent, list price shown
+    _, imp = _upload_and_import(call, fixtures["basic"])
+    conn, book = app.ws.open_book(imp["book_id"])
+    from ncte.translation.orchestrator import RunOptions, create_run
+
+    rid = create_run(conn, app.ws.cfg, book, RunOptions(mode="context", model=o.model))
+    conn.execute("INSERT INTO jobs(run_id, book_id, stage, target_id, seq, status, updated_at) VALUES "
+                 "(?,?,'translate',?,1,'succeeded','2026-01-01')", (rid, book.id, book.id))
+    conn.execute("INSERT INTO llm_requests(run_id, book_id, stage, model, request_hash, prompt_version, structured_mode, "
+                 "unit_ids_json, est_cost_usd, status, cost_status, cost_usd, usage_json, created_at) VALUES "
+                 "(?,?,'translate',?,'h','v','json_schema','[]',0,'succeeded','reported',0,?,'2026-01-01')",
+                 (rid, book.id, o.model, json.dumps({"list_cost_usd": 1.25})))
+    conn.commit()
+    run = call(f"/api/book/{imp['book_id']}/run")[1]["run"]
+    assert run["provider"] == "claude" and run["spent_usd"] == 0 and run["plan_usd"] == 1.25
+    assert call(f"/api/book/{imp['book_id']}/overview")[1]["plan_usd"] == 1.25
+    assert call("/api/settings/provider", {"provider": "openrouter"})[0] == 200  # back: an API model again
+    assert app.ws.cfg.openrouter.model == DEFAULT_MODEL and not app.ws.cfg.openrouter.stage_models

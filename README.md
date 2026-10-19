@@ -1,6 +1,6 @@
 # NCTE — Novel Context Translation Engine
 
-把**有權使用、無 DRM** 的日文 EPUB 小說（主要是輕小說），透過 OpenRouter 上的模型翻成臺灣繁體中文，輸出一般閱讀器能開的完整 EPUB。在自己的 Mac 上執行（網頁介面或指令），資料都存在本機。
+把**有權使用、無 DRM** 的日文 EPUB 小說（主要是輕小說），透過 OpenRouter 上的模型、或你自己的 Claude 訂閱（Claude Code），翻成臺灣繁體中文，輸出一般閱讀器能開的完整 EPUB。在自己的 Mac 上執行（網頁介面或指令），資料都存在本機。
 
 ## 它怎麼翻：先像譯者一樣讀完，再動筆
 一般的機器翻譯一次只看一小段，所以常常搞錯「這句是誰說的」「這個角色是男是女」「敘述是不是主角自己在講」。日文又常省略主語，前後文一斷就容易翻錯。NCTE 模仿譯者的做法：**先把整本讀完、做筆記，翻譯時帶著筆記翻**。
@@ -72,7 +72,7 @@ flowchart LR
 ## 不用指令的用法（網頁介面）
 1. 安裝 [Python 3.12 以上](https://www.python.org/downloads/)，下載本專案資料夾。
 2. 在 Finder 雙擊 **`NCTE.command`**（第一次會自動安裝，約幾分鐘；macOS 若擋下，請按右鍵 →「打開」）。瀏覽器會打開 NCTE。
-3. 右上角「設定」貼上 [OpenRouter](https://openrouter.ai/keys) 金鑰並儲值；書庫頁把 EPUB 拖進去 → 選系列 → 書的概況頁按「開始翻譯」。
+3. 右上角「設定」貼上 [OpenRouter](https://openrouter.ai/keys) 金鑰並儲值（或在「進階：連線方式」選「Claude 方案」，見下方）；書庫頁把 EPUB 拖進去 → 選系列 → 書的概況頁按「開始翻譯」。
    - 開始前會顯示估價（約多少、最多多少，每個步驟都算進去）；預算上限依「最多」的金額自動設定（只擋異常），到了會先停下來問你。
    - 先讀完整本再翻：讀的階段（約占費用一半）還看不到譯文。名字與稱呼的譯法由模型決定、程式檢查，不會停下來問；想改的話翻完後到「定名」頁改，已翻好的段落會一起換掉。
    - 可以暫停；關掉視窗也不會遺失進度，下次按「繼續」接著做。
@@ -80,10 +80,26 @@ flowchart LR
 
 模型與推理程度不用選：預設 `google/gemini-3.8-flash`（推理 medium；做判斷的步驟——對照校稿、人物關係、覆核、修正驗收——用 high）。比較紀錄見 [`docs/changelog.md`](docs/changelog.md)：同一章節裡，便宜的模型會忽略角色性別（你／妳）、或整批改寫成簡體。
 
+### 用 Claude 訂閱翻譯（Claude 方案）
+已經有 Claude 訂閱、電腦上裝好並登入 [Claude Code](https://docs.claude.com/en/docs/claude-code)（終端機能執行 `claude`）的話，不需要任何金鑰：網頁「設定 → 進階：連線方式」選「Claude 方案」，或指令前加 `NCTE_LLM_PROVIDER=claude`。
+
+- 用你的訂閱額度，NCTE 不另外收費；畫面上的金額是照定價換算的參考。額度用完會自動等到重置再接著翻。
+- 讀書的步驟用 Sonnet，翻譯、定名與各種檢查用 Opus。同一本書整本實測（Opus 依同一套標準重新校稿三種組合的最終譯文），留下的影響理解的錯：全 Sonnet 28 處、全 Opus 4 處、這個組合 2 處；照定價換算約是全 Opus 的三分之二。
+- 一本書約 6 小時（不含等額度重置）。整本約用掉一週額度的 3–4 個百分點（依方案而定）。
+
+```mermaid
+flowchart LR
+  N[NCTE 引擎<br>讀 → 定名 → 翻 → 校] -- 每個請求 --> C["claude -p<br>（不帶工具、全新對話）"]
+  C -- JSON 回答 --> N
+  N -- 程式檢查格式、編號、證據 --> N
+```
+
+**讓 agent 自己回答（進階）**：`ncte agent start 書.epub -w 工作區`，之後由對話中的 agent 逐題 `ncte agent next` → 回答 → `ncte agent submit`（每題有說明檔與輸出格式）；或安裝選用套件 `pip install -e '.[agent]'` 後 `claude mcp add ncte -- ncte mcp`，用 MCP 工具做同樣的事。Claude Code 的 skill 在 [`skills/ncte-translate`](skills/ncte-translate/SKILL.md)（複製或連結到 `~/.claude/skills/`）。一般翻書用上面的 Claude 方案即可，agent 逐題回答會多花很多額度。
+
 > 開發狀態與測試紀錄：[`docs/changelog.md`](docs/changelog.md)　決策：[`docs/decisions.md`](docs/decisions.md)　架構：[`docs/architecture.md`](docs/architecture.md)
 
 ## 隱私與權利（請先讀）
-- 翻譯時（包括從網頁介面開始的翻譯），**所需的原文段落與上下文會送到 OpenRouter**，再由 OpenRouter 路由給第三方模型供應商（例如 Google）。各供應商的資料保留／訓練政策不同，請在 OpenRouter 帳號的 Privacy 設定中確認。目前沒有純本機模型模式。
+- 翻譯時（包括從網頁介面開始的翻譯），**所需的原文段落與上下文會送到 OpenRouter**，再由 OpenRouter 路由給第三方模型供應商（例如 Google）。各供應商的資料保留／訓練政策不同，請在 OpenRouter 帳號的 Privacy 設定中確認。用 Claude 方案時則經 Claude Code 送到 Anthropic，適用你的 Claude 帳號的資料設定。目前沒有純本機模型模式。
 - 只處理你有權使用的無 DRM EPUB。翻譯輸出不代表你取得再散布或公開分享的權利。
 - 原始 EPUB、資料庫、匯出檔都在 `./workspace/`（已列入 `.gitignore`）。API Key 不會寫入 log、報告或錯誤訊息。
 

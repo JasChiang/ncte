@@ -182,6 +182,17 @@ def run_spent(conn: sqlite3.Connection, run_id: str) -> tuple[float, int]:
     return float(row["spent"] or 0), int(row["unk"] or 0)
 
 
+def run_plan_usd(conn: sqlite3.Connection, run_ids: list[str]) -> float:
+    """What requests on a plan (the Claude provider: nothing billed) would have cost at list price, as the CLI
+    reported it (``usage.list_cost_usd``)."""
+    if not run_ids:
+        return 0.0
+    row = conn.execute("SELECT COALESCE(SUM(json_extract(usage_json, '$.list_cost_usd')), 0) FROM llm_requests WHERE "
+                       f"run_id IN ({','.join('?' * len(run_ids))}) AND usage_json LIKE '%list_cost_usd%'",
+                       run_ids).fetchone()
+    return float(row[0] or 0)
+
+
 class DbRecorder:
     """Persists every LLM request (thread-safe; shares the orchestrator lock)."""
 

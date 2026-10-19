@@ -79,6 +79,11 @@ def exported_file(cfg: Any, book: Any) -> Path:
 def key_status(env_path: Path, provider: str = "openrouter") -> dict[str, Any]:
     from ..config import get_api_key
 
+    if provider == "claude":  # no key: Claude Code's own login on this computer
+        import shutil
+
+        found = shutil.which(os.environ.get("NCTE_CLAUDE_BIN") or "claude")
+        return {"provider": provider, "set": bool(found), "hint": None, "file": str(env_path.resolve()), "claude": found}
     key = get_api_key(provider)
     return {"provider": provider, "set": bool(key), "hint": f"…{key[-4:]}" if key else None, "file": str(env_path.resolve())}
 
@@ -106,10 +111,19 @@ def _save_env(env_path: Path, name: str, value: str) -> None:
 
 
 def set_provider(env_path: Path, cfg: Any, provider: str) -> dict[str, Any]:
-    if provider not in ("openrouter", "fal"):
+    from ..config import DEFAULT_MODEL, use_claude_models
+
+    if provider not in ("openrouter", "fal", "claude"):
         raise NCTEError("未知的連線方式")
     _save_env(env_path, "NCTE_LLM_PROVIDER", provider)
+    was = cfg.openrouter.provider
     cfg.openrouter.provider = provider
+    if provider == "claude":
+        use_claude_models(cfg)
+    elif was == "claude":  # back to an API: its default model, not a Claude Code alias
+        cfg.openrouter.model = DEFAULT_MODEL
+        cfg.openrouter.stage_models = {}
+        cfg.openrouter.temperature = type(cfg.openrouter)().temperature
     return key_status(env_path, provider)
 
 
