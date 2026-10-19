@@ -149,8 +149,10 @@ def auto_max_tokens(user_content: str, reasoning: str | None = None) -> int:
     return max(floor, min(AUTO_MAX_TOKENS_CEIL, want))
 
 
+# how to answer, said once for every source (a model without structured outputs, `claude -p`, needs it most);
 # indentation and line breaks are paid output tokens (a tenth of a scene reading's answer): one line of JSON
-COMPACT_JSON = "\n輸出的 JSON 寫成一行：不要縮排、不要換行。\n"
+COMPACT_JSON = ("\n只輸出一個 JSON 物件（不要說明文字、不要 code fence），寫成一行：不要縮排、不要換行；"
+                "輸入中的代號（P1、C2…）照原樣使用。\n")
 
 
 def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model: str, prompt: Prompt,

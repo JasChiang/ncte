@@ -51,11 +51,39 @@ def test_a_request_is_one_plain_call_at_the_steps_level_and_nothing_is_billed(mo
     assert a[a.index("--model") + 1] == "opus" and a[a.index("--effort") + 1] == "high"
     assert a[a.index("--tools") + 1] == "" and "--no-session-persistence" in a  # no tools, nothing kept
     assert a[a.index("--system-prompt") + 1].startswith("SYS")  # the step's prompt replaces Claude Code's
-    assert calls.inputs[0].startswith('{"units": []}') and "JSON schema" in calls.inputs[0]
+    assert calls.inputs[0] == '{"units": []}'  # the request's data only; the schema is in the system prompt
     assert r.cost_usd == 0.0 and r.usage["list_cost_usd"] == 0.042
     assert r.usage["prompt_tokens"] == 1503 and r.usage["completion_tokens"] == 70
     c.complete(_req(extra={"reasoning": {"max_tokens": 3000}}))  # a token cap has no level: the model's default
     assert "--effort" not in calls.args[1]
+
+
+def test_the_system_prompt_is_the_same_on_every_request_of_a_step_so_it_is_cached(monkeypatch):
+    """Claude Code caches the system prompt as one block: only a byte-identical one is read from the cache. The fixed
+    rules and the step's JSON schema go there; this batch's conditional rules and a retry's correction go to the
+    user message, ahead of the data."""
+    calls = Calls(_ok(), _ok(), _ok())
+    monkeypatch.setattr(subprocess, "run", calls)
+    c = ClaudeCLIClient()
+    schema = {"type": "object", "properties": {"translations": {"type": "array"}}}
+    fixed = "FIXED RULES\n"
+
+    def req(own: str) -> LLMRequest:
+        return _req(messages=[{"role": "system", "content": fixed + own},
+                              {"role": "user", "content": '{"units": [1]}'}],
+                    json_schema=schema, cached_prefix_chars=len(fixed))
+
+    c.complete(req("\n## 本批資料的附加說明\nCOND A\n"))
+    c.complete(req("\n## 本批資料的附加說明\nCOND B\n"))
+    c.complete(req("\n## 本批資料的附加說明\nCOND A\n\n## 重要更正\n上一次的輸出未通過程式驗證：missing P3\n"))
+    systems = [a[a.index("--system-prompt") + 1] for a in calls.args]
+    assert systems[0] == systems[1] == systems[2]
+    assert systems[0].startswith("FIXED RULES") and json.dumps(schema, ensure_ascii=False) in systems[0]
+    assert "COND" not in systems[0] and "重要更正" not in systems[0]
+    assert all('"properties"' not in u for u in calls.inputs)  # the schema is never in the user message
+    assert "COND A" in calls.inputs[0] and "COND B" in calls.inputs[1]
+    assert "重要更正" in calls.inputs[2] and "missing P3" in calls.inputs[2]
+    assert all(u.endswith('{"units": [1]}') for u in calls.inputs)  # the data comes last
 
 
 def test_a_usage_limit_is_waited_out_and_a_missing_login_stops_at_once(monkeypatch):
@@ -102,6 +130,7 @@ class FakeBacked(ClaudeCLIClient):
         self.fake = FakeLLM(models=["claude/opus", "claude/sonnet"])
         self.local = threading.local()
         self.seen: list[tuple[str, str, str | None]] = []
+        self.systems: dict[tuple[str, str], set[str]] = {}
 
     def complete(self, req: LLMRequest) -> Any:
         self.local.req = req
@@ -111,6 +140,7 @@ class FakeBacked(ClaudeCLIClient):
         req = self.local.req
         self.seen.append((req.stage.split(":")[0], args[args.index("--model") + 1],
                           args[args.index("--effort") + 1] if "--effort" in args else None))
+        self.systems.setdefault((req.stage.split(":")[0], req.model), set()).add(args[args.index("--system-prompt") + 1])
         return _ok(self.fake.complete(req).content)
 
 
@@ -133,6 +163,8 @@ def test_a_whole_book_runs_on_the_claude_provider(monkeypatch, tmp_path, fixture
     by_stage = {st: (m, e) for st, m, e in client.seen}
     assert by_stage["scene_analyze"][0] == "sonnet" and by_stage["translate"] == ("opus", "medium")
     assert by_stage["proofread"] == ("opus", "high")  # a judging step thinks at high
+    # every request of a step sends the same system prompt (cacheable), whatever its batch's conditional rules
+    assert all(len(s) == 1 for s in client.systems.values()), {k: len(s) for k, s in client.systems.items()}
     rows = conn.execute("SELECT cost_usd, usage_json FROM llm_requests WHERE run_id=?", (rid,)).fetchall()
     assert rows and all(r[0] == 0 for r in rows)  # nothing billed; what the plan used is in the usage
     assert all(json.loads(r[1])["list_cost_usd"] == 0.042 for r in rows)

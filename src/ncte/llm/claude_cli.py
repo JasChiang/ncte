@@ -23,8 +23,7 @@ from .base import LLMRequest, LLMResponse
 PREFIX = "claude/"
 MODELS = ("opus", "sonnet", "haiku")  # Claude Code's aliases; a full model id after the prefix is passed as is
 EFFORTS = ("low", "medium", "high", "xhigh", "max")
-ANSWER_RULE = ("\n\n## 回答方式\n只輸出一個 JSON 物件（不要說明文字、不要 code fence），格式照上面的輸出說明；"
-               "輸入中的代號（P1、C2…）照原樣使用。")
+SCHEMA_HEAD = "\n\n## 輸出的 JSON schema\n"  # how to answer is said once, in the shared rules (translator.COMPACT_JSON)
 RETRY_WAITS = (30, 60, 120, 300, 600, 900, 1800, 1800, 1800, 3600, 3600)  # seconds
 NOT_LOGGED_IN = ("not logged in", "please run /login", "invalid api key", "authentication")
 
@@ -72,11 +71,21 @@ class ClaudeCLIClient:
             out += ["--effort", eff]
         return out
 
-    def complete(self, req: LLMRequest) -> LLMResponse:
-        system = "\n".join(m["content"] for m in req.messages if m["role"] == "system") + ANSWER_RULE
-        user = "\n".join(m["content"] for m in req.messages if m["role"] == "user")
+    @staticmethod
+    def split(req: LLMRequest) -> tuple[str, str]:
+        """(system prompt, user message). Claude Code caches the system prompt as one block, read back only when it
+        is byte-identical: it holds the rules every request of the step shares (``cached_prefix_chars``) and the step's
+        JSON schema. This batch's conditional rules and a retry's correction go to the user message, before the data."""
+        system = "\n".join(m["content"] for m in req.messages if m["role"] == "system")
+        cut = req.cached_prefix_chars if 0 < req.cached_prefix_chars < len(system) else len(system)
+        fixed, own = system[:cut], system[cut:].strip()
         if req.json_schema:
-            user += "\n\n輸出必須符合這個 JSON schema：\n" + json.dumps(req.json_schema, ensure_ascii=False)
+            fixed = fixed.rstrip() + SCHEMA_HEAD + json.dumps(req.json_schema, ensure_ascii=False)
+        user = "\n".join(m["content"] for m in req.messages if m["role"] == "user")
+        return fixed, (own + "\n\n" + user if own else user)
+
+    def complete(self, req: LLMRequest) -> LLMResponse:
+        system, user = self.split(req)
         start = time.monotonic()
         last = ""
         for attempt, wait in enumerate((0.0, *self.waits), start=1):
