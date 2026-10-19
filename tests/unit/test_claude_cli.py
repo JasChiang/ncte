@@ -85,6 +85,7 @@ def test_the_claude_provider_reads_on_sonnet_and_translates_and_checks_on_opus(m
     cfg = load_config()
     o = cfg.openrouter
     assert o.provider == "claude" and o.model == "claude/opus" and o.temperature is None
+    assert o.reasoning_effort == "medium"  # every step says its level, also outside the repo (no ncte.yaml)
     assert o.stage_models == dict.fromkeys(CLAUDE_READ_STAGES, "claude/sonnet")
     assert "naming" not in o.stage_models and "proofread" not in o.stage_models
     (tmp_path / "ncte.yaml").write_text("openrouter:\n  model: claude/sonnet\n  review_model: google/x\n"
@@ -122,7 +123,6 @@ def test_a_whole_book_runs_on_the_claude_provider(monkeypatch, tmp_path, fixture
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("NCTE_LLM_PROVIDER", "claude")
     cfg = load_config(workspace=str(tmp_path / "ws"))
-    cfg.openrouter.reasoning_effort = "medium"
     assert isinstance(make_client(cfg), ClaudeCLIClient)
     client = FakeBacked()
     monkeypatch.setattr(subprocess, "run", client.run)

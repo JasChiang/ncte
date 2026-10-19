@@ -197,6 +197,7 @@ def use_claude_models(cfg: Config) -> None:
     o.review_model = o.review_model if o.review_model and o.review_model.startswith("claude/") else None
     o.fallback_models = [m for m in o.fallback_models if m.startswith("claude/")]
     o.temperature = None  # Claude Code takes no temperature
+    o.reasoning_effort = o.reasoning_effort or "medium"  # as NCTE runs by default (ncte.yaml), wherever it is run
 
 
 def _read_dotenv(path: Path) -> dict[str, str]:
