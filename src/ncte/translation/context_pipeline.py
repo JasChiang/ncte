@@ -48,6 +48,7 @@ class ContextOrchestrator(Orchestrator):
         super().prepare()
         self.analyze_prompt = load_prompt("scene_analyze")
         self.memory_prompt = load_prompt("memory_update")
+        self.read_prompt = load_prompt("scene_read")
         self.naming_prompt = load_prompt("naming")
 
     def process_batch(self, batch: Batch) -> dict[str, int]:
@@ -451,6 +452,8 @@ class ContextOrchestrator(Orchestrator):
             if self._stop_reason:
                 break
             self.log(f"read {sid} ({i + 1}/{len(due)})")
+            if self.cfg.context.read_in_one_request and self.stage_scene_read(sid):
+                continue
             self.stage_scene_analyze(sid)
             self.stage_memory_update(sid)
 
@@ -1137,6 +1140,55 @@ class ContextOrchestrator(Orchestrator):
                 parts.append(p)
         return merge_outputs(parts) if parts else None
 
+    def stage_scene_read(self, sid: str) -> bool:
+        """``context.read_in_one_request`` (ADR-065): the scene's analysis and memory update from one request
+        (``prompts/scene_read``), applied by the same two functions as two requests are — the analysis first; the
+        memory's ids of people new in this scene (the analysis's ``temp_id``) become the cards the analysis made.
+        False when the scene is read with two requests as before: one of the two steps is not due or is switched
+        off, the scene is long enough to be read in parts, or the one request failed (refused, bad answer)."""
+        from ..analysis.memory_update import scene_rows
+        from ..llm.schemas import SceneReadOutput
+
+        a_job, m_job = self._job("scene_analyze", sid), self._job("memory_update", sid)
+        if not (self.cfg.context.scene_analysis and self.cfg.context.memory_update) or any(
+                j is None or j["status"] not in ("pending", "running") for j in (a_job, m_job)):
+            return False
+        scene = get_scene(self.conn, self.book.id, sid)
+        with self.lock:
+            if len(scene_rows(self.conn, self.book.id, sid)) > self.cfg.memory.max_scene_units * self.LONG_SCENE:
+                return False
+            with Transaction(self.conn):  # a re-read starts without the cards only the last reading of it made
+                if gone := forget_scene_cards(self.conn, self.book.id, scene, memory_too=True):
+                    self.log(f"  re-read: {len(gone)} card(s) only the last reading of this scene made were dropped")
+            gl = [{"ja": g["source_term"], "zh": g["target_term"]} for g in self.glossary]
+            payload = scene_read_payload(build_analysis_payload(self.conn, self.book.id, scene, gl),
+                                         build_memory_payload(self.conn, self.book.id, scene, gl))
+        try:
+            parsed = self._llm("scene_read", self.read_prompt, payload, [u["unit_id"] for u in payload["units"]])
+        except FatalAPIError:
+            raise
+        except LLMError as exc:
+            self.log(f"  one-request read failed ({type(exc).__name__}); read with two requests")
+            return False
+        assert isinstance(parsed, SceneReadOutput)
+        refs: dict[str, str] = {}
+        with self.lock, Transaction(self.conn):
+            stats = apply_scene_analysis(self.conn, self.book.id, scene, parsed.analysis, run_id=self.run_id, refs=refs)
+        self.reload_glossary()
+        self._set_job("scene_analyze", sid, "succeeded", None, {**stats, "mode": "llm", "one_request": True})
+        self.log(f"  analysis: {stats}")
+        memory = MemoryUpdateOutput.model_validate(with_cards(parsed.memory.model_dump(), refs))
+        try:
+            with self.lock, Transaction(self.conn):
+                mstats = apply_memory_update(self.conn, self.book.id, scene, memory, run_id=self.run_id)
+        except sqlite3.Error as exc:  # memory failure must not affect committed translations
+            self._set_job("memory_update", sid, "failed", f"db error: {exc}")
+            return True
+        self.reload_glossary()
+        self._set_job("memory_update", sid, "succeeded", None, {**mstats, "one_request": True})
+        self.log(f"  memory: {mstats}")
+        return True
+
     def stage_scene_analyze(self, sid: str) -> None:
         job = self._job("scene_analyze", sid)
         if job is None or job["status"] not in ("pending", "running"):
@@ -1241,3 +1293,37 @@ def drop_address_forms(glossary: list[dict[str, Any]], address: list[dict[str, A
     forms = {a["ja"] for a in address if a.get("zh")}
     return [g for g in glossary if g.get("verified") or g["ja"] not in forms
             or all(a.get("zh") == g.get("zh") for a in address if a["ja"] == g["ja"])]
+
+
+def scene_read_payload(analysis: dict[str, Any], memory: dict[str, Any]) -> dict[str, Any]:
+    """The one request's input (ADR-065): the analysis request's, with the memory request's units (they may carry a
+    translation), its earlier facts, and what it shows of each known person (Chinese name, members) added to the
+    analysis's view of them. The memory's ``scene`` is left out: the analysis is in the same answer."""
+    out = {**analysis, "task": "scene_read", "units": memory["units"]}
+    extra = {c["character_id"]: c for c in memory.get("known_characters", [])}
+    people = []
+    for c in analysis.get("known_characters", []):
+        people.append({**extra.pop(c["character_id"], {}), **c})
+    out["known_characters"] = people + list(extra.values())
+    if memory.get("known_facts"):
+        out["known_facts"] = memory["known_facts"]
+    return out
+
+
+def with_cards(value: Any, refs: dict[str, str]) -> Any:
+    """The memory answer with each person id (``*_ref``, ``*_refs``, ``source_viewpoint``) the analysis turned into
+    a card replaced by that card's id; anything else unchanged (what is not a known id is rejected later as
+    before). Id bookkeeping only: nothing about who is who is decided here."""
+    if isinstance(value, list):
+        return [with_cards(v, refs) for v in value]
+    if not isinstance(value, dict):
+        return value
+    out: dict[str, Any] = {}
+    for k, v in value.items():
+        if isinstance(v, str) and (k.endswith("_ref") or k == "source_viewpoint"):
+            out[k] = refs.get(v, v)
+        elif isinstance(v, list) and k.endswith("_refs"):
+            out[k] = [refs.get(x, x) if isinstance(x, str) else x for x in v]
+        else:
+            out[k] = with_cards(v, refs)
+    return out

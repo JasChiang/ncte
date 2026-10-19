@@ -382,8 +382,10 @@ def new_narrator(conn: sqlite3.Connection, book_id: str, first: sqlite3.Row) -> 
 
 
 def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row,
-                         parsed: SceneAnalysisOutput | None, *, run_id: str | None = None) -> dict[str, int]:
-    """Validate an analysis against the source and persist it. ``parsed=None`` → program-only analysis."""
+                         parsed: SceneAnalysisOutput | None, *, run_id: str | None = None,
+                         refs: dict[str, str] | None = None) -> dict[str, int]:
+    """Validate an analysis against the source and persist it. ``parsed=None`` → program-only analysis. ``refs``
+    (when given) receives which card each id of the answer became (``new_1`` → the card made or matched for it)."""
     sid = scene["id"]
     rows = scene_rows(conn, book_id, sid)
     texts = _unit_texts(rows)
@@ -692,6 +694,8 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     conn.execute("UPDATE scenes SET state_json=?, version=? WHERE book_id=? AND id=?",
                  (json.dumps(state, ensure_ascii=False), version, book_id, sid))
     repo.refresh_profiles(conn, book_id)
+    if refs is not None:
+        refs.update(ref_map)
     return stats
 
 

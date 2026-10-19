@@ -114,6 +114,9 @@ class ContextConfig(_Strict):
     # each paragraph gets a verdict (what the source says, and whether the translation says it), so none is skipped
     proofread_verdicts: bool = False
     read_first: bool = True  # ADR-023: analyse + remember every scene first, then name, then translate
+    # ADR-065: with read_first, a scene's analysis and memory update come from one request (prompts/scene_read);
+    # off until an A/B shows the quality holds
+    read_in_one_request: bool = False
     # ADR-023/035: propose renderings; auto (default) = keep the model's choice after program checks and go on
     # (change them later in the web UI); review = pause for a person's choices
     naming: Literal["review", "auto", "off"] = "auto"
@@ -241,7 +244,10 @@ def redact(text: str, key: str | None = None) -> str:
 def reasoning_setting(cfg: Config, stage: str) -> str | None:
     """The reasoning setting a step's requests use: its own (``stage_reasoning``) or the run's (``reasoning_effort``).
     None = send nothing (the model's default)."""
-    value = cfg.openrouter.stage_reasoning.get(stage.split(":")[0], cfg.openrouter.reasoning_effort)
+    stage = stage.split(":")[0]
+    if stage == "scene_read" and stage not in cfg.openrouter.stage_reasoning:
+        stage = "scene_analyze"  # the one-request read (ADR-065) thinks like the scene analysis unless set itself
+    value = cfg.openrouter.stage_reasoning.get(stage, cfg.openrouter.reasoning_effort)
     return None if value in (None, "", "default") else value
 
 
@@ -254,6 +260,8 @@ def stage_model(cfg: Config, stage: str, default: str) -> str:
     stage = stage.split(":")[0]
     if m := cfg.openrouter.stage_models.get(stage):
         return m
+    if stage == "scene_read" and (m := cfg.openrouter.stage_models.get("scene_analyze")):
+        return m  # the one-request read (ADR-065) is a reading step: unless set itself, it reads like scene_analyze
     if stage in ("review", "fix_check") and cfg.openrouter.review_model:
         return cfg.openrouter.review_model
     return default

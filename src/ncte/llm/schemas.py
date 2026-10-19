@@ -270,6 +270,12 @@ class MemoryUpdateOutput(_M):
     groups: list[GroupMembers] = Field(default_factory=list)
 
 
+class SceneReadOutput(_M):
+    """A scene read with one request (``context.read_in_one_request``, ADR-065): the analysis, then the memory."""
+    analysis: SceneAnalysisOutput
+    memory: MemoryUpdateOutput
+
+
 # ------------------------------------------------------------------ naming (ADR-023)
 class NamingOption(_M):
     zh: str
@@ -457,6 +463,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "translate": TranslationBatchOutput,
     "scene_analyze": SceneAnalysisOutput,
     "memory_update": MemoryUpdateOutput,
+    "scene_read": SceneReadOutput,
     "naming": NamingOutput,
     "review": ReviewOutput,
     "verify": VerifyOutput,

@@ -17,7 +17,8 @@ from typing import Any
 
 from ..errors import ConfigError
 
-TASKS = ("translate", "scene_analyze", "memory_update", "naming", "review", "verify", "scenes", "reader", "relations",
+TASKS = ("translate", "scene_analyze", "memory_update", "scene_read", "naming", "review", "verify", "scenes", "reader",
+         "relations",
          "confirm", "impressions", "proofread", "house_style", "fix_check", "scene_windows")
 
 

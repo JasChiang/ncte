@@ -152,10 +152,16 @@ def default_fix_check(payload: dict[str, Any], req: Any) -> dict[str, Any]:
                         "new_error": "", "reason": "fake"} for i in payload.get("items", [])]}
 
 
+def default_scene_read(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:
+    """Both reads in one answer (``context.read_in_one_request``)."""
+    return {"analysis": default_scene_analyze(payload, req), "memory": default_memory_update(payload, req)}
+
+
 DEFAULTS: dict[str, Responder] = {
     "translate": default_translate,
     "scene_analyze": default_scene_analyze,
     "memory_update": default_memory_update,
+    "scene_read": default_scene_read,
     "naming": default_naming,
     "review": default_review,
     "verify": default_verify,
