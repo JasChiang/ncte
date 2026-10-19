@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -75,7 +76,9 @@ def echo_json(data: Any) -> None:
     typer.echo(json.dumps(data, ensure_ascii=False, indent=2, default=str))
 
 
-def make_client(cfg: Config, *, fake: bool = False, need_key: bool = True) -> Any:
+def make_client(cfg: Config, *, fake: bool = False, need_key: bool = True,
+                log: Callable[[str], None] | None = None) -> Any:
+    """``log``: where a client that waits (the Claude plan, a usage limit reached) says so."""
     if fake:
         from .llm.fake import FakeLLM
 
@@ -88,7 +91,8 @@ def make_client(cfg: Config, *, fake: bool = False, need_key: bool = True) -> An
         from .llm.claude_cli import ClaudeCLIClient
 
         o = cfg.openrouter
-        return ClaudeCLIClient(models=[o.model, *o.stage_models.values(), *([o.review_model] if o.review_model else [])])
+        return ClaudeCLIClient(models=[o.model, *o.stage_models.values(), *([o.review_model] if o.review_model else [])],
+                               log=log)
     from .llm.openrouter import OpenRouterClient
 
     key = get_api_key(cfg.openrouter.provider)
@@ -304,7 +308,7 @@ def _run(book: Book, opts: Any, *, fake: bool, as_json: bool = False, run_id: st
     from .translation.orchestrator import create_run
 
     cfg = cfg or state.cfg
-    client = make_client(cfg, fake=fake)
+    client = make_client(cfg, fake=fake, log=typer.echo)
     if fake:
         typer.echo("⚠ using FakeLLM: output is placeholder text, not a translation")
     rid = run_id or create_run(state.conn, cfg, book, opts)

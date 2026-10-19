@@ -54,6 +54,13 @@ class Runner:
     def busy(self) -> bool:
         return self.thread is not None and self.thread.is_alive()
 
+    def make_client(self, cfg: Config) -> Any:
+        """The run's client; one that waits (the Claude plan, a usage limit reached) says so in the page's log."""
+        client = self.client_factory(cfg)
+        if hasattr(client, "log") and client.log is None:
+            client.log = self.log.append
+        return client
+
     # ------------------------------------------------------------ estimate / start / continue / pause
     def options(self, budget: float) -> Any:
         from ..translation.orchestrator import RunOptions
@@ -136,7 +143,7 @@ class Runner:
             row, cfg, opts = load_run(conn, run_id)
             cfg.app.workspace = str(self.cfg.workspace)
             cls = ContextOrchestrator if opts.mode == "context" else Orchestrator
-            self.orch = cls(conn, cfg, self.client_factory(cfg), resolve_book(conn, row["book_id"]), run_id, opts,
+            self.orch = cls(conn, cfg, self.make_client(cfg), resolve_book(conn, row["book_id"]), run_id, opts,
                             log=self.log.append)
             self.orch.lock_source = "gui"
             self.orch.run()

@@ -168,3 +168,50 @@ def test_a_whole_book_runs_on_the_claude_provider(monkeypatch, tmp_path, fixture
     rows = conn.execute("SELECT cost_usd, usage_json FROM llm_requests WHERE run_id=?", (rid,)).fetchall()
     assert rows and all(r[0] == 0 for r in rows)  # nothing billed; what the plan used is in the usage
     assert all(json.loads(r[1])["list_cost_usd"] == 0.042 for r in rows)
+
+
+def test_a_wrong_command_stops_at_once_and_says_why(monkeypatch):
+    """Exit 2 or a rejected option is the same on every try: no hours of waiting."""
+    for bad in (subprocess.CompletedProcess([], 2, "", "error: unknown option '--frobnicate'\n(Did you mean …?)"),
+                subprocess.CompletedProcess([], 1, "", "error: too many arguments. Expected 0 arguments but got 1.")):
+        calls = Calls(bad, _ok())
+        monkeypatch.setattr(subprocess, "run", calls)
+        waited: list[float] = []
+        with pytest.raises(FatalAPIError) as err:
+            ClaudeCLIClient(waits=(30, 60), sleep=waited.append).complete(_req())
+        assert len(calls.args) == 1 and not waited
+        assert (bad.stderr or "")[:40] in str(err.value)
+
+
+def test_an_answer_that_mentions_logging_in_is_an_answer(monkeypatch):
+    """The not-logged-in words are looked for in a failure only, never in the model's own answer."""
+    text = '{"translations": [{"unit_id": "P1", "text": "Please run /login 後再試一次（authentication 失敗）"}]}'
+    calls = Calls(_ok(text))
+    monkeypatch.setattr(subprocess, "run", calls)
+    r = ClaudeCLIClient(waits=(1,), sleep=lambda s: None).complete(_req())
+    assert r.content == text and r.attempts == 1
+
+
+def test_each_wait_is_said_before_it_starts(monkeypatch):
+    limit = subprocess.CompletedProcess([], 1, json.dumps({"subtype": "success", "is_error": True,
+                                                           "result": "Usage limit reached · resets 9am"}), "")
+    monkeypatch.setattr(subprocess, "run", Calls(limit, _ok()))
+    said: list[str] = []
+    ClaudeCLIClient(waits=(30,), sleep=lambda s: None, log=said.append).complete(_req())
+    assert len(said) == 1 and "30" in said[0] and "Usage limit reached" in said[0]
+    monkeypatch.setattr(subprocess, "run", Calls(limit, _ok()))
+    ClaudeCLIClient(waits=(30,), sleep=lambda s: None).complete(_req())  # no log given: nothing printed, no error
+
+
+def test_the_command_line_and_the_page_hear_the_waits(monkeypatch, tmp_path):
+    from ncte.cli import make_client
+    from ncte.gui.runner import Runner
+
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "claude")
+    cfg = load_config(workspace=str(tmp_path / "ws"))
+    said: list[str] = []
+    assert make_client(cfg, log=said.append).log == said.append
+    runner = Runner(cfg, client_factory=lambda c: ClaudeCLIClient())
+    client = runner.make_client(cfg)
+    client.log("等待 30 秒：額度")
+    assert list(runner.log)[-1] == "等待 30 秒：額度"

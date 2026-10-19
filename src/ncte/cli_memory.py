@@ -406,7 +406,7 @@ def eval_run(dataset: Annotated[str | None, typer.Option("--dataset")] = None,
             conn.close()
         typer.echo(f"total upper estimate ≈ ${total_hi:.4f} (no paid calls made)")
         return
-    client = make_client(cfg, fake=fake)
+    client = make_client(cfg, fake=fake, log=typer.echo)
     report = run_eval(ds, cfg, client, model=mdl, experiments=keys, repeat=repeat, budget_usd=budget_usd,
                       out_dir=out_dir, run_epubcheck=epubcheck, log=typer.echo)
     if report.get("warning"):
@@ -440,7 +440,7 @@ def eval_fix_check(models: Annotated[list[str], typer.Option("--model", help="mo
 
     fs = load_fix_set(cases)
     cfg = state.cfg
-    client = make_client(cfg, fake=fake, need_key=not dry_run)
+    client = make_client(cfg, fake=fake, need_key=not dry_run, log=typer.echo)
     gold = Counter(c.gold for c in fs.cases)
     typer.echo(f"{fs.name} v{fs.version}: {len(fs.cases)} cases " + ", ".join(f"{k} {v}" for k, v in sorted(gold.items())))
     if not fake and (bal := getattr(client, "balance", None)):
@@ -482,7 +482,7 @@ def eval_retranslate(judge: Annotated[str, typer.Option("--judge", help="model t
     fs = load_fix_set(cases)
     cfg = state.cfg
     mdl = model or cfg.openrouter.model
-    client = make_client(cfg, fake=fake, need_key=not dry_run)
+    client = make_client(cfg, fake=fake, need_key=not dry_run, log=typer.echo)
     todo = distinct_cases(fs)
     typer.echo(f"{fs.name}: {len(todo)} fixes ({sum(s for _, s in todo)} on a real error, "
                f"{sum(not s for _, s in todo)} on a wrong or unsettled suggestion); translator {mdl}, judge {judge}")
