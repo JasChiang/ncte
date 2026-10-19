@@ -535,6 +535,7 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
     if not fixes:
         return out
     from ..analysis import proofread
+    from ..memory.retrieval import unit_actions
 
     prompt = load_prompt("fix_check")
     conn: sqlite3.Connection = orch.conn
@@ -542,6 +543,7 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
         chunk = fixes[i:i + FIX_CHECK_BATCH]
         with orch.lock:
             items = []
+            actions = unit_actions(conn, orch.book.id, [r["id"] for r, *_ in chunk])
             for r, before, after, issues, flags in chunk:
                 item: dict[str, Any] = {
                     "unit_id": r["id"], "source": r["source_text"], "before": before, "after": after,
@@ -552,6 +554,8 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
                     item["program_flags"] = [{"rule": f.type, "evidence": f.evidence[:200]} for f in flags]
                 if lines := _lines(conn, r["id"]):  # 你／妳 and who-did-what issues need who speaks to whom
                     item["lines"] = lines
+                if r["id"] in actions:  # who does what where the source leaves the subject out, as read
+                    item["actions"] = actions[r["id"]]
                 items.append(item)
             # the people of these lines, as known there (name, gender, narrator): the same cards proofreading reads
             who = {x for r, *_ in chunk for x in _people(conn, r["id"])}

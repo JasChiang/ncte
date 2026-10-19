@@ -156,3 +156,12 @@ def test_voice_and_speech_habits_yield_to_the_line():
     static, _ = load_prompt("translate").render_parts({"units": []})
     voice = next(x for x in _rules(static)["3"].split("\n") if "`characters[].voice`" in x)
     assert "整體" in voice and "固定" in voice and "牴觸時以本句原文為準" in voice
+
+
+def test_the_judging_steps_are_told_what_the_read_pass_said_about_omitted_subjects():
+    """B1 (ADR-067): proofreading and the fix check describe `actions`: judged while reading, unknown / inferred not
+    sure, for checking who an action is given to."""
+    for task, payload in (("proofread", {"paragraphs": []}), ("fix_check", {"items": []})):
+        text = load_prompt(task).render(payload)
+        line = next(x for x in text.split("\n") if "`actions`" in x)
+        assert "讀的時候" in line and "`unknown`" in line and "`inferred`" in line and "核對" in line, task

@@ -203,3 +203,40 @@ def test_proofreading_and_the_readers_look_leave_book_matter_out(conn, cfg, fixt
     assert proof and read and not (proof & last) and not (read & last)
     proof, read = looked(False)
     assert last <= proof and last <= read
+
+
+def test_proofreading_and_the_fix_check_know_who_does_an_omitted_subject_s_action(conn, cfg, fixtures):
+    """B1 (ADR-067): the read pass's sentences with a subject or object left out (who does it, to whom, how sure)
+    come with their paragraph to proofreading and with the item to the fix check, named as known there."""
+    from ..scripted import known, uid
+
+    def analyze(payload, req):
+        out = RESPONDERS["scene_analyze"](payload, req)
+        if (u := uid(payload, "カイトは銀の鍵をミナに手渡した")):
+            out["actions"] = [{"unit_id": u, "summary": "交出鑰匙", "subject_candidates": [known(payload, "カイト") or "new_2"],
+                               "object_candidates": [known(payload, "ミナ") or "new_1"],
+                               "resolution_status": "inferred"}]
+        return out
+
+    seen, checks = [], []
+
+    def proofread(payload, req):
+        seen.append(payload)
+        hits = [p for p in payload["paragraphs"] if "銀の鍵をミナに" in p["ja"]]
+        return {"issues": [{"unit_id": p["unit_id"], "kind": "meaning", "severity": "high", "quote": p["zh"][:4],
+                            "problem": "交出鑰匙的人弄錯", "fix": "改"} for p in hits]}
+
+    def fix_check(payload, req):
+        checks.append(payload)
+        return {"checks": []}
+
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "scene_analyze": analyze,
+                                                               "proofread": proofread, "fix_check": fix_check}),
+             mode="context")
+    paras = [p for s in seen for p in s["paragraphs"]]
+    hit = next(p for p in paras if "銀の鍵をミナに" in p["ja"])
+    assert hit["actions"] == [{"summary": "交出鑰匙", "subject_candidates": ["海斗"], "object_candidates": ["米娜"],
+                               "resolution_status": "inferred"}]
+    assert sum("actions" in p for p in paras) == 1  # only the paragraph that has one
+    item = next(i for c in checks for i in c["items"] if "銀の鍵をミナに" in i["source"])
+    assert item["actions"] == hit["actions"]

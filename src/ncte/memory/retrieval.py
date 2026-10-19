@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from collections.abc import Iterable
 from typing import Any
 
 from ..epub.units import match_text
@@ -251,3 +252,31 @@ def story_so_far(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row) -> 
 def scene_chapter(conn: sqlite3.Connection, scene: sqlite3.Row) -> str:
     row = conn.execute("SELECT resource_href FROM units WHERE id=?", (scene["start_unit_id"],)).fetchone()
     return row[0] if row else ""
+
+
+def unit_actions(conn: sqlite3.Connection, book_id: str,
+                 unit_ids: Iterable[str] | None = None) -> dict[str, list[dict[str, Any]]]:
+    """unit → its sentences whose subject or object the source leaves out, as the read pass judged them (the scene's
+    ``actions``): who does it, to whom, and how sure that reading is — named as known at the end of the scene (as the
+    scene was translated; a name revealed later stays out). Handed to the steps that judge a translation (ADR-067);
+    nothing here decides who did it."""
+    wanted = set(unit_ids) if unit_ids is not None else None
+    if wanted is not None and not wanted:
+        return {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    forms_at = None
+    for s in conn.execute("SELECT id, state_json FROM scenes WHERE book_id=?", (book_id,)):
+        acts = [a for a in json.loads(s["state_json"] or "{}").get("actions", [])
+                if wanted is None or a.get("unit_id") in wanted]
+        if not acts:
+            continue
+        end = conn.execute("SELECT MAX(ordinal) FROM units WHERE book_id=? AND scene_id=?", (book_id, s["id"])).fetchone()[0]
+        forms_at = vis.form_positions(conn, book_id) if forms_at is None else forms_at
+        names = vis.visible_names(conn, book_id, end, forms_at) if end is not None else {}
+        for a in acts:
+            out.setdefault(a["unit_id"], []).append({
+                "summary": a.get("summary", ""),
+                "subject_candidates": [names.get(x, "？") for x in a.get("subject_candidates", [])],
+                "object_candidates": [names.get(x, "？") for x in a.get("object_candidates", [])],
+                "resolution_status": a.get("status") or a.get("resolution_status") or "unknown"})
+    return out

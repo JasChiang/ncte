@@ -38,9 +38,11 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
     the stretches are the same as in the first run). ``story``: only paragraphs of these files (the story without
     covers, table of contents, afterword or colophon, ADR-024, when ``context.skip_book_matter``); None: every file.
     ``since``: only paragraphs whose current translation is newer than this translation id (2.11)."""
+    from ..memory.retrieval import unit_actions
     from ..memory.visibility import form_positions, visible_names
 
     best = latest_texts(conn, book_id)
+    actions = unit_actions(conn, book_id)  # who does what where the subject is left out, as read (ADR-067)
     forms_at = form_positions(conn, book_id)
     names_at: dict[str, dict[str, str]] = {}  # a speaker is named as known there, never by a later reveal
     said: dict[str, set[str]] = {}
@@ -74,6 +76,8 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
         # stripping it would make the translation look like it added words
         item: dict[str, Any] = {"unit_id": r["id"], "ja": r["plain_text"], "zh": PH_RE.sub("", t["text"]),
                                 "_tid": t["id"], "_at": r["ordinal"], "_href": r["resource_href"]}  # program only
+        if r["id"] in actions:
+            item["actions"] = actions[r["id"]]
         if r["id"] in said or r["id"] in told:
             key = r["scene_id"] or str(r["ordinal"])
             if (names := names_at.get(key)) is None:  # once per scene, as known at its end (as its translation was)
