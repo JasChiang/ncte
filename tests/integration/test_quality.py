@@ -308,3 +308,28 @@ def test_a_woman_called_by_name_with_ni_is_flagged(conn, cfg, fixtures):
     assert check(conn, book.id, unit, "「米娜、海斗，我有事要拜託你們」") is None  # a group
     unit["plain_text"] = "「あいつはミナ、と呼んでいた」"
     assert check(conn, book.id, unit, "「那傢伙叫你米娜」") is None  # not opening the line
+
+
+def test_a_program_finding_is_about_the_version_it_was_found_in(conn, cfg, fixtures):
+    """ADR-055 point 3: a word rule's finding names the translation it was found in, so a later version of the
+    paragraph is not held back by a finding about an older one."""
+    from ncte.reports.acceptance import acceptance
+    from ncte.translation.cache import latest_texts
+
+    def english(payload, req):
+        out = default_translate(payload, req)
+        out["translations"][0]["translated_text"] += " hello"
+        return out
+
+    cfg.review.automatic_review = "off"
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={"translate": english}))
+    f = conn.execute("SELECT unit_id, translation_id FROM qa_findings WHERE run_id=? AND type='latin_word'",
+                     (rid,)).fetchone()
+    old = latest_texts(conn, book.id)[f["unit_id"]]
+    assert f["translation_id"] == old["id"]
+    assert not acceptance(conn, book.id)["checks"]["no_open_serious_findings"]["ok"]
+    # a later version of that paragraph (e.g. a person's edit, or a fix accepted elsewhere)
+    conn.execute("INSERT INTO translations(unit_id, target_lang, text, source_hash, prompt_version, model_id, mode, "
+                 "status, run_id, created_at) SELECT unit_id, target_lang, '新的譯文', source_hash, prompt_version, "
+                 "model_id, mode, 'succeeded', run_id, created_at FROM translations WHERE id=?", (old["id"],))
+    assert f["unit_id"] not in acceptance(conn, book.id)["checks"]["no_open_serious_findings"]["units"]

@@ -557,20 +557,21 @@ class Orchestrator:
                 sev = worst(ur.findings)
                 status = "needs_review" if sev == "high" else "succeeded"
                 gh = glossary_hash(relevant_glossary(self.glossary, r["plain_text"]))
-                self.conn.execute(
+                tid = self.conn.execute(
                     "INSERT INTO translations(unit_id, target_lang, text, source_hash, context_hash, prompt_version, "
                     "model_id, glossary_version, mode, status, run_id, request_id, flags_json, notes_json, created_at, "
                     "translator_note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (uid, self.cfg.app.language, ur.text, r["source_hash"], ctx_hash, self.prompt.version_id,
                      self.model, gh, self.opts.mode, status, self.run_id, ur.request_id,
                      json.dumps(ur.flags, ensure_ascii=False), json.dumps(ur.notes, ensure_ascii=False), utcnow(),
-                     ur.translator_note or None))
+                     ur.translator_note or None)).lastrowid
+                # each finding is about this version (ADR-055): a later version is not held back by it
                 for f in ur.findings:
                     if f.severity != "info":
-                        self._finding(uid, f.type, f.severity, f.evidence)
+                        self._finding(uid, f.type, f.severity, f.evidence, translation_id=tid)
                 for flag in ur.flags:
                     if flag in ("speaker_uncertain", "term_uncertain", "possible_source_error"):
-                        self._finding(uid, f"model_flag:{flag}", "low", "; ".join(ur.notes)[:300])
+                        self._finding(uid, f"model_flag:{flag}", "low", "; ".join(ur.notes)[:300], translation_id=tid)
                 self.conn.execute(
                     "UPDATE jobs SET status=?, error=NULL, updated_at=? WHERE run_id=? AND stage='translate' AND target_id=?",
                     (status, utcnow(), self.run_id, uid))
