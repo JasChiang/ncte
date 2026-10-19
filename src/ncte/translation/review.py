@@ -533,7 +533,8 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
                 item: dict[str, Any] = {
                     "unit_id": r["id"], "source": r["source_text"], "before": before, "after": after,
                     "issues": [_claim(x) for x in issues],
-                    "around": [a["source"] for a in _surroundings(conn, orch.book.id, [r], reach=2)]}
+                    # as far as review and the retranslation see, with the current text and who speaks
+                    "around": _surroundings(conn, orch.book.id, [r])}
                 if flags:
                     item["program_flags"] = [{"rule": f.type, "evidence": f.evidence[:200]} for f in flags]
                 if lines := _lines(conn, r["id"]):  # 你／妳 and who-did-what issues need who speaks to whom

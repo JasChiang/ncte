@@ -350,3 +350,25 @@ def test_the_check_writes_what_the_source_says_before_its_verdict():
     assert list(item["properties"]).index("gist") < list(item["properties"]).index("verdict")
     text = load_prompt("fix_check").render({})
     assert "`gist`" in text and text.index('"gist"') < text.index('"verdict"')
+
+
+def test_the_check_sees_as_far_around_as_review_with_texts_and_speakers(conn, cfg, tmp_path):
+    """2.5: the paragraphs around a fix come with their current translation (and speakers, when read), as far as
+    review reaches (REVIEW_CONTEXT on each side), not only two source paragraphs."""
+    from ncte.translation.review import REVIEW_CONTEXT
+
+    lines = [f"　{i}番目の文だった。" for i in range(1, 7)] + ["　彼女は来なかった。"] + \
+            [f"　{i}番目の文だった。" for i in range(8, 14)]
+    checks: list = []
+
+    def still_wrong(payload, req):
+        checks.append(payload)
+        return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "still_wrong", "new_error": "",
+                            "reason": "r"} for i in payload["items"]]}
+
+    review_once(conn, cfg, small_book(tmp_path, lines), fixed_text=None, fix_check=still_wrong)
+    around = checks[0]["items"][0]["around"]
+    assert all(isinstance(a, dict) and "source" in a and "translation" in a and a["at"] in ("before", "after")
+               for a in around)
+    assert sum(a["at"] == "before" for a in around) == REVIEW_CONTEXT
+    assert sum(a["at"] == "after" for a in around) == REVIEW_CONTEXT

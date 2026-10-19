@@ -94,12 +94,13 @@ def payloads(fs: FixSet, seed: int = 0) -> list[dict[str, Any]]:
         items = []
         for c in cases[i:i + FIX_CHECK_BATCH]:
             item: dict[str, Any] = {"unit_id": c.id, "source": c.source, "before": c.before, "after": c.after,
-                                    "issues": c.issues, "around": c.around}
+                                    "issues": c.issues, "around": [{"source": s} for s in c.around]}
             if c.lines:
                 item["lines"] = c.lines
             items.append(item)
         payload: dict[str, Any] = {"task": "fix_check", "items": items}
-        text = "".join(x["source"] + "".join(x["around"]) + "".join(x.get("lines", [])) for x in items)
+        text = "".join(x["source"] + "".join(a["source"] for a in x["around"]) + "".join(x.get("lines", []))
+                       for x in items)
         cast = [{"name": ch.name, "ja": ch.ja, "gender": ch.gender, **({"narrator": True} if ch.narrator else {})}
                 for ch in fs.characters if ch.ja in text or ch.name in text]
         if cast:
