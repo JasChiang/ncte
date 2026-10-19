@@ -372,3 +372,37 @@ def test_the_check_sees_as_far_around_as_review_with_texts_and_speakers(conn, cf
                for a in around)
     assert sum(a["at"] == "before" for a in around) == REVIEW_CONTEXT
     assert sum(a["at"] == "after" for a in around) == REVIEW_CONTEXT
+
+
+def test_a_fix_written_but_not_yet_checked_shows_as_unchecked_when_the_run_is_stopped(conn, cfg, tmp_path):
+    """2.7: the new text and a 「not checked yet」 finding on it are written together; stopped before the check
+    answers, acceptance sees an unchecked fix (not a book that looks settled); once checked, the finding becomes the
+    outcome (fixed: resolved)."""
+    from ncte.reports.acceptance import acceptance
+
+    def killed(payload, req):
+        raise KeyboardInterrupt
+
+    book, rid, summary = review_once(conn, cfg, small_book(tmp_path), fixed_text=RIGHT, fix_check=killed)
+    assert summary.status == "interrupted"
+    uid = unit_of(conn, book, "来なかった")
+    best = latest_texts(conn, book.id)[uid]
+    assert best["text"] == RIGHT and best["status"] == "needs_review"
+    f = conn.execute("SELECT type, status, translation_id FROM qa_findings WHERE unit_id=? AND type LIKE 'fix_%'",
+                     (uid,)).fetchall()
+    assert [tuple(x) for x in f] == [("fix_unchecked", "open", best["id"])]
+    assert uid in acceptance(conn, book.id)["checks"]["fixes_checked"]["units"]
+
+
+def test_a_checked_fix_settles_its_unchecked_mark(conn, cfg, tmp_path):
+    book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=RIGHT)  # the fake check accepts it
+    uid = unit_of(conn, book, "来なかった")
+    f = conn.execute("SELECT type, status FROM qa_findings WHERE unit_id=? AND type LIKE 'fix_%'", (uid,)).fetchall()
+    assert [tuple(x) for x in f] == [("fix_unchecked", "resolved")]
+    assert uid not in acceptance_units(conn, book.id)
+
+
+def acceptance_units(conn, book_id):
+    from ncte.reports.acceptance import acceptance
+
+    return acceptance(conn, book_id)["checks"]["fixes_checked"]["units"]

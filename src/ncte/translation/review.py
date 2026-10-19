@@ -415,6 +415,7 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
         return
     by_id = {r["id"]: r for r in todo}
     new_tid: dict[str, int] = {}
+    mark: dict[str, int | None] = {}
     with orch.lock, Transaction(orch.conn):
         for uid, ur in res.ok.items():
             r = by_id[uid]
@@ -427,6 +428,9 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
                  glossary_hash(relevant_glossary(orch.glossary, r["plain_text"])), orch.opts.mode, "needs_review",
                  orch.run_id, ur.request_id, json.dumps(ur.flags + ["review_retranslation"], ensure_ascii=False),
                  json.dumps(ur.notes, ensure_ascii=False), utcnow(), ur.translator_note or None)).lastrowid)
+            # written with the new text: stopped before the check answers, the fix shows as not checked (2.7)
+            mark[uid] = orch._finding(uid, "fix_unchecked", "medium", "the fix was written; its check against the "
+                                      "source had not answered yet", translation_id=new_tid[uid])
         for uid in res.failed:
             stats["still_flagged"] += 1
             stats["pending"] += 1
@@ -451,7 +455,7 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
                 # intervention — two readings the source allows are not an error to fix)
                 orch.conn.execute("UPDATE translations SET status='unneeded_fix' WHERE id=?", (tid,))
                 orch.conn.executemany("UPDATE qa_findings SET status='dismissed_by_check' WHERE id=? AND status='open'",
-                                      [(f,) for f in fids])
+                                      [(f,) for f in fids + [mark[uid]] if f])
                 old = current.get(uid)
                 if old is not None and old["status"] == "needs_review" and not orch.conn.execute(
                         "SELECT 1 FROM qa_findings WHERE unit_id=? AND status='open' AND severity='high'",
@@ -466,7 +470,7 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
                 orch.conn.execute("UPDATE translations SET status='succeeded' WHERE id=?", (tid,))
                 orch.conn.executemany(
                     "UPDATE qa_findings SET status=? WHERE id=? AND status='open'",
-                    [("resolved", f) for f in fids])
+                    [("resolved", f) for f in fids + [mark[uid]] if f])
                 orch.conn.execute("UPDATE jobs SET status='succeeded' WHERE run_id=? AND stage='translate' AND "
                                   "target_id=?", (orch.run_id, uid))
                 stats[outcome] += 1
@@ -477,9 +481,11 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
                 stats["still_flagged"] += 1
                 stats["pending"] += 1
                 c = checks.get(uid)
-                orch._finding(uid, f"fix_{outcome}", "high" if outcome in ("still_wrong", "regressed") else "medium",
-                              (f"{c.reason} {c.new_error}".strip() if c else "the fix was not checked against the source")
-                              [:400], translation_id=tid)
+                # the mark written with the new text becomes the outcome
+                orch.conn.execute("UPDATE qa_findings SET type=?, severity=?, evidence=? WHERE id=?",
+                                  (f"fix_{outcome}", "high" if outcome in ("still_wrong", "regressed") else "medium",
+                                   (f"{c.reason} {c.new_error}".strip() if c else
+                                    "the fix was not checked against the source")[:400], mark[uid]))
             for f in ur.findings:
                 if f.severity in ("high", "medium"):
                     fid = orch._finding(uid, f"after_review:{f.type}", f.severity, f.evidence, translation_id=tid)
