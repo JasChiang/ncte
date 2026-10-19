@@ -848,3 +848,28 @@ open workspace/eval/<timestamp>/report.html
 - 限制：見 ADR-065「已知取捨與差異」（章首第一批看不到前一章剛翻好的譯文；平行時批次交界的重譯與修正驗收可能看到鄰批較新或較舊的譯文；合成請求的記憶部分沒有程式核對過的說話者）。併發也用在 Claude 方案（同時幾個 `claude -p`），額度用得比較快、等待重試時各自等。`--dry-run` 不知道合成請求，仍以兩個請求估。`translator.mode`（結構化輸出降級）是共用的，平行時一個請求的降級會影響同時的其他請求（原本 `run_batches` 就是這樣）。
 - 重現：`cd ../ncte-fixes && source .venv/bin/activate && pytest && ruff check src tests && mypy src`。開關：設定檔 `openrouter: {max_concurrency: 1}` 回到一次一個；`context: {read_in_one_request: true}`。測試 506 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。
 
+
+## review 後的線上驗證（2026-10-19，Claude 方案）
+修正指示第 5.1、5.3、5.4 節，用 Claude 方案（`NCTE_LLM_PROVIDER=claude`）在另開的工作區跑；沒有用 OpenRouter／fal，沒有動 `~/GitHub/ncte` 的工作區資料庫。金額都是照定價換算（Claude 方案不另收費）。5.2、5.5、5.6 還沒跑。
+- 5.1 快取（ADR-062 補充，1.1）：範例書 smoke run，程式是第 1 節的 commit 4c13950（另開的 `ncte-smoke` worktree）。31 個請求、5.2 分鐘、照定價 US$1.13，全部完成。改前（同日 01:36 的 smoke，15 個請求）輸入裡 cache read 占 23%、cache write 77%，translate 第 3 個請求 0 命中；改後 read 38%、write 62%，而且每個步驟從第二個請求起都讀回整段 system prompt＋schema：translate 7 個請求裡後 6 個每次讀回 3,489 token，scene_analyze 每場 7,404，memory_update 6,964。38% 只是因為 smoke 每個步驟的請求少；整本時固定部分接近全命中。另外看到：每個請求「沒進快取」的輸入只有 2 個 token，表示 Claude Code 把 user 訊息也寫進快取（以 1.25 倍寫入計），那部分每次都不同、不會被讀回，省不掉。
+- 5.3 修正驗收先寫大意（2.3）：`ncte eval fix-check --cases fix_check_v2`（40 題，Opus、推理 high），改前（4c13950）與改後（17ff97d，第 2 節）各兩輪，共 8 個請求。改前：誤結案 0/23、1/23（`sensei-who`），完全一致 37/40，無法裁決的 5 題答 undecided 2 題；改後：誤結案 0/23、0/23，其餘相同。沒有副作用，差異在雜訊內；這份題庫在 Opus high 上本來就接近滿分，分不出 gist 的效果。紀錄：`eval-ncte-smoke/fix_check_results.json`（改前）、`eval-ncte-smoke2/fix_check_results.json`（改後），在當次的 scratchpad，沒有放進 repo。
+- 5.4 後文線索（ADR-064 補充）：完整報告與資料在當次 scratchpad 的 `exp54/`（`report.md`、`samples.json`、`results/`），沒有放進 repo。程式是 0eac36a（第 3 節後，src 沒改），資料是那本奇幻戀愛書整本工作區的唯讀副本，每次執行另複製一份；翻譯 `--model claude/sonnet`、`review.automatic_review: off`，四個場景（s_008_01、s_016_02、s_016_03、s_021_03）整場重翻，共 725 段、程式切成 10 批。變體：V0＝main 9ce81bd 的 prompts（`NCTE_PROMPTS_DIR`；程式仍是 0eac36a）；V1＝3.1＋3.2；V2＝V1＋`read_through: true`；V3＝V2＋`stage_reasoning: {translate: high}`。每個變體跑兩次。判定由 Opus（high）只拿類別判，正例只給前後各兩段原文。
+  - 樣本：正例 5 句——§59「好敵手」（線索 §60–62）、§1653 不補出像誰（§1654–1655）、§1713 改用敬語（§1714）、§1838 年紀比他大（§1839–1840）、§2353「口上」譯成中文（§2354）。`docs/todo.md` 那幾段只有 §59 屬於「線索在後文」，其他不需要後文就能判斷，沒放進來。§59 與 §2353 在 Sonnet 上這次沒有重現錯誤（每個變體每次都對），真正分得出差別的是 §1653、§1713、§1838。反例 A（懸念）12 句：§26、§27、§30、§31、§33、§38、§1455、§1457、§1459、§1460、§2332、§2333（身分或答案到後文才寫出）。反例 B／C：四個場景其餘的段落（沒有再分「無線索」與「原本就與官方一致」兩類）。
+  - 結果（r1／r2）：
+
+    | 變體 | 正例成立 | 重現錯誤的三句 | 反例 A 增譯 | B/C 被判不同（對 V0r1） | 每請求 completion tokens | 照定價 |
+    |---|---|---|---|---|---|---|
+    | V0 | 3／2 | 1/3、0/3 | 0／0 | V0r2：3 段（基準雜訊） | 4,209／5,389 | US$1.631／1.582 |
+    | V1 | 3／3 | 1/3、1/3 | 0／0 | 5／8 | 5,136／4,536 | US$2.104／2.552 |
+    | V2 | 3／3 | 1/3、1/3 | 0／0 | 3／6 | 6,448／6,271 | US$2.093／1.628 |
+    | V3 | 5／4 | 3/3、2/3 | 0／0 | 2／5 | 8,286／9,100 | US$1.871／1.835 |
+
+  - V1 只穩定修好 §1653（V0 兩次都補了「跟那孩子很像」）；§1713、§1838 兩次都錯。V2 的 `read_through` 兩次都列出 §1838（「須譯成年長的姐姐」）、r2 也列出 §1713（「要看得出禮貌口吻」），譯文照錯：看到了沒用上。V3 的 §1838 兩次都對，§1713 一對一錯（r2 列出了這句，譯文仍沒有敬語）。
+  - 反例 A：8 次執行都沒有增譯（Opus 判定，加上程式比對後文才出現的名字沒有提前出現）。反例 B／C 這個樣本判不出來：V0 自己兩次互比就有 3 段被判不同，超過「改壞不超過一句」的門檻；逐條看多半是好幾個變體都會出現的一般誤譯（隨機差異）。和這次的風險同類的只有一句：V1r2 §22 把「とある国」譯成「另一個國家」（「不同國家」是 §25 才說的）。另外 V2r2 §1651 加了原文沒有的玩笑，V3r2 把「規格外」譯反（§2190、§2345）。這些段落只有我（執行的 agent）看過，沒有逐句交給人確認。
+  - `read_through` 內容：條目數 V2 23／30、V3 27／30；整批請求清單是空的 V2r1、V3r1 各 2/10，r2 0/10；1–2 段的小重試請求全空。多數條目真的指向後面的段落、寫得具體，每次約 2–4 條其實是規則、譯名表或前文；沒有看到樣板句；一批最多 5 條，條目多的批次後面的沒列到。
+  - 代價：V3 每個整批請求的 completion tokens 約是 V0 的 1.7–2 倍，照定價一次只多約 15%（US$1.85 對 1.61），因為讀回的快取比較多；額度比例要整本實測才準。
+  - 統計力弱：真正重現的錯只有 3 句、每個變體各 2 次。
+  - 用量：Sonnet 110 個請求（翻譯 101、規則確認 9），照定價 US$15.30；Opus 判定 76 個，US$6.94；合計 186 個，約 US$22.23。`/usage`：開始前 session 78%、week 33%，中途碰到 session 上限（程式自己等待後接著跑完），結束後 week 40%；同時段還有其他工作在用額度，7 個百分點不全是這次的。
+  - 沒做到：從對照官方的紀錄再挑正例；反例 B／C 分兩類；3.4 的 `scene_max_chars` 比較。
+- 結論（ADR-064 補充）：規則 4 的新措辭與「讓前後的反應成立」保留；`read_through` 預設維持關（看到了沒用上，單開它沒有改善）；Sonnet 翻譯要推理 high 才用得上後文線索。
+- 重現：5.1 `NCTE_LLM_PROVIDER=claude ncte -w <新工作區> translate tests/fixtures/basic.epub --mode context --budget-usd 5`（另開 worktree 在 4c13950，翻譯 Opus、讀書 Sonnet），再看 `llm_requests.usage_json` 的 `cache_read_input_tokens`／`cache_creation_input_tokens`；5.3 `NCTE_LLM_PROVIDER=claude ncte eval fix-check --cases fix_check_v2`（4c13950 與 17ff97d 各跑）；5.4 見 `exp54/report.md` 的指令（`ncte -w runs/<名>/ws -c cfg/<v>.yaml retranslate <書> --unit-id …（725 個）--mode context --model claude/sonnet`）。
