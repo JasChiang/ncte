@@ -139,3 +139,28 @@ def apply(conn: sqlite3.Connection, book_id: str, parsed: HouseStyleOutput, refs
                       voices=voices, notes=style.notes, auto=True)
     save_style(conn, book_id, new)
     return {"habits": len(parsed.habits), "rules": len(new.rules)}
+
+
+def names_seen(conn: sqlite3.Connection, book_id: str) -> dict[str, str]:
+    """The renderings in the glossary now (``ja`` → ``zh``): what the house style is chosen with."""
+    return {g["source_term"]: g["target_term"] for g in conn.execute(
+        "SELECT source_term, target_term FROM glossary WHERE book_id=?", (book_id,)) if g["target_term"]}
+
+
+def follow_renames(conn: sqlite3.Connection, book_id: str, seen: dict[str, str]) -> dict[str, str]:
+    """Naming came after the house style (ADR-053) and may render a name differently from what the style saw: the
+    old rendering is replaced with the new one in the model-chosen style's voices. A plain string replacement, like a
+    rename (``translation/rename.py``): nothing is judged. A person's style is not touched. Returns old → new."""
+    style = load_style(conn, book_id)
+    if not style.auto or not style.voices:
+        return {}
+    now = names_seen(conn, book_id)
+    changed = {old: now[ja] for ja, old in seen.items() if old and now.get(ja) and now[ja] != old}
+    if not changed:
+        return {}
+    # one pass, longest first: a new name that contains an old one is not replaced twice
+    old = re.compile("|".join(re.escape(o) for o in sorted(changed, key=len, reverse=True)))
+    voices = {who: old.sub(lambda m: changed[m.group(0)], text) for who, text in style.voices.items()}
+    if voices != style.voices:
+        save_style(conn, book_id, style.model_copy(update={"voices": voices}))
+    return changed

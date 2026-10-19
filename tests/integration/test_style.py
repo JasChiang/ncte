@@ -283,3 +283,30 @@ def test_a_toc_entry_matches_a_paragraph_with_the_same_source(conn, cfg, fixture
                  "('nav','ncx')) OR unit_id IN (SELECT id FROM units WHERE book_id=? AND kind='heading')", (book.id, book.id))
     titles = [c["title"] for c in chapters(conn, resolve_book(conn, book.id))]
     assert "章的標題" in titles
+
+
+def test_a_name_naming_changes_after_the_house_style_is_changed_in_its_voices_too(conn, cfg, fixtures):
+    """2.12: the house style is chosen before naming and writes names as it saw them; when naming then renders a
+    name differently, the program replaces the old rendering with the new one in the style's voices (a plain string
+    replacement, like a rename; nothing judged)."""
+    picked: dict[str, str] = {}
+
+    def house(payload, req):
+        ja, zh = payload["names"][0].split("→")
+        picked.update(ja=ja, zh=zh)
+        ref = payload["characters"][0]["ref"]
+        return {"honorifics": "natural", "honorifics_reason": "t", "rules": [],
+                "habits": [{"ref": ref, "habit_ja": "あんた", "render_zh": f"叫對方「{zh}」", "note": ""}]}
+
+    def naming(payload, req):
+        item = next(n for n in payload["names"] if n["ref"] == picked["ja"])
+        return {"names": [{"ref": item["ref"], "zh": picked["zh"] + "新", "reason": "t"}], "address": [], "characters": []}
+
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"],
+                            FakeLLM(responders={**RESPONDERS, "house_style": house, "naming": naming}), mode="context")
+    assert picked
+    now = conn.execute("SELECT target_term FROM glossary WHERE book_id=? AND source_term=?",
+                       (book.id, picked["ja"])).fetchone()[0]
+    assert now == picked["zh"] + "新", now  # naming changed it
+    voices = "".join(load_style(conn, book.id).voices.values())
+    assert f"叫對方「{picked['zh']}新」" in voices and voices.count(picked["zh"]) == 1

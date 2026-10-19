@@ -290,6 +290,7 @@ class ContextOrchestrator(Orchestrator):
                 self.house_style_pass()  # before naming: forms of address follow the honorific policy
             if self._stop_reason or not self.naming_pass():
                 return
+            self.style_follows_naming()
             self.translate_pass(scenes)
         else:
             self.interleaved(scenes)
@@ -470,6 +471,7 @@ class ContextOrchestrator(Orchestrator):
             return {}
         with self.lock:
             req, refs = house_style.request(self.conn, self.book.id)
+            seen = house_style.names_seen(self.conn, self.book.id)  # naming may change them afterwards (2.12)
         stats: dict[str, int] = {}
         if req["characters"]:
             try:
@@ -484,9 +486,30 @@ class ContextOrchestrator(Orchestrator):
                 with self.lock, Transaction(self.conn):
                     stats = house_style.apply(self.conn, self.book.id, parsed, refs)
         if record_job:
-            self._set_job("house_style", self.book.id, "succeeded", None, stats)
+            self._set_job("house_style", self.book.id, "succeeded", None, {**stats, "names_seen": seen})
         self.log(f"house style: {stats}")
         return stats
+
+    def style_follows_naming(self) -> dict[str, str]:
+        """After naming: a name the house style wrote as it was then, rendered differently now, is replaced in the
+        style's voices (2.12). What it saw is then the current glossary, so a resumed run does not replace again."""
+        from ..analysis import house_style
+
+        job = self._job("house_style", self.book.id)
+        if job is None or job["status"] != "succeeded":
+            return {}
+        cp = json.loads(job["checkpoint_json"] or "{}")
+        if not cp.get("names_seen"):
+            return {}
+        with self.lock, Transaction(self.conn):
+            changed = house_style.follow_renames(self.conn, self.book.id, cp["names_seen"])
+            if changed:
+                cp["names_seen"] = house_style.names_seen(self.conn, self.book.id)
+                self.conn.execute("UPDATE jobs SET checkpoint_json=? WHERE id=?", (json.dumps(cp, ensure_ascii=False),
+                                                                                    job["id"]))
+        if changed:
+            self.log(f"house style follows naming: {changed}")
+        return changed
 
     def impressions_pass(self, *, record_job: bool = True) -> int:
         """After relations (ADR-045): personality, way of speaking and place in the story of the main characters."""
