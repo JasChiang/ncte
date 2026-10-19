@@ -939,3 +939,20 @@ open workspace/eval/<timestamp>/report.html
 - 限制：LM Studio 沒把 Gemma 4 的資料夾列進清單（它自己失敗的下載留了殘檔），Gemma 目前只能走 mlx_lm.server，而 mlx_lm 沒有 grammar。測試腳本與原始輸出在這次 session 的 scratchpad（bench_local.py、bench_native.py、bench_pipeline.py、bench_sonnet.py、compare.py、r_*.json），不進 repo。
 - 重現：`lms server start` 並載入模型後 `NCTE_LLM_PROVIDER=local ncte models`；`NCTE_LLM_PROVIDER=local ncte translate 書.epub --mode context --limit-units 40`。
 
+
+## 術語的意思與名額跟批次走（2026-10-20，分支 terms-and-facts-2026-10-20，自 dc5d86c；ADR-069）
+全部離線；沒有跑任何 `claude -p` 或 OpenRouter 請求，沒有動任何工作區資料庫。提示詞都在 v1 內改（`prompt_version` 的雜湊跟著變）。
+- 1 事實名額跟批次大小走：`retrieval.batch_quota`／`memory_chars`。`max_retrieved_evidence` 是每 25 段的名額（進位、至少原值、最多 4 倍），123 段的批次 5 → 20 筆；記憶區塊字數同比例放寬，上限 8,000 字（`MEMORY_CHARS_MAX`）。挑選打分不變。測試 `tests/integration/test_batch_quota.py`：10／25 段不變、26 段兩倍、123 段 20、0 仍是 0；123 段的批次交給 `select_facts` 的上限 > 5、10 段的仍是 5。
+- 2 記憶整理規則 1：`memory_update` 與 `scene_read` 的規則 1 補同一句通則（原文見下）。測試：兩份的規則 1 都逐字含這句。
+- 3 術語的意思（新步驟 `terms`，house_style 之後、naming 之前）：`analysis/terms.py`（候選、請求、核對與寫入）、`memory/terms.py`（儲存、`definitions_for`）、migration 31 `term_definitions`、`TermsOutput`、`prompts/terms/v1.md`、FakeLLM 預設不回答。接線：翻譯（`ContextOrchestrator.batch_context`，修正重譯也走它）、審稿（payload 從同一份 context 取）、對照校稿（`proofread.notes`）、修正驗收（`_check_fixes`，逐段看自己的位置）；四份提示詞各加一個條件區塊。`context.term_definitions`（預設開）、`ncte names terms`、`ncte glossary define`、估價（`terms` 在 `PER_RUN_STAGES`，sample share 0.01）、網頁進度「術語」、譯名頁「術語的意思」小卡（`GET book/<id>/terms`）。README、`docs/architecture.md`、`config.example.yaml` 照改。測試 `tests/integration/test_terms.py`：請求帶例句（含這個詞、有位置）與事實（字串含這個詞）、代號不重複，步驟在 house_style 之後 naming 之前；FakeLLM 回答定義後，翻譯（含校稿修正的重譯）、校稿、修正驗收的 payload 有 `term_definitions`，定義引用的證據之前的翻譯批次與校稿段落沒有；引用不存在的代號被拒、沒有定義、job 記 `rejected: 1`；人工定義不被覆蓋、不再問、翻譯照帶；關閉時沒有 `terms` 請求、也沒有定義；內容過濾擋下時切半，擋下的詞記 `terms_blocked`；Claude 方案下這步是 `claude/opus`、不在 `CLAUDE_READ_STAGES`；估價有 `terms`（sample share、小於 relations）、關閉時沒有；網頁進度的階段順序、譯名頁資料；兩個指令；提示詞的輸入說明只在帶資料時出現（不在快取前綴）、`terms/v1.md` 的通則都在且沒有「」引的書例。
+- 4 稱呼表、角色卡、前情摘要的檢查：
+  - 稱呼（`address.context_items`）有同樣的稀釋：固定 12 個、本批字面出現的稱呼加上本批說話者對在場者的稱呼、用得多的優先。改為每 25 段 12 個、最多 4 倍（`FORMS_PER_QUOTA`），翻譯與校稿（一段 60 段 → 36）都套用；挑選方式不變。測試：10 段 12、123 段 48、校稿 60 段 36。
+  - 人物卡：在場者（場景參與者、敘述者、說話者，或場景到本批為止的原文出現名字或別名）全部附上，沒有名額；每人的口吻範例最多 3 句，依故事位置取最近的（不是依字面），不變。
+  - 前情摘要：本章到這裡最近 4 段、上一章 1,200 字，依故事位置挑，不是依字面；不變（字數預算放寬後被擠掉的機會也變小）。
+  - 道具、說話者清單、省略主詞的句子、場景疑問、體例的口吻：沒有名額上限，不變。
+- 5 校稿輪數：`context.proofread_passes` 的預設改為 null，`config.proofread_passes(cfg)` 決定：設了（含 1）就照設定，否則 Claude 方案 2、其他來源 1（`CLAUDE_PROOFREAD_PASSES`）。執行與估價都用它；`ncte proofread --passes` 照舊覆寫。README〈品質控制與人工校正〉、網頁設定頁的 Claude 方案卡、`config.example.yaml`（改成註解，免得照抄就固定成 1）、ADR-066 補充。測試（`tests/integration/test_proofread_passes.py`）：claude 預設 2、openrouter 預設 1、claude 下設定檔寫 1 時是 1；估價在 claude 是 openrouter 的兩倍；來源是 claude 的執行做了兩輪（FakeLLM 代替）。
+- 提示詞新增的句子：
+  - `memory_update`、`scene_read` 規則 1：「`evidence_quote` 要選原文中直接寫出這筆事實的那一句，包含事實的主體與關鍵詞，不要選只是在同一段開頭、沒有寫出這件事的句子。」
+  - `translate`、`proofread`、`fix_check`、`review` 輸入（條件區塊）：「`term_definitions`：讀完全書後整理的術語意思（`ja` 原文、`zh` 譯名、`definition` 說明），用來理解原文裡這個詞指的是什麼；不是要寫進譯文的內容。」
+- 沒做：線上驗證（不跑額度）——定義品質、§1749 那類錯是否改善、名額放大後長場景的輸入增加多少、校稿兩輪的實際效果都沒有量；網頁編輯定義；讀者檢查與規則確認不帶定義；章節標題的翻譯不帶定義；不在譯名表裡的術語不會被定義。
+- 重現：`cd ../ncte-terms && source .venv/bin/activate && pytest && ruff check src tests && mypy src`，574 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。已讀過的書補術語：`ncte names terms 書.epub`；人工定義：`ncte glossary define 書.epub 詞 "意思"`；關閉：設定檔 `context: {term_definitions: false}`；校稿輪數：`context: {proofread_passes: 1}` 或 `ncte proofread 書.epub --passes 1`。
