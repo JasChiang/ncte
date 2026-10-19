@@ -40,7 +40,7 @@ def affected_units(conn: sqlite3.Connection, book_id: str, *, form: str, old_zh:
                                         "instr(u.plain_text, ?) > 0 ORDER BY u.book_id, u.ordinal", (*ids, form[:1]))
                 if pat.search(match_text(r["plain_text"]))]
     if added and len(old_zh) >= MIN_REPLACE:
-        # the translator also wrote the name where the source leaves it implied (「…と高らかに笑って」 → 「加利恩如此
+        # the translator also wrote the name where the source leaves it implied (「…と高らかに笑って」 → 「加爾德如此
         # 放聲大笑」): a person's name rendering is distinctive enough to find in any paragraph
         seen = {r["id"] for r in rows}
         where, ids = scope_clause(conn, book_id, "u.book_id")

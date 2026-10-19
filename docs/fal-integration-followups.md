@@ -76,7 +76,7 @@
 
 - 書籍 ID：b_adc567b46fb54cc2；本次 run：r_20261015082652_eb2c79。
 - 先前完整 run：r_20261015010304_dca1b0。
-- 系列資料庫：`workspace/series/【電子版限定特典付き】英雄と賢者の転生婚/ncte.db`；查詢時使用 SQLite URI mode=ro。
+- 系列資料庫：`workspace/series/〔奇幻戀愛那本的系列資料夾〕/ncte.db`；查詢時使用 SQLite URI mode=ro。
 - 原 CLI 日誌：`workspace/logs/hero-fal-unattended-20261015-162651.log`，不包含後來 GUI 續跑的全部紀錄。
 - 首次自動收尾結果：`workspace/logs/hero-fal-unattended-20261015-162651.result.json`。
 - 重翻前備份：`workspace/backups/hero-fal-20261015-162651/before-retranslation.db`。

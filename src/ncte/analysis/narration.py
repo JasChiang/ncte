@@ -1,7 +1,7 @@
 """Whose voice tells the story: first person (the narrator is 「私」「俺」) or third person (ADR-040).
 
 Japanese narration often leaves the subject out (「村長の後を追って邸宅内に入る」) or says 「こちら」 for the focal
-character. In a third-person book the translator still wrote 「我跟在村長身後」 in eleven places of 英雄賢者 — it was
+character. In a third-person book the translator still wrote 「我跟在村長身後」 in eleven places of the fantasy-romance book — it was
 never told whose voice the narration is. The program can tell from the source alone: in third-person books narration
 (outside quotes and parentheses) almost never has a first-person pronoun (0.1–0.2% of paragraphs), in first-person
 books it does all the time (25–27%).

@@ -1,7 +1,7 @@
 """A line that calls a woman by name, translated with 你 (context mode).
 
-The translation gets each character's gender on its card, and still now and then writes 你 to a woman (英雄賢者
-§716 「セレナ、今の私はあなたに対する皮肉を…」 → 「瑟蕾娜，我剛才是在挖苦你」). The program can see the cheapest case:
+The translation gets each character's gender on its card, and still now and then writes 你 to a woman (the fantasy-romance
+book, §716 「セレナ、今の私はあなたに対する皮肉を…」 → 「瑟蕾娜，我剛才是在挖苦你」). The program can see the cheapest case:
 the line opens with, or sets off with a comma, the name of a character known as female by then, and the translation
 has 你 but no 妳. Such a unit is flagged for the reviewer, who fixes it with the context; nothing is changed here.
 """

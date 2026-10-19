@@ -54,8 +54,8 @@ def requests(conn: sqlite3.Connection, book_id: str) -> list[tuple[dict[str, Any
                                   "NULL ORDER BY first_revealed_ordinal LIMIT 8", (book_id, c["id"], c["id"])):
                 r = f"f{len(ev) + 1}"
                 ev[r] = ("fact", f["first_revealed_ordinal"])
-                # a fact where this person is only the object says whose it is: 「雷德：向艾莉西亞自稱出身於山村」
-                # under 艾莉西亞's card read as hers
+                # a fact where this person is only the object says whose it is: 「凱爾：向諾艾兒自稱出身於山村」
+                # under 諾艾兒's card read as hers
                 who = "" if f["subject"] == c["id"] else f"{names.get(f['subject'], f['subject'])}："
                 facts.append({"ref": r, "at": f["first_revealed_ordinal"],
                               "text": qualified_fact(f, f"{who}{f['predicate']} {f['object']}", names)})

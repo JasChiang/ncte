@@ -306,13 +306,13 @@ def flag_collisions(conn: sqlite3.Connection, book_id: str) -> int:
 
 def _set_full_names(conn: sqlite3.Connection, book_id: str, term: str, old_zh: str, zh: str) -> None:
     """A given name decided alone (ノエル) also changes the full names that contain it (ノエル・ランメル
-    諾艾兒·朗梅爾 → 艾莉潔·朗梅爾, ノルデン魔法王国): unconfirmed glossary entries and character display names."""
+    諾艾兒·朗梅爾 → 諾艾爾·朗梅爾, ノルデン魔法王国): unconfirmed glossary entries and character display names."""
     if not old_zh or old_zh == zh:
         return
 
     def swap(ja: str, cur: str | None) -> str | None:
         if cur and ja != term and ja.startswith(term) and cur.startswith(old_zh) and "・" not in ja:
-            return zh + cur[len(old_zh):]  # ノルデン魔法王国 威加爾達魔法王國 → 維加爾達魔法王國
+            return zh + cur[len(old_zh):]  # ノルデン魔法王国 諾登魔法王國 → 諾爾登魔法王國
         ja_parts, zh_parts = re.split(r"[・･·]", ja), re.split(r"[・･·]", cur or "")
         if len(ja_parts) < 2 or term not in ja_parts or len(zh_parts) != len(ja_parts):
             return None
@@ -337,8 +337,8 @@ def _set_full_names(conn: sqlite3.Connection, book_id: str, term: str, old_zh: s
 
 
 def _sync_address(conn: sqlite3.Connection, book_id: str, term: str, old_zh: str, zh: str) -> None:
-    """Address renderings built on the old rendering follow it (「カイル・ヴァイス様」 凱爾·福里登大人 → 凱爾·弗里登大人,
-    「ヴァイス卿」 福里登卿 → 弗里登卿, 「ガルドの坊主」 加爾德小鬼 → 加爾德小子). A full name also changes the parts
+    """Address renderings built on the old rendering follow it (「カイル・ヴァイス様」 凱爾·懷斯大人 → 凱爾·維斯大人,
+    「ヴァイス卿」 懷斯卿 → 維斯卿, 「ガルドの坊主」 加爾德小鬼 → 加爾德小子). A full name also changes the parts
     that changed (the family name alone). Renderings a person chose are never touched."""
     pairs = [(term, old_zh, zh)]
     ja_parts, old_parts, new_parts = (re.split(r"[・･·]", x) for x in (term, old_zh, zh))
