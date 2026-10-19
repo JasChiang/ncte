@@ -150,12 +150,14 @@ def names_seen(conn: sqlite3.Connection, book_id: str) -> dict[str, str]:
 def follow_renames(conn: sqlite3.Connection, book_id: str, seen: dict[str, str]) -> dict[str, str]:
     """Naming came after the house style (ADR-053) and may render a name differently from what the style saw: the
     old rendering is replaced with the new one in the model-chosen style's voices. A plain string replacement, like a
-    rename (``translation/rename.py``): nothing is judged. A person's style is not touched. Returns old → new."""
+    rename (``translation/rename.py``): nothing is judged. A person's style is not touched. An old rendering of one
+    character is left alone: it is also part of other words (「米」 in 「米飯」), and a single character is not matched
+    anywhere else in the program either. Returns old → new (what was replaced)."""
     style = load_style(conn, book_id)
     if not style.auto or not style.voices:
         return {}
     now = names_seen(conn, book_id)
-    changed = {old: now[ja] for ja, old in seen.items() if old and now.get(ja) and now[ja] != old}
+    changed = {old: now[ja] for ja, old in seen.items() if len(old) >= 2 and now.get(ja) and now[ja] != old}
     if not changed:
         return {}
     # one pass, longest first: a new name that contains an old one is not replaced twice

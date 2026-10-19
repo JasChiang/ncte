@@ -310,3 +310,20 @@ def test_a_name_naming_changes_after_the_house_style_is_changed_in_its_voices_to
     assert now == picked["zh"] + "新", now  # naming changed it
     voices = "".join(load_style(conn, book.id).voices.values())
     assert f"叫對方「{picked['zh']}新」" in voices and voices.count(picked["zh"]) == 1
+
+
+def test_a_one_character_old_name_is_not_replaced_in_the_voices(conn, cfg, fixtures):
+    """(d) after 2.12: a rendering of one character is also part of other words (「米」 in 「米飯」); like every name
+    match in the program, a single character is not matched, so it is left as it is."""
+    from ncte.analysis.house_style import follow_renames
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    rows = conn.execute("SELECT source_term FROM glossary WHERE book_id=? ORDER BY id LIMIT 2", (book.id,)).fetchall()
+    assert len(rows) == 2
+    short_ja, long_ja = rows[0][0], rows[1][0]
+    conn.execute("UPDATE glossary SET target_term='新名' WHERE book_id=? AND source_term=?", (book.id, short_ja))
+    conn.execute("UPDATE glossary SET target_term='長新名' WHERE book_id=? AND source_term=?", (book.id, long_ja))
+    save_style(conn, book.id, SeriesStyle(voices={"ミナ": "米飯很好吃；叫對方「舊名字」"}, auto=True))
+    changed = follow_renames(conn, book.id, {short_ja: "米", long_ja: "舊名字"})
+    assert changed == {"舊名字": "長新名"}
+    assert load_style(conn, book.id).voices == {"ミナ": "米飯很好吃；叫對方「長新名」"}
