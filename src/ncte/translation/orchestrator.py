@@ -563,7 +563,7 @@ class Orchestrator:
                     "translator_note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                     (uid, self.cfg.app.language, ur.text, r["source_hash"], ctx_hash, self.prompt.version_id,
                      self.model, gh, self.opts.mode, status, self.run_id, ur.request_id,
-                     json.dumps(ur.flags, ensure_ascii=False), json.dumps(ur.notes, ensure_ascii=False), utcnow(),
+                     json.dumps(ur.flags, ensure_ascii=False), json.dumps(ur.stored_notes(), ensure_ascii=False), utcnow(),
                      ur.translator_note or None)).lastrowid
                 # each finding is about this version (ADR-055): a later version is not held back by it
                 for f in ur.findings:

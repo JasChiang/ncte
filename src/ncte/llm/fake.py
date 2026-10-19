@@ -43,7 +43,8 @@ def fake_translate_text(src: str, glossary: list[dict[str, Any]]) -> str:
 
 def default_translate(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:
     gl = payload.get("glossary", [])
-    return {"translations": [
+    ask: dict[str, Any] = {"read_through": []} if payload.get("read_through") is True else {}  # ADR-064: nothing to list
+    return {**ask, "translations": [
         {"unit_id": u["unit_id"], "translated_text": fake_translate_text(u["source"], gl), "flags": [], "notes": [],
          "translator_note": ""}
         for u in payload.get("units", [])]}

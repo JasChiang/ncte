@@ -23,6 +23,10 @@ _REF_KEYS = {"ref", "a", "b", "same_as", "object", "subject", "speaker", "eviden
 _PROSE_KEYS = {"a_is", "b_is", "contradictions", "explanation", "location", "note", "notes", "object", "personality",
                "predicate", "question", "reason", "relation", "role", "scene_summary", "summary", "time", "voice", "pov"}
 _CODE = re.compile(r"(?<![A-Za-z0-9_])C\d+(?![0-9])")
+# what the model writes about paragraphs of the request (the read-through list, ADR-064): a paragraph's code becomes
+# its id, a character's code its name — the codes mean other paragraphs and people in the next request
+_PARAGRAPH_PROSE_KEYS = {"read_through"}
+_PARA_CODE = re.compile(r"(?<![A-Za-z0-9_])P\d+(?![0-9])")
 _NAME_KEYS = ("name_zh", "name_ja", "name")
 
 
@@ -82,6 +86,9 @@ class ShortIds:
         if isinstance(value, str):
             if _holds_ids(key) and value in self.to_long:
                 return self.to_long[value]
+            if key in _PARAGRAPH_PROSE_KEYS:
+                value = _PARA_CODE.sub(lambda m: self.to_long.get(m.group(0), m.group(0)), value)
+                return _CODE.sub(lambda m: self.names.get(m.group(0), m.group(0)), value)
             if key in _PROSE_KEYS and self.names:
                 return _CODE.sub(lambda m: self.names.get(m.group(0), m.group(0)), value)
             return value

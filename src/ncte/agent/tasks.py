@@ -134,7 +134,7 @@ class TaskQueue:
     def submit(self, tid: str, text: str) -> list[str]:
         """Check the answer against the stage's schema; write it only when it passes. Returns the problems found
         (empty: accepted). The engine checks it again (unit ids, counts) and may send a corrected task."""
-        from ..llm.schemas import SCHEMAS
+        from ..llm.schemas import output_model
 
         if not (self.root / "tasks" / f"{tid}.json").exists():
             return [f"no task {tid}"]
@@ -146,7 +146,11 @@ class TaskQueue:
             data = json.loads(body)
         except json.JSONDecodeError as exc:
             return [f"not valid JSON: {exc}"]
-        model = SCHEMAS.get(task.stage.split(":")[0])
+        try:
+            asked = json.loads(task.input)
+        except json.JSONDecodeError:
+            asked = None
+        model = output_model(task.stage, asked)  # the request's own schema (a translation may ask for a list first)
         if model is not None:
             try:
                 model.model_validate(data)

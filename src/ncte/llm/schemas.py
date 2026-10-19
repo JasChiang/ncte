@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class _M(BaseModel):
@@ -23,6 +23,22 @@ class UnitTranslation(_M):
 
 class TranslationBatchOutput(_M):
     translations: list[UnitTranslation]
+
+
+READ_THROUGH_MAX = 5
+
+
+# ``translation.read_through`` on (ADR-064): the list is the first field, so the model reads the whole batch before it
+# writes the first translation. What it lists is kept for a reviewer, not judged. (A comment, not a docstring: a
+# docstring would go into the JSON schema the model reads.)
+class TranslationReadThroughOutput(_M):
+    read_through: list[str]  # where a later paragraph constrains an earlier line: its code and one sentence
+    translations: list[UnitTranslation]
+
+    @field_validator("read_through")
+    @classmethod
+    def _at_most(cls, v: list[str]) -> list[str]:
+        return [s.strip() for s in v if s.strip()][:READ_THROUGH_MAX]
 
 
 # ------------------------------------------------------------------ scene analysis
@@ -454,6 +470,15 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "impressions": ImpressionsOutput,
     "fix_check": FixCheckOutput,
 }
+
+
+def output_model(stage: str, payload: Any = None) -> type[BaseModel] | None:
+    """The schema a step's answer is checked against: a translation asked to read through first (the payload says
+    ``"read_through": true``) answers with the list before its translations."""
+    base = stage.split(":")[0]
+    if base == "translate" and isinstance(payload, dict) and payload.get("read_through") is True:
+        return TranslationReadThroughOutput
+    return SCHEMAS.get(base)
 
 
 def _empty_default(prop: dict[str, Any]) -> bool:

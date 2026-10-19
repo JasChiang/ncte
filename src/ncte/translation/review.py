@@ -427,7 +427,7 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
                 (uid, orch.cfg.app.language, ur.text, r["source_hash"], orch.prompt.version_id, orch.model,
                  glossary_hash(relevant_glossary(orch.glossary, r["plain_text"])), orch.opts.mode, "needs_review",
                  orch.run_id, ur.request_id, json.dumps(ur.flags + ["review_retranslation"], ensure_ascii=False),
-                 json.dumps(ur.notes, ensure_ascii=False), utcnow(), ur.translator_note or None)).lastrowid)
+                 json.dumps(ur.stored_notes(), ensure_ascii=False), utcnow(), ur.translator_note or None)).lastrowid)
             # written with the new text: stopped before the check answers, the fix shows as not checked (2.7)
             mark[uid] = orch._finding(uid, "fix_unchecked", "medium", "the fix was written; its check against the "
                                       "source had not answered yet", translation_id=new_tid[uid])

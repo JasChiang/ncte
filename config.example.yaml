@@ -30,6 +30,7 @@ translation:
   targeted_scene_context_chars: 2500   # retranslating chosen units: rest of the scene as context, per side
   preserve_ambiguity: true
   skip_already_translated: true
+  read_through: false       # ADR-064: list where later paragraphs constrain an earlier line before translating (kept for review; off until checked)
 review:
   automatic_review: "flagged_only"   # off | flagged_only | all
   maximum_review_passes: 1

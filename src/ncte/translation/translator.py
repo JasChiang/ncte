@@ -23,7 +23,12 @@ from ..errors import ContentBlockedError, ModelOutputError, RequestRejectedError
 from ..llm.base import LLMClient, LLMRequest, LLMResponse, StructuredMode
 from ..llm.cost import estimate_tokens
 from ..llm.prompt_loader import Prompt, load_prompt
-from ..llm.schemas import SCHEMAS, TranslationBatchOutput, strict_json_schema
+from ..llm.schemas import (
+    TranslationBatchOutput,
+    TranslationReadThroughOutput,
+    output_model,
+    strict_json_schema,
+)
 from ..llm.short_ids import ShortIds
 from ..qa.rules import Finding, check_batch, check_translation
 from ..qa.typeset import typeset
@@ -88,6 +93,12 @@ class UnitResult:
     findings: list[Finding]
     request_id: int | None
     translator_note: str = ""
+    # what the model listed before translating this paragraph's request (ADR-064), kept on its first paragraph
+    read_through: list[str] = field(default_factory=list)
+
+    def stored_notes(self) -> list[str]:
+        """The notes kept with the translation: the model's own, then the read-through list (「通讀：…」)."""
+        return self.notes + [f"通讀：{x}" for x in self.read_through]
 
 
 @dataclass
@@ -160,7 +171,8 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
                     est_cost: float, correction: str | None = None,
                     on_downgrade: Callable[[str], None] | None = None) -> tuple[BaseModel, int, StructuredMode]:
     """One logical LLM call with schema validation. Returns (parsed, request_id, mode_used)."""
-    schema_model = SCHEMAS[stage.split(":")[0]]
+    schema_model = output_model(stage, payload)
+    assert schema_model is not None, stage
     ids = ShortIds.for_payload(payload)  # the model reads and writes P1/C1… instead of long ids
     shared, own = prompt.render_parts(payload)  # shared rules first (cached), this request's own after
     shared += COMPACT_JSON
@@ -244,7 +256,9 @@ class Translator:
 
     def _payload(self, units: list[UnitInput], context: dict[str, Any]) -> dict[str, Any]:
         context = {k: v for k, v in context.items() if not k.startswith("_")}
-        return {"task": "translate", "target_language": "zh-TW", **context,
+        # ADR-064: asked to list, before translating, where later paragraphs constrain an earlier line
+        ask = {"read_through": True} if self.cfg.translation.read_through else {}
+        return {"task": "translate", "target_language": "zh-TW", **context, **ask,
                 "units": [{"unit_id": u.unit_id, "source": u.source_text} for u in units]}
 
     def _run(self, units: list[UnitInput], context: dict[str, Any], result: BatchResult,
@@ -275,7 +289,7 @@ class Translator:
                 rejected = True
                 break
             result.requests += 1
-            assert isinstance(parsed, TranslationBatchOutput)
+            assert isinstance(parsed, (TranslationBatchOutput, TranslationReadThroughOutput))
             want = [u.unit_id for u in group]
             got = [t.unit_id for t in parsed.translations]
             if sorted(got) != sorted(want) or len(set(got)) != len(got):
@@ -308,6 +322,11 @@ class Translator:
             for f in check_batch(texts, {u.unit_id: u.source_text for u in group}):
                 if f.unit_id in pending_ok:
                     pending_ok[f.unit_id].findings.append(f)
+            if isinstance(parsed, TranslationReadThroughOutput) and parsed.read_through:
+                # kept as written on the request's first paragraph that is kept; nothing is judged or acted on
+                first = next((u.unit_id for u in group if u.unit_id in pending_ok), None)
+                if first is not None:
+                    pending_ok[first].read_through = list(parsed.read_through)
             result.ok.update(pending_ok)
             if not bad:
                 return

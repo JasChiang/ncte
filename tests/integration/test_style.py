@@ -327,3 +327,26 @@ def test_a_one_character_old_name_is_not_replaced_in_the_voices(conn, cfg, fixtu
     changed = follow_renames(conn, book.id, {short_ja: "米", long_ja: "舊名字"})
     assert changed == {"舊名字": "長新名"}
     assert load_style(conn, book.id).voices == {"ミナ": "米飯很好吃；叫對方「長新名」"}
+
+
+def test_read_through_is_stored_with_the_first_paragraph_of_each_request(conn, cfg, fixtures):
+    """3.3 (ADR-064): with ``translation.read_through`` on, what the model lists before translating is kept in the
+    notes of the first paragraph of the request (「通讀：…」) for a reviewer; the program does not act on it."""
+    import json as _json
+
+    from ncte.llm.fake import default_translate
+
+    firsts: list[str] = []
+
+    def answer(payload, req):
+        firsts.append(payload["units"][0]["unit_id"])
+        return {"read_through": ["後文的追問限定了指的是誰"], "translations": default_translate(payload, req)["translations"]}
+
+    cfg.translation.read_through = True
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"],
+                            FakeLLM(responders={**RESPONDERS, "translate": answer}), mode="context")
+    assert firsts
+    rows = conn.execute("SELECT unit_id, notes_json FROM translations WHERE run_id=?", (rid,)).fetchall()
+    noted = {r["unit_id"] for r in rows if "通讀：後文的追問限定了指的是誰" in _json.loads(r["notes_json"])}
+    assert noted == set(firsts) & {r["unit_id"] for r in rows}
+    assert len(noted) < len(rows)

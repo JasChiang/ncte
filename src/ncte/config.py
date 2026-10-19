@@ -76,6 +76,10 @@ class TranslationConfig(_Strict):
     targeted_scene_context_chars: int = Field(2500, ge=0, le=20000)
     preserve_ambiguity: bool = True
     skip_already_translated: bool = True
+    # ADR-064: before its translations the model lists where later paragraphs of the batch constrain how an earlier
+    # line is translated (the answer's first field, so the batch is read through first); kept in the notes of the
+    # request's first paragraph for a reviewer, never acted on. Off until a check shows it helps (instructions §5.4)
+    read_through: bool = False
 
 
 class ReviewConfig(_Strict):
