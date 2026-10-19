@@ -57,16 +57,20 @@ def scenes(epub: Annotated[str, typer.Argument(help="EPUB path or book id")],
         segment_book(conn, state.cfg, book.id)
     rows = conn.execute(
         "SELECT s.*, (SELECT COUNT(*) FROM units u WHERE u.book_id=s.book_id AND u.scene_id=s.id) AS n, "
-        "(SELECT plain_text FROM units u WHERE u.id=s.start_unit_id) AS first FROM scenes s WHERE book_id=? "
-        "ORDER BY seq", (book.id,)).fetchall()
+        "(SELECT plain_text FROM units u WHERE u.id=s.start_unit_id) AS first, b.sure, b.reason AS break_note "
+        "FROM scenes s LEFT JOIN scene_breaks b ON b.book_id=s.book_id AND b.unit_id=s.start_unit_id WHERE s.book_id=? "
+        "ORDER BY s.seq", (book.id,)).fetchall()
     data = [{"scene_id": r["id"], "units": r["n"], "break": r["break_reason"], "analyzed_version": r["version"],
-             "start_unit_id": r["start_unit_id"], "first_text": r["first"][:40]} for r in rows]
+             "start_unit_id": r["start_unit_id"], "first_text": r["first"][:40],
+             # the model marked this break as a judgement call (ADR-057): listed, never cut again by itself
+             **({"unsure": r["break_note"] or ""} if r["sure"] == 0 else {})} for r in rows]
     if as_json:
         echo_json(data)
         return
     for d in data:
         typer.echo(f"{d['scene_id']}  {d['units']:4d} units  break={d['break']:<11} v{d['analyzed_version']}  "
-                   f"{d['start_unit_id']}  {d['first_text']}")
+                   f"{d['start_unit_id']}  {d['first_text']}"
+                   + (f"  [模型標需複核：{d['unsure']}]" if "unsure" in d else ""))
 
 
 @app.command()

@@ -182,6 +182,9 @@ def story(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
                           "translatable=1 AND kind IN ('text','heading') ORDER BY ordinal", (book.id,)):
         by_scene[r["scene_id"]].append(r)
     scenes = []
+    # a break the model marked as a judgement call (ADR-057): shown with its reason, never cut again by itself
+    unsure = {r[0]: r[1] or "" for r in conn.execute("SELECT unit_id, reason FROM scene_breaks WHERE book_id=? AND "
+                                                     "sure=0", (book.id,))}
     for s in conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY start_ordinal", (book.id,)):
         rows = by_scene.get(s["id"], [])
         if not rows:
@@ -193,7 +196,7 @@ def story(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
         # the model's own questions while reading, with the second look's answer (ADR-067)
         questions = [{"question": x["question"], "answer": x.get("answer", ""), "unit_ids": x.get("unit_ids", [])}
                      for x in state.get("uncertainties") or [] if x.get("question")]
-        scenes.append({"questions": questions, "id": s["id"], "a": s["start_ordinal"], "b": s["end_ordinal"], "ch": ch_of.get(href),
+        scenes.append({"questions": questions, "unsure": unsure.get(s["start_unit_id"]), "id": s["id"], "a": s["start_ordinal"], "b": s["end_ordinal"], "ch": ch_of.get(href),
                        "story": matter.get(href) == "story", "summary": summ.get(s["id"], ""),
                        "speakers": sorted(spk[s["id"]]), "who": sorted(spk[s["id"]] | named)})
     return {"chapters": chs, "scenes": scenes}
