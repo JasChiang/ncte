@@ -24,14 +24,16 @@ _KANA = re.compile("[ぁ-ゟァ-ヺ]{2,}")
 _ABOUT_WORDS = re.compile(r"名前|名字|読み|響き|発音|漢字|平仮名|ひらがな|片仮名|カタカナ|ダジャレ|駄洒落|語呂|同じ字|同じ音|聞き間違")
 
 
-def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = None) -> list[list[dict[str, Any]]]:
-    """Consecutive translated paragraphs (story and book matter alike), chapter by chapter, in reading order."""
+def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = None,
+           after: int | None = None) -> list[list[dict[str, Any]]]:
+    """Consecutive translated paragraphs (story and book matter alike), chapter by chapter, in reading order.
+    ``after``: only paragraphs after this ordinal (a resumed pass)."""
     best = latest_texts(conn, book_id)
     out: list[list[dict[str, Any]]] = []
     cur: list[dict[str, Any]] = []
     href = None
     for r in conn.execute("SELECT * FROM units WHERE book_id=? AND translatable=1 AND kind IN ('text','heading') AND "
-                          "spine_index IS NOT NULL ORDER BY ordinal", (book_id,)):
+                          "spine_index IS NOT NULL AND ordinal>? ORDER BY ordinal", (book_id, -(1 << 62) if after is None else after)):
         t = best.get(r["id"])
         if t is None or (unit_ids is not None and r["id"] not in unit_ids):
             continue

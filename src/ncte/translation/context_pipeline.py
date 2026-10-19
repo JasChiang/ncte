@@ -247,6 +247,23 @@ class ContextOrchestrator(Orchestrator):
                               (status, error, 1 if status == "failed" else 0, json.dumps(checkpoint or {}),
                                utcnow(), self.run_id, stage, sid))
 
+    def _begin_job(self, stage: str) -> dict[str, Any]:
+        """A whole-book step starts: its job is running (a run killed now leaves it so, to be done on resume) and what
+        an earlier, stopped attempt saved is returned (``done_until_ordinal`` and the counts so far)."""
+        with self.lock:
+            row = self.conn.execute("SELECT checkpoint_json FROM jobs WHERE run_id=? AND stage=? AND target_id=?",
+                                    (self.run_id, stage, self.book.id)).fetchone()
+            self.conn.execute("UPDATE jobs SET status='running', updated_at=? WHERE run_id=? AND stage=? AND target_id=?",
+                              (utcnow(), self.run_id, stage, self.book.id))
+        return json.loads(row["checkpoint_json"] or "{}") if row is not None else {}
+
+    def _paused(self, what: str) -> bool:
+        """Stopped (paused from the page, or a stop reason set) before the next batch: the job stays running."""
+        if self._stop_reason:
+            self.log(f"{what}: stopped ({self._stop_reason}); resume goes on from here")
+            return True
+        return False
+
     # ------------------------------------------------------------ execution
     def execute(self) -> None:
         with self.lock:
@@ -347,11 +364,15 @@ class ContextOrchestrator(Orchestrator):
         job = self._job("verify", self.book.id)
         if record_job and (job is None or job["status"] not in ("pending", "running")):
             return
+        if record_job:
+            self._begin_job("verify")
         with self.lock:
             items = verify.collect(self.conn, self.book.id)
         stats: dict[str, int] = {"items": len(items)}
         prompt = load_prompt("verify")
         for i in range(0, len(items), VERIFY_BATCH):
+            if self._paused("second look"):  # what was answered is kept; the rest is asked on resume
+                return
             chunk = items[i:i + VERIFY_BATCH]
             try:
                 blocked: list[str] = []  # the content filter may refuse an item's passages: the rest are asked in halves
@@ -383,13 +404,19 @@ class ContextOrchestrator(Orchestrator):
         job = self._job("relations", self.book.id)
         if record_job and (job is None or job["status"] not in ("pending", "running")):
             return 0
+        if record_job:
+            self._begin_job("relations")
         with self.lock:
             pairs, chars = relations.candidate_pairs(self.conn, self.book.id)
         prompt = load_prompt("relations")
         results: list[tuple[RelationsOutput, dict[str, Any]]] = []
+        cut: list[bool] = []  # stopped with pairs left unasked
 
         def ask(groups: list[tuple[dict[str, Any], dict[str, Any]]]) -> None:
             for req, lookup in groups:
+                if self._stop_reason:
+                    cut.append(True)
+                    return
                 try:
                     blocked: list[str] = []
                     parsed = call_in_parts(lambda pl: self._llm("relations", prompt, pl, []), req, "pairs", blocked,
@@ -411,8 +438,11 @@ class ContextOrchestrator(Orchestrator):
 
         basics = {cid: character_basics(self.conn, cid) for cid in chars}
         ask(relations.requests(pairs, chars, basics=basics))
-        if again := relations.unanswered(pairs, results):
+        again = [] if cut else relations.unanswered(pairs, results)
+        if again:
             ask(relations.requests(again, chars, recheck=True, basics=basics))
+        if cut and self._paused("relations"):  # put together from all pairs at once: asked again on resume
+            return 0
         n = 0
         if results:
             with self.lock:
@@ -458,10 +488,16 @@ class ContextOrchestrator(Orchestrator):
         job = self._job("impressions", self.book.id)
         if record_job and (job is None or job["status"] not in ("pending", "running")):
             return 0
+        if record_job:
+            self._begin_job("impressions")
         with self.lock:
             groups = impressions.requests(self.conn, self.book.id)
         prompt, results = load_prompt("impressions"), []
+        cut = False
         for req, lookup in groups:
+            if self._stop_reason:
+                cut = True
+                break
             try:
                 blocked: list[str] = []
                 parsed = call_in_parts(lambda pl: self._llm("impressions", prompt, pl, []), req, "characters", blocked,
@@ -475,6 +511,8 @@ class ContextOrchestrator(Orchestrator):
                 continue
             assert isinstance(parsed, ImpressionsOutput)
             results.append((parsed, lookup))
+        if cut and self._paused("impressions"):  # written all at once: asked again on resume
+            return 0
         n = 0
         if results:
             with self.lock:
@@ -485,145 +523,180 @@ class ContextOrchestrator(Orchestrator):
         return n
 
     def reader_pass(self, *, record_job: bool = True) -> dict[str, int]:
-        """Pass 4 (ADR-038): read the Chinese like a reader; what a reader cannot follow goes back to the translator."""
+        """Pass 4 (ADR-038): read the Chinese like a reader; what a reader cannot follow goes back to the translator.
+        Recorded as a job, it keeps how far it got after each stretch (with its retranslations and their checks):
+        paused or killed, the resumed run reads on from there."""
         from ..analysis import reader
-        from ..llm.schemas import ReaderOutput
-        from .review import _retranslate_with_feedback, new_stats
+        from .review import new_stats
 
         job = self._job("reader", self.book.id)
         if record_job and (job is None or job["status"] not in ("pending", "running")):
             return {}
+        saved = self._begin_job("reader") if record_job else {}
+        after = saved.pop("done_until_ordinal", None)
         with self.lock:
-            parts = reader.chunks(self.conn, self.book.id, set(self.opts.unit_ids) if self.opts.unit_ids else None)
+            parts = reader.chunks(self.conn, self.book.id, set(self.opts.unit_ids) if self.opts.unit_ids else None,
+                                  after=after)
         prompt = load_prompt("reader")
-        stats = new_stats(read=0, blocked=0, failed=0)
+        stats = {**new_stats(read=0, blocked=0, failed=0), **saved}
         for part in parts:
-            blocked: list[str] = []
-            with self.lock:
-                cast = reader.characters(self.conn, self.book.id, min(p["_at"] for p in part), max(p["_at"] for p in part))
-            try:  # 120 paragraphs at a time: the content filter may refuse a part; it is then read in halves
-                parsed = call_in_parts(lambda pl: self._llm("reader", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
-                                       {"task": "reader", "paragraphs": [{k: v for k, v in p.items() if not k.startswith("_")}
-                                                                         for p in part], "characters": cast},
-                                       "paragraphs", blocked)
-            except FatalAPIError:
-                raise
-            except LLMError as exc:
-                self._finding(None, "reader_failed", "low", str(exc)[:300])
-                stats["failed"] += len(part)
-                continue
-            tids = {p["unit_id"]: p["_tid"] for p in part}
-            for uid in blocked:
-                self._finding(uid, "reader_blocked", "low", "the content filter refused this passage in the reader's look",
-                              translation_id=tids.get(uid))
-            stats["blocked"] += len(blocked)
-            if parsed is None:
-                continue
-            assert isinstance(parsed, ReaderOutput)
-            valid = {p["unit_id"] for p in part} - set(blocked)  # what the reader really read
-            stats["read"] += len(valid)
-            feedback: dict[str, list[dict[str, Any]]] = {}
-            for it in parsed.issues:
-                if it.unit_id not in valid or it.severity == "low" or not it.problem.strip():
-                    continue
-                stats["issues"] += 1
-                fid = self._finding(it.unit_id, f"review:reader_{it.kind}", it.severity, it.problem[:400],
-                                    translation_id=tids[it.unit_id])
-                feedback.setdefault(it.unit_id, []).append(
-                    {"issue_type": f"reader_{it.kind}", "evidence": it.problem, "suggestion": reader.FIX_NOTE,
-                     "finding_id": fid})
-            if not feedback:
-                continue
-            with self.lock:
-                rows = {r["id"]: r for r in self.conn.execute(
-                    f"SELECT * FROM units WHERE id IN ({','.join('?' * len(feedback))})", list(feedback))}
-            by_scene: dict[str, list[sqlite3.Row]] = {}
-            for uid in feedback:
-                if uid in rows:
-                    by_scene.setdefault(rows[uid]["scene_id"] or "", []).append(rows[uid])
-            for group in by_scene.values():  # one scene at a time: the translation keeps that scene's memory
-                _retranslate_with_feedback(self, group, {r["id"]: feedback[r["id"]] for r in group}, stats)
+            if self._paused("reader's look"):
+                return stats
+            self._reader_part(part, prompt, stats)
+            if record_job:
+                self._set_job("reader", self.book.id, "running", None,
+                              {"done_until_ordinal": part[-1]["_at"], **stats})
         if record_job:  # a stretch refused or failed was not read: the pass is partial, not done
-            self._set_job("reader", self.book.id, "partial" if stats["blocked"] or stats["failed"] else "succeeded",
-                          None, stats)
+            self._set_job("reader", self.book.id, self._pass_status(stats), None, stats)
         self.log(f"reader's look: {stats}")
         return stats
 
+    def _pass_status(self, stats: dict[str, int]) -> str:
+        # a stretch refused or failed was not looked at; with chosen paragraphs only, the book was not looked at whole
+        return "partial" if stats["blocked"] or stats["failed"] or self.opts.unit_ids else "succeeded"
+
+    def _reader_part(self, part: list[dict[str, Any]], prompt: Any, stats: dict[str, int]) -> None:
+        from ..analysis import reader
+        from ..llm.schemas import ReaderOutput
+        from .review import _retranslate_with_feedback
+
+        blocked: list[str] = []
+        with self.lock:
+            cast = reader.characters(self.conn, self.book.id, min(p["_at"] for p in part), max(p["_at"] for p in part))
+        try:  # 120 paragraphs at a time: the content filter may refuse a part; it is then read in halves
+            parsed = call_in_parts(lambda pl: self._llm("reader", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
+                                   {"task": "reader", "paragraphs": [{k: v for k, v in p.items() if not k.startswith("_")}
+                                                                     for p in part], "characters": cast},
+                                   "paragraphs", blocked)
+        except FatalAPIError:
+            raise
+        except LLMError as exc:
+            self._finding(None, "reader_failed", "low", str(exc)[:300])
+            stats["failed"] += len(part)
+            return
+        tids = {p["unit_id"]: p["_tid"] for p in part}
+        for uid in blocked:
+            self._finding(uid, "reader_blocked", "low", "the content filter refused this passage in the reader's look",
+                          translation_id=tids.get(uid))
+        stats["blocked"] += len(blocked)
+        if parsed is None:
+            return
+        assert isinstance(parsed, ReaderOutput)
+        valid = {p["unit_id"] for p in part} - set(blocked)  # what the reader really read
+        stats["read"] += len(valid)
+        feedback: dict[str, list[dict[str, Any]]] = {}
+        for it in parsed.issues:
+            if it.unit_id not in valid or it.severity == "low" or not it.problem.strip():
+                continue
+            stats["issues"] += 1
+            fid = self._finding(it.unit_id, f"review:reader_{it.kind}", it.severity, it.problem[:400],
+                                translation_id=tids[it.unit_id])
+            feedback.setdefault(it.unit_id, []).append(
+                {"issue_type": f"reader_{it.kind}", "evidence": it.problem, "suggestion": reader.FIX_NOTE,
+                 "finding_id": fid})
+        if not feedback:
+            return
+        with self.lock:
+            rows = {r["id"]: r for r in self.conn.execute(
+                f"SELECT * FROM units WHERE id IN ({','.join('?' * len(feedback))})", list(feedback))}
+        by_scene: dict[str, list[sqlite3.Row]] = {}
+        for uid in feedback:
+            if uid in rows:
+                by_scene.setdefault(rows[uid]["scene_id"] or "", []).append(rows[uid])
+        for group in by_scene.values():  # one scene at a time: the translation keeps that scene's memory
+            _retranslate_with_feedback(self, group, {r["id"]: feedback[r["id"]] for r in group}, stats)
+
     def proofread_pass(self, *, record_job: bool = True) -> dict[str, int]:
-        """Pass 3b (ADR-051): every paragraph against its source; real errors go back to the translator."""
+        """Pass 3b (ADR-051): every paragraph against its source; real errors go back to the translator. Recorded as
+        a job, it keeps how far it got after each stretch (with its retranslations and their checks): paused or
+        killed, the resumed run checks on from there."""
         from ..analysis import proofread
-        from ..llm.schemas import ProofreadOutput
-        from .review import _retranslate_with_feedback, new_stats
+        from .review import new_stats
 
         job = self._job("proofread", self.book.id)
         if record_job and (job is None or job["status"] not in ("pending", "running")):
             return {}
+        saved = self._begin_job("proofread") if record_job else {}
+        after = saved.pop("done_until_ordinal", None)
+        wanted = set(self.opts.unit_ids) if self.opts.unit_ids else None
         with self.lock:
-            parts = proofread.chunks(self.conn, self.book.id, set(self.opts.unit_ids) if self.opts.unit_ids else None,
-                                     size=self.cfg.context.proofread_chunk_units)
+            parts = proofread.chunks(self.conn, self.book.id, wanted, size=self.cfg.context.proofread_chunk_units,
+                                     after=after)
+            prev = proofread.tail(self.conn, self.book.id, after, wanted) if after is not None else []
         prompt = load_prompt("proofread")
-        stats = new_stats(checked=0, blocked=0, failed=0)
-        prev: list[dict[str, Any]] = []
+        stats = {**new_stats(checked=0, blocked=0, failed=0), **saved}
         for part in parts:
+            if self._paused("proofreading"):
+                return stats
             # the end of the stretch before, in the same chapter: read for who is talking and about what, not checked
             before = [p for p in prev[-proofread.BEFORE_UNITS:] if p["_href"] == part[0]["_href"]]
             prev = part
-            with self.lock:
-                cast = proofread.cast(self.conn, self.book.id, part)
-                extra = proofread.notes(self.conn, self.book.id, part, before, glossary=self.glossary,
-                                        volume=self.volume, revealed=self.link_revealed)
-            visible = [{k: v for k, v in p.items() if not k.startswith("_")} for p in part]
-            blocked: list[str] = []
-            try:  # the content filter may refuse a stretch; it is then checked in halves
-                parsed = call_in_parts(lambda pl: self._llm("proofread", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
-                                       {"task": "proofread", "paragraphs": visible, "characters": cast, **extra,
-                                        **({"verdicts": True} if self.cfg.context.proofread_verdicts else {})},
-                                       "paragraphs", blocked)
-            except FatalAPIError:
-                raise
-            except LLMError as exc:
-                self._finding(None, "proofread_failed", "low", str(exc)[:300])
-                stats["failed"] += len(part)
-                continue
-            tids = {p["unit_id"]: p["_tid"] for p in part}
-            for uid in blocked:
-                self._finding(uid, "proofread_blocked", "low", "the content filter refused this passage in proofreading",
-                              translation_id=tids.get(uid))
-            stats["blocked"] += len(blocked)
-            if parsed is None:
-                continue
-            assert isinstance(parsed, ProofreadOutput)
-            valid = {p["unit_id"] for p in part} - set(blocked)  # what was really checked against the source
-            stats["checked"] += len(valid)
-            if self.cfg.context.proofread_verdicts:  # paragraphs the model gave no verdict for were not looked at
-                stats["no_verdict"] = stats.get("no_verdict", 0) + len(valid - {c.unit_id for c in parsed.checked})
-            feedback: dict[str, list[dict[str, Any]]] = {}
-            for it in parsed.issues:
-                if it.unit_id not in valid or it.severity == "low" or not it.problem.strip():
-                    continue  # a small slip is not worth a retranslation
-                stats["issues"] += 1
-                fid = self._finding(it.unit_id, f"review:proofread_{it.kind}", it.severity,
-                                    f"{it.problem[:300]}" + (f" → {it.fix[:160]}" if it.fix.strip() else ""),
-                                    translation_id=tids[it.unit_id])
-                feedback.setdefault(it.unit_id, []).append(
-                    {"issue_type": f"proofread_{it.kind}", "evidence": f"{it.problem}（譯文：{it.quote}）",
-                     "suggestion": f"{it.fix}\n{proofread.FIX_NOTE}", "finding_id": fid})
-            if not feedback:
-                continue
-            with self.lock:
-                rows = {r["id"]: r for r in self.conn.execute(
-                    f"SELECT * FROM units WHERE id IN ({','.join('?' * len(feedback))})", list(feedback))}
-            by_scene: dict[str, list[sqlite3.Row]] = {}
-            for uid in feedback:
-                if uid in rows:
-                    by_scene.setdefault(rows[uid]["scene_id"] or "", []).append(rows[uid])
-            for group in by_scene.values():  # one scene at a time: the translation keeps that scene's memory
-                _retranslate_with_feedback(self, group, {r["id"]: feedback[r["id"]] for r in group}, stats)
+            self._proofread_part(part, before, prompt, stats)
+            if record_job:
+                self._set_job("proofread", self.book.id, "running", None,
+                              {"done_until_ordinal": part[-1]["_at"], **stats})
         if record_job:  # a stretch refused or failed was not checked: the pass is partial, not done
-            self._set_job("proofread", self.book.id, "partial" if stats["blocked"] or stats["failed"] else "succeeded",
-                          None, stats)
+            self._set_job("proofread", self.book.id, self._pass_status(stats), None, stats)
         self.log(f"proofreading: {stats}")
         return stats
+
+    def _proofread_part(self, part: list[dict[str, Any]], before: list[dict[str, Any]], prompt: Any,
+                        stats: dict[str, int]) -> None:
+        from ..analysis import proofread
+        from ..llm.schemas import ProofreadOutput
+        from .review import _retranslate_with_feedback
+
+        with self.lock:
+            cast = proofread.cast(self.conn, self.book.id, part)
+            extra = proofread.notes(self.conn, self.book.id, part, before, glossary=self.glossary,
+                                    volume=self.volume, revealed=self.link_revealed)
+        visible = [{k: v for k, v in p.items() if not k.startswith("_")} for p in part]
+        blocked: list[str] = []
+        try:  # the content filter may refuse a stretch; it is then checked in halves
+            parsed = call_in_parts(lambda pl: self._llm("proofread", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
+                                   {"task": "proofread", "paragraphs": visible, "characters": cast, **extra,
+                                    **({"verdicts": True} if self.cfg.context.proofread_verdicts else {})},
+                                   "paragraphs", blocked)
+        except FatalAPIError:
+            raise
+        except LLMError as exc:
+            self._finding(None, "proofread_failed", "low", str(exc)[:300])
+            stats["failed"] += len(part)
+            return
+        tids = {p["unit_id"]: p["_tid"] for p in part}
+        for uid in blocked:
+            self._finding(uid, "proofread_blocked", "low", "the content filter refused this passage in proofreading",
+                          translation_id=tids.get(uid))
+        stats["blocked"] += len(blocked)
+        if parsed is None:
+            return
+        assert isinstance(parsed, ProofreadOutput)
+        valid = {p["unit_id"] for p in part} - set(blocked)  # what was really checked against the source
+        stats["checked"] += len(valid)
+        if self.cfg.context.proofread_verdicts:  # paragraphs the model gave no verdict for were not looked at
+            stats["no_verdict"] = stats.get("no_verdict", 0) + len(valid - {c.unit_id for c in parsed.checked})
+        feedback: dict[str, list[dict[str, Any]]] = {}
+        for it in parsed.issues:
+            if it.unit_id not in valid or it.severity == "low" or not it.problem.strip():
+                continue  # a small slip is not worth a retranslation
+            stats["issues"] += 1
+            fid = self._finding(it.unit_id, f"review:proofread_{it.kind}", it.severity,
+                                f"{it.problem[:300]}" + (f" → {it.fix[:160]}" if it.fix.strip() else ""),
+                                translation_id=tids[it.unit_id])
+            feedback.setdefault(it.unit_id, []).append(
+                {"issue_type": f"proofread_{it.kind}", "evidence": f"{it.problem}（譯文：{it.quote}）",
+                 "suggestion": f"{it.fix}\n{proofread.FIX_NOTE}", "finding_id": fid})
+        if not feedback:
+            return
+        with self.lock:
+            rows = {r["id"]: r for r in self.conn.execute(
+                f"SELECT * FROM units WHERE id IN ({','.join('?' * len(feedback))})", list(feedback))}
+        by_scene: dict[str, list[sqlite3.Row]] = {}
+        for uid in feedback:
+            if uid in rows:
+                by_scene.setdefault(rows[uid]["scene_id"] or "", []).append(rows[uid])
+        for group in by_scene.values():  # one scene at a time: the translation keeps that scene's memory
+            _retranslate_with_feedback(self, group, {r["id"]: feedback[r["id"]] for r in group}, stats)
 
     def naming_pass(self) -> bool:
         """Pass 2: propose renderings. False when the run stops here for the user's choices."""
