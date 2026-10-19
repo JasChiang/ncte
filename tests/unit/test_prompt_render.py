@@ -92,3 +92,18 @@ def test_a_fix_with_the_wrong_tone_is_a_new_error():
     error, as order of judgement 3 says."""
     fc = load_prompt("fix_check").render({"items": []})
     assert "褒貶" in _bullet(fc, "new_error") and "心情" in _bullet(fc, "new_error")
+
+
+def _order(text: str) -> str:
+    """The six-item order of judgement and the paragraph after it, without the one-line lead-in."""
+    body = text.split("## 判斷順序\n", 1)[1].split("\n## ")[0]
+    return body.split("\n", 1)[1].strip()
+
+
+def test_the_order_of_judgement_is_shared_by_the_steps_that_judge():
+    """A4 (ADR-067): review and the fix check judge with the same order as translation, proofreading, naming and
+    house style."""
+    same = {t: _order(load_prompt(t).render()) for t in
+            ("translate", "proofread", "naming", "house_style", "review", "fix_check")}
+    assert len(set(same.values())) == 1
+    assert "1. **意思正確**" in same["review"] and "6. **最少介入**" in same["fix_check"]
