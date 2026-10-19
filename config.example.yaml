@@ -12,7 +12,7 @@ openrouter:
   review_model: null        # null = same as model
   fallback_models: []       # only used if listed here; never switches silently
   timeout_seconds: 120
-  max_concurrency: 2        # baseline only; context mode is sequential per scene
+  max_concurrency: 2        # requests at a time (ADR-065): baseline batches; context mode: chapters side by side (scenes of a chapter in order), proofreading and reader stretches; 1 = one at a time
   max_attempts: 4
   per_book_budget_usd: 5.0  # default --budget-usd for a run
   require_schema: true
@@ -35,6 +35,8 @@ review:
   automatic_review: "flagged_only"   # off | flagged_only | all
   maximum_review_passes: 1
   fix_check: true                    # a fix after review/proofreading/reader is checked against the source; false = kept but unverified
+context:
+  read_in_one_request: false   # ADR-065: a scene's analysis and memory update from one request (read_first only; off until an A/B shows the quality holds)
 memory:
   fts_enabled: true
   vector_rag_enabled: false
