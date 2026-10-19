@@ -563,7 +563,10 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
                                                        for r, *_ in chunk])
         payload: dict[str, Any] = {"task": "fix_check", "items": items}
         if cast:
-            payload["characters"] = [{k: v for k, v in c.items() if k in ("name", "ja", "gender", "narrator")} for c in cast]
+            # with the way of speaking and the house style's habits, as proofreading has them: a tone or voice fix
+            # is judged against the same card it was found with
+            payload["characters"] = [{k: v for k, v in c.items() if k in ("name", "ja", "gender", "narrator", "voice",
+                                                                          "habits")} for c in cast]
         est = orch._estimate(payload, 200 * len(items), "fix_check")
         orch.check_budget(est)  # out of budget: the run stops; the new texts stay needs_review and the issues open
 

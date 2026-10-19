@@ -240,3 +240,26 @@ def test_proofreading_and_the_fix_check_know_who_does_an_omitted_subject_s_actio
     assert sum("actions" in p for p in paras) == 1  # only the paragraph that has one
     item = next(i for c in checks for i in c["items"] if "銀の鍵をミナに" in i["source"])
     assert item["actions"] == hit["actions"]
+
+
+def test_the_fix_check_has_the_same_voice_and_habits_as_proofreading(conn, cfg, fixtures, monkeypatch):
+    """B2 (ADR-067): the fix check's character cards carry the way of speaking and the house style's habits, as
+    proofreading's do (for judging tone and voice fixes)."""
+    from ncte.analysis import proofread as pr
+
+    card = {"name": "海斗", "ja": "カイト", "gender": "male", "voice": "句子短、愛逞強", "habits": [{"ja": "俺様", "zh": "本大爺"}]}
+    monkeypatch.setattr(pr, "cast", lambda conn, book_id, part: [dict(card)])
+    checks = []
+
+    def proofread(payload, req):
+        p = payload["paragraphs"][0]
+        return {"issues": [{"unit_id": p["unit_id"], "kind": "voice", "severity": "high", "quote": p["zh"][:4],
+                            "problem": "口吻不像他", "fix": "改"}]}
+
+    def fix_check(payload, req):
+        checks.append(payload)
+        return {"checks": []}
+
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "proofread": proofread,
+                                                               "fix_check": fix_check}), mode="context")
+    assert checks and all(c["characters"] == [card] for c in checks)
