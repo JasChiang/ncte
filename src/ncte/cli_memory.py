@@ -1016,6 +1016,8 @@ def _print_style(style: Any) -> None:
     from .memory.style import HONORIFICS_ZH
 
     typer.echo(f"honorifics: {style.honorifics} — {HONORIFICS_ZH[style.honorifics]}")
+    if style.honorifics_reason:
+        typer.echo(f"  why: {style.honorifics_reason}")
     for i, r in enumerate(style.rules, 1):
         typer.echo(f"rule {i}: {r}")
     for k, v in style.voices.items():
@@ -1072,6 +1074,8 @@ def style_set(epub: Annotated[str, typer.Argument()],
     data = style.model_dump()
     data["auto"] = False  # a person changed it: kept from now on (ADR-053)
     if honorifics:
+        if honorifics != data["honorifics"]:
+            data["honorifics_reason"] = ""  # the model's reason was for its own choice
         data["honorifics"] = honorifics
     if notes:
         data["notes"] = notes

@@ -394,6 +394,16 @@ def glossary(conn: sqlite3.Connection, book: Book) -> list[dict[str, Any]]:
             for g in conn.execute(f"SELECT * FROM glossary WHERE {SERIES_SCOPE} ORDER BY category, source_term", (book.id,))]
 
 
+def house_style(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
+    """The series style as it stands (ADR-053): the honorific policy and why it was chosen, the house rules, the
+    speech habits; ``auto`` is true while it is the model's choice."""
+    from ..memory.style import HONORIFICS_ZH, load_style
+
+    st = load_style(conn, book.id)
+    return {"honorifics": st.honorifics, "honorifics_zh": HONORIFICS_ZH[st.honorifics], "reason": st.honorifics_reason,
+            "rules": list(st.rules), "voices": dict(st.voices), "auto": st.auto, "default": st.is_default()}
+
+
 def proposals(conn: sqlite3.Connection, book: Book, *, include_done: bool = False) -> list[dict[str, Any]]:
     """Proposals with their example sentences; each example also carries the current translation of its paragraph
     (when it has been translated), so a choice can be checked against how the line reads in Chinese now."""

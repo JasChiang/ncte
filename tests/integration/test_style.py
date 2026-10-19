@@ -47,7 +47,7 @@ def test_style_cli(tmp_path, fixtures):
     assert out.exit_code == 0, out.output
     assert r.invoke(app, ["-w", str(ws), "style", "set", epub, "--remove-rule", "1"]).exit_code == 0
     data = json.loads(r.invoke(app, ["-w", str(ws), "style", "show", epub, "--json"]).output)
-    assert data == {"honorifics": "explicit", "rules": ["B"], "voices": {"ミナ": "禮貌"}, "notes": "inline",
+    assert data == {"honorifics": "explicit", "honorifics_reason": "", "rules": ["B"], "voices": {"ミナ": "禮貌"}, "notes": "inline",
                     "auto": False}  # a person set it
     bad = r.invoke(app, ["-w", str(ws), "style", "set", epub, "--honorifics", "polite"])
     assert bad.exit_code != 0 and "invalid style" in str(bad.exception)

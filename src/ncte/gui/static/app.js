@@ -413,8 +413,12 @@ async function readView(id) {
 // ------------------------------------------------------------ naming
 let namesAll = false, lastRename = null;
 async function namesView(id) {
-  const rows = await api(`book/${id}/proposals${namesAll ? "?all=1" : ""}`);
+  const [rows, st] = await Promise.all([api(`book/${id}/proposals${namesAll ? "?all=1" : ""}`), api(`book/${id}/style`).catch(() => null)]);
   const pend = rows.filter(r => r.status === "pending");
+  // the house style (ADR-053): how honorifics are handled and why, small, under the names
+  const styleCard = st && !st.default ? `<details class="card small"><summary><strong>全書體例</strong> <span class="muted">${st.auto ? "（模型讀完全書後定的）" : "（人工設定）"}</span></summary>
+    <div>敬稱：${esc(st.honorifics_zh)}</div>${st.reason ? `<div class="muted">理由：${esc(st.reason)}</div>` : ""}
+    ${st.rules.length ? `<div style="margin-top:4px">規則：${st.rules.map(r => esc(r)).join("；")}</div>` : ""}</details>` : "";
   const banner = lastRename ? `<div class="card" style="border-color:var(--accent)">
       <strong>已翻譯的 ${lastRename.affected} 段還在用舊譯法「${esc(lastRename.old)}」</strong>（${esc(lastRename.label)} → ${esc(lastRename.zh)}）
       <div class="row" style="gap:8px;margin-top:8px"><button class="btn primary" id="rnReplace">直接把「${esc(lastRename.old)}」換成「${esc(lastRename.zh)}」</button>
@@ -438,7 +442,7 @@ async function namesView(id) {
       ${r.context.length ? `<details ${r.status === "pending" ? "open" : ""} style="margin-top:6px"><summary class="small muted">${r.context.some(c => c.zh) ? "原文例句與目前譯文" : "原文例句（尚未翻譯）"}</summary>
         ${r.context.map(c => `<div class="small" style="margin-top:4px"><div class="ja">§${c.at}　${esc(c.text)}</div>
           ${c.zh ? `<div class="muted">　目前譯文：${esc(c.zh)}</div>` : ""}</div>`).join("")}</details>` : ""}</div>`).join("")
-    || `<p class="muted">沒有待決定的譯法。翻譯前的「定名」階段會在這裡列出需要你選的名字與稱呼。</p>`}`;
+    || `<p class="muted">沒有待決定的譯法。翻譯前的「定名」階段會在這裡列出需要你選的名字與稱呼。</p>`}${styleCard}`;
   const choose = async (pid, zh) => {
     try {
       const r = await api(`book/${id}/proposals/${pid}/decide`, {zh}); invalidate(id); toast(`${r.label} → ${r.zh}`);

@@ -71,6 +71,8 @@ class App:
                 return data.characters(conn, book, series=q.get("series") == "1")
             if what == "glossary":
                 return data.glossary(conn, book)
+            if what == "style":
+                return data.house_style(conn, book)
             if what == "proposals":
                 return data.proposals(conn, book, include_done=q.get("all") == "1")
             if what == "run":

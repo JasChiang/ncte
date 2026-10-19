@@ -64,7 +64,7 @@ def test_page_carries_the_token_and_api_needs_it(gui):
 
 def test_reading_endpoints(gui):
     call, book, _ = gui
-    for what in ("overview", "chapters", "story", "characters", "glossary", "proposals"):
+    for what in ("overview", "chapters", "story", "characters", "glossary", "proposals", "style"):
         status, data = call(f"/api/book/{book.id}/{what}")
         assert status == 200, (what, data)
     status, data = call(f"/api/book/{book.id}/units?filter=all")
