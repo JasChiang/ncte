@@ -17,7 +17,10 @@ Each step commits separately: a failing memory step never touches committed tran
 from __future__ import annotations
 
 import json
+import queue
 import sqlite3
+import threading
+from collections.abc import Callable
 from typing import Any
 
 from ..analysis.memory_update import apply_memory_update, build_memory_payload
@@ -271,6 +274,88 @@ class ContextOrchestrator(Orchestrator):
             self.log(f"{what}: stopped ({self._stop_reason}); resume goes on from here")
             return True
         return False
+
+    def _side_by_side(self, n: int, work: Callable[[int], Any], done: Callable[[int, Any], None],
+                      what: str) -> bool:
+        """Runs ``work(0)…work(n-1)`` up to ``openrouter.max_concurrency`` at a time (ADR-065), started in order, each
+        in a daemon thread as ``run_batches`` does; ``done(i, result)`` is called here, in this thread, as each one
+        finishes (in any order). A stop (pause) or a failure starts nothing more; what was started is waited for and
+        its result kept (``done``), then the failure is raised — ``FatalAPIError``, ``BudgetExceededError`` or anything
+        else, the first one. Returns True when stopped before all ``n`` were started."""
+        conc = max(1, self.cfg.openrouter.max_concurrency)
+        done_q: queue.Queue[tuple[int, Any, BaseException | None]] = queue.Queue()
+        active = idx = 0
+        failure: BaseException | None = None
+        stopped = False
+
+        def worker(i: int) -> None:
+            try:
+                done_q.put((i, work(i), None))
+            except BaseException as exc:  # noqa: BLE001 – forwarded to this thread
+                done_q.put((i, None, exc))
+
+        while idx < n or active:
+            while active < conc and idx < n and failure is None and not stopped:
+                if self._paused(what):
+                    stopped = True
+                    break
+                threading.Thread(target=worker, args=(idx,), daemon=True).start()
+                active += 1
+                idx += 1
+            if active == 0:
+                break
+            try:
+                i, result, exc = done_q.get(timeout=0.25)
+            except queue.Empty:
+                continue
+            active -= 1
+            if exc is not None:
+                failure = failure or exc
+                continue
+            done(i, result)
+        if failure is not None:
+            raise failure
+        return stopped
+
+    def _stretches(self, stage: str, what: str, parts: list[list[dict[str, Any]]],
+                   befores: list[list[dict[str, Any]]], one: Callable[..., None], stats: dict[str, Any],
+                   after: int | None, done_beyond: list[str], record_job: bool,
+                   fresh: Callable[[], dict[str, int]]) -> bool:
+        """Proofreading's or the reader's stretches side by side (4.1, ADR-065): ``one(part, before, counts)`` does a
+        stretch with its retranslations and their checks into counts of its own, added to ``stats`` when it is done.
+        The checkpoint's ``done_until_ordinal`` moves only as far as the stretches done without a gap; a stretch done
+        past a gap is kept in ``done_beyond`` (its paragraphs) and not done again on resume. Returns True when
+        stopped (paused) before the end."""
+        beyond = set(done_beyond)  # paragraphs of stretches done past the gap by an earlier attempt
+        todo = [k for k, p in enumerate(parts) if not {x["unit_id"] for x in p} <= beyond]
+        finished: set[int] = set()
+        at = {x["unit_id"]: x["_at"] for p in parts for x in p}
+        until = after
+        frontier = 0  # todo[:frontier] are done
+
+        def work(i: int) -> dict[str, int]:
+            counts = fresh()
+            k = todo[i]
+            one(parts[k], befores[k], counts)
+            return counts
+
+        def done(i: int, counts: dict[str, int]) -> None:
+            nonlocal frontier, until
+            for key, v in counts.items():
+                stats[key] = stats.get(key, 0) + v
+            finished.add(i)
+            beyond.update(x["unit_id"] for x in parts[todo[i]])
+            while frontier in finished:
+                frontier += 1
+            if frontier:
+                until = parts[todo[frontier - 1]][-1]["_at"]
+            if record_job:
+                left = sorted(u for u in beyond if until is None or at.get(u, -1) > until)
+                self._set_job(stage, self.book.id, "running", None,
+                              {**({"done_until_ordinal": until} if until is not None else {}),
+                               **({"done_beyond": left} if left else {}), **stats})
+
+        return self._side_by_side(len(todo), work, done, what) or len(finished) < len(todo)
 
     # ------------------------------------------------------------ execution
     def execute(self) -> None:
@@ -565,6 +650,7 @@ class ContextOrchestrator(Orchestrator):
             return {}
         saved = self._begin_job("reader") if record_job else {}
         after = saved.pop("done_until_ordinal", None)
+        beyond = saved.pop("done_beyond", [])  # stretches done past a gap by a stopped attempt (4.1)
         wanted = set(self.opts.unit_ids) if self.opts.unit_ids else None
         with self.lock:
             story = self._story_files()
@@ -573,16 +659,15 @@ class ContextOrchestrator(Orchestrator):
             prev = reader.tail(self.conn, self.book.id, after, wanted, story=story) if after is not None else []
         prompt = load_prompt("reader")
         stats = {**new_stats(read=0, blocked=0, failed=0), **saved}
+        befores = []
         for part in parts:
-            if self._paused("reader's look"):
-                return stats
             # the end of the stretch before, in the same chapter: read to follow the story, not reported on
-            before = [p for p in prev[-reader.BEFORE_UNITS:] if p["_href"] == part[0]["_href"]]
+            befores.append([p for p in prev[-reader.BEFORE_UNITS:] if p["_href"] == part[0]["_href"]])
             prev = part
-            self._reader_part(part, prompt, stats, before)
-            if record_job:
-                self._set_job("reader", self.book.id, "running", None,
-                              {"done_until_ordinal": part[-1]["_at"], **stats})
+        if self._stretches("reader", "reader's look", parts, befores,
+                           lambda part, before, counts: self._reader_part(part, prompt, counts, before),
+                           stats, after, beyond, record_job, lambda: new_stats(read=0, blocked=0, failed=0)):
+            return stats
         if record_job:  # a stretch refused or failed was not read: the pass is partial, not done
             self._set_job("reader", self.book.id, self._pass_status(stats), None,
                           {**stats, "upto_translation_id": self._last_translation_id()})
@@ -673,6 +758,7 @@ class ContextOrchestrator(Orchestrator):
             return {}
         saved = self._begin_job("proofread") if record_job else {}
         after = saved.pop("done_until_ordinal", None)
+        beyond = saved.pop("done_beyond", [])  # stretches done past a gap by a stopped attempt (4.1)
         wanted = set(self.opts.unit_ids) if self.opts.unit_ids else None
         with self.lock:
             story = self._story_files()
@@ -681,16 +767,15 @@ class ContextOrchestrator(Orchestrator):
             prev = proofread.tail(self.conn, self.book.id, after, wanted, story=story) if after is not None else []
         prompt = load_prompt("proofread")
         stats = {**new_stats(checked=0, blocked=0, failed=0), **saved}
+        befores = []
         for part in parts:
-            if self._paused("proofreading"):
-                return stats
             # the end of the stretch before, in the same chapter: read for who is talking and about what, not checked
-            before = [p for p in prev[-proofread.BEFORE_UNITS:] if p["_href"] == part[0]["_href"]]
+            befores.append([p for p in prev[-proofread.BEFORE_UNITS:] if p["_href"] == part[0]["_href"]])
             prev = part
-            self._proofread_part(part, before, prompt, stats)
-            if record_job:
-                self._set_job("proofread", self.book.id, "running", None,
-                              {"done_until_ordinal": part[-1]["_at"], **stats})
+        if self._stretches("proofread", "proofreading", parts, befores,
+                           lambda part, before, counts: self._proofread_part(part, before, prompt, counts),
+                           stats, after, beyond, record_job, lambda: new_stats(checked=0, blocked=0, failed=0)):
+            return stats
         if record_job:  # a stretch refused or failed was not checked: the pass is partial, not done
             self._set_job("proofread", self.book.id, self._pass_status(stats), None,
                           {**stats, "upto_translation_id": self._last_translation_id()})

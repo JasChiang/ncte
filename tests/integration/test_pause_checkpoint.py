@@ -74,6 +74,7 @@ def _job(conn, rid, stage):
 @pytest.mark.parametrize("how,done", [("pause", 2), ("kill", 1)])
 def test_proofreading_paused_or_killed_goes_on_from_its_checkpoint(conn, cfg, fixtures, how, done):
     cfg.context.proofread_chunk_units = 3
+    cfg.openrouter.max_concurrency = 1  # one stretch at a time (side by side: test_parallel_passes)
     responders = {**RESPONDERS, "proofread": _flag_first("proofread")}
     client = Stopping("proofread", 2, how, responders=responders)
     book, rid, summary = _run(conn, cfg, fixtures, client)
@@ -103,6 +104,7 @@ def test_proofreading_paused_or_killed_goes_on_from_its_checkpoint(conn, cfg, fi
 
 def test_the_readers_look_goes_on_from_its_checkpoint(conn, cfg, fixtures, monkeypatch):
     monkeypatch.setattr(rd, "CHUNK_UNITS", 3)
+    cfg.openrouter.max_concurrency = 1  # one stretch at a time (side by side: test_parallel_passes)
     responders = {**RESPONDERS, "reader": _flag_first("reader")}
     client = Stopping("reader", 1, responders=responders)
     book, rid, summary = _run(conn, cfg, fixtures, client)
