@@ -286,6 +286,43 @@ def test_rule_flags_are_checked_with_context_before_review(conn, cfg, fixtures, 
                                               for u in p.get("units", [])))
 
 
+def test_a_flag_the_check_dismisses_also_settles_the_translate_job(conn, cfg, fixtures, monkeypatch):
+    """A whole-book run left five translate jobs at needs_review whose current translation was succeeded: the rule
+    check called the flag a false alarm and cleared the translation but not the job. Both change together."""
+    import ncte.qa.rules as rules
+    import ncte.translation.translator as tr
+
+    flagged: list[str] = []
+    orig = rules.check_translation
+
+    def flag_first(**kw):
+        out = orig(**kw)
+        if not flagged and kw["kind"] == "text":
+            flagged.append(kw["unit_id"])
+            out.append(rules.Finding("offensive_term", "high", "「阿三」 is a slur", kw["unit_id"]))
+        return out
+
+    monkeypatch.setattr(rules, "check_translation", flag_first)
+    monkeypatch.setattr(tr, "check_translation", flag_first)
+
+    def confirm(payload, req):
+        return {"checks": [{"unit_id": i["unit_id"], "rule": i["rule"], "real": False, "reason": "人名音譯"}
+                           for i in payload["items"]]}
+
+    fake = FakeLLM(responders={"confirm": confirm, "review": lambda p, r: {"issues": []}})
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    assert flagged and any(c.stage == "confirm" for c in fake.calls)
+    t = conn.execute("SELECT status FROM translations WHERE unit_id=? AND run_id=? ORDER BY id DESC LIMIT 1",
+                     (flagged[0], rid)).fetchone()["status"]
+    job = conn.execute("SELECT status FROM jobs WHERE run_id=? AND stage='translate' AND target_id=?",
+                       (rid, flagged[0])).fetchone()["status"]
+    assert (t, job) == ("succeeded", "succeeded")
+    assert not conn.execute("SELECT 1 FROM jobs j JOIN translations t ON t.unit_id=j.target_id AND t.run_id=j.run_id "
+                            "WHERE j.run_id=? AND j.stage='translate' AND j.status='needs_review' AND "
+                            "t.id=(SELECT MAX(id) FROM translations WHERE unit_id=j.target_id AND run_id=j.run_id) "
+                            "AND t.status='succeeded'", (rid,)).fetchone()
+
+
 def test_a_rule_flag_the_check_confirms_is_fixed_even_if_review_reports_something_else(conn, cfg, fixtures,
                                                                                       monkeypatch):
     """「我們」 in third-person narration, confirmed real with context: review reports only a small other point (low)

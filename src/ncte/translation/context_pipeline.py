@@ -33,6 +33,7 @@ from ..llm.schemas import MemoryUpdateOutput, NamingOutput, SceneAnalysisOutput,
 from ..memory.db import Transaction, utcnow
 from ..memory.retrieval import memory_context
 from ..qa.rules import CONFIRM_RULES, CONFIRMED
+from .cache import settle_translation
 from .context_builder import BODY_KINDS
 from .orchestrator import Batch, Orchestrator, make_batches, scene_batches
 from .translator import call_structured
@@ -1056,9 +1057,10 @@ class ContextOrchestrator(Orchestrator):
                                   (f" | check: {c.reason[:200]}", self.run_id, c.unit_id, c.rule))
                 if not self.conn.execute("SELECT 1 FROM qa_findings WHERE run_id=? AND unit_id=? AND status='open' AND "
                                          "severity IN ('high','error')", (self.run_id, c.unit_id)).fetchone():
-                    self.conn.execute("UPDATE translations SET status='succeeded' WHERE id=(SELECT id FROM translations "
-                                      "WHERE unit_id=? AND run_id=? ORDER BY id DESC LIMIT 1) AND status='needs_review'",
-                                      (c.unit_id, self.run_id))
+                    latest = self.conn.execute("SELECT id FROM translations WHERE unit_id=? AND run_id=? ORDER BY id "
+                                               "DESC LIMIT 1", (c.unit_id, self.run_id)).fetchone()
+                    if latest is not None:
+                        settle_translation(self.conn, latest[0])
         if stats["dismissed"]:
             self.log(f"  rule flags checked: {stats}")
         return stats

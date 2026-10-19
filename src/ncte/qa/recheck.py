@@ -6,7 +6,7 @@ import sqlite3
 from typing import Any
 
 from ..memory.db import Transaction, utcnow
-from ..translation.cache import glossary_entries, latest_texts
+from ..translation.cache import glossary_entries, latest_texts, settle_translation
 from ..translation.translator import UnitInput
 from . import second_person
 from .rules import Finding, check_translation, worst
@@ -71,7 +71,7 @@ def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
                 "(type LIKE 'review:%' OR type LIKE 'fix\\_%' ESCAPE '\\') AND (translation_id IS NULL OR translation_id=?) "
                 "LIMIT 1", (uid, t["id"])).fetchone() is not None
             if t["status"] == "needs_review" and not high and not semantic:
-                conn.execute("UPDATE translations SET status='succeeded' WHERE id=?", (t["id"],))
+                settle_translation(conn, t["id"])
                 stats["cleared"] += 1
             elif t["status"] == "succeeded" and high:
                 conn.execute("UPDATE translations SET status='needs_review' WHERE id=?", (t["id"],))

@@ -220,6 +220,24 @@ def test_recheck_keeps_reviewer_decisions(conn, cfg, fixtures, seeded):
     assert conn.execute("SELECT COUNT(*) FROM translations WHERE status='needs_review'").fetchone()[0] == 0
 
 
+def test_recheck_that_clears_a_translation_settles_its_translate_job(conn, cfg, fixtures, seeded):
+    """Recheck turns a needs_review translation the rules no longer flag into succeeded: the run's translate job too."""
+    from ncte.qa.recheck import recheck_book
+
+    cfg.review.automatic_review = "off"
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], FakeLLM())
+    t = conn.execute("SELECT id, unit_id FROM translations WHERE run_id=? AND status='succeeded' ORDER BY id LIMIT 1",
+                     (rid,)).fetchone()
+    conn.execute("UPDATE translations SET status='needs_review' WHERE id=?", (t["id"],))
+    conn.execute("UPDATE jobs SET status='needs_review' WHERE run_id=? AND stage='translate' AND target_id=?",
+                 (rid, t["unit_id"]))
+    conn.commit()
+    assert recheck_book(conn, book.id)["cleared"] >= 1
+    assert conn.execute("SELECT status FROM translations WHERE id=?", (t["id"],)).fetchone()[0] == "succeeded"
+    assert conn.execute("SELECT status FROM jobs WHERE run_id=? AND stage='translate' AND target_id=?",
+                        (rid, t["unit_id"])).fetchone()[0] == "succeeded"
+
+
 def test_a_concrete_fix_is_applied_even_when_called_style(conn, cfg, fixtures, seeded):
     """§78 (real book): the reviewer saw a leftover ッ, wrote the fixed sentence, but said no retranslation needed."""
     cfg.review.automatic_review = "flagged_only"

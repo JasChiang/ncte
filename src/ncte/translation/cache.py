@@ -13,6 +13,7 @@ import json
 import sqlite3
 from typing import Any
 
+from ..memory.db import utcnow
 from ..series import SERIES_SCOPE
 
 VALID_MACHINE = ("succeeded", "needs_review")
@@ -70,6 +71,20 @@ def latest_translation(conn: sqlite3.Connection, unit_id: str, source_hash: str,
         f"SELECT * FROM translations WHERE unit_id=? AND source_hash=? AND status IN "
         f"({','.join('?' * len(VALID_MACHINE))}) ORDER BY id DESC LIMIT 1",
         (unit_id, source_hash, *VALID_MACHINE)).fetchone()
+
+
+def settle_translation(conn: sqlite3.Connection, translation_id: int) -> bool:
+    """A translation waiting for review is cleared (``needs_review`` → ``succeeded``): the translate job of the run that
+    wrote it is cleared with it, in the caller's transaction, so the job never says "waiting" for a unit whose text is
+    done (a whole-book run left five such jobs). Returns whether the translation changed."""
+    row = conn.execute("SELECT unit_id, run_id FROM translations WHERE id=? AND status='needs_review'",
+                       (translation_id,)).fetchone()
+    if row is None:
+        return False
+    conn.execute("UPDATE translations SET status='succeeded' WHERE id=?", (translation_id,))
+    conn.execute("UPDATE jobs SET status='succeeded', updated_at=? WHERE run_id=? AND stage='translate' AND target_id=? "
+                 "AND status='needs_review'", (utcnow(), row[1], row[0]))
+    return True
 
 
 def prompt_major(version_id: str | None) -> str:

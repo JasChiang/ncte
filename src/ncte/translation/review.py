@@ -24,7 +24,7 @@ from ..llm.prompt_loader import load_prompt
 from ..llm.schemas import FixCheck, FixCheckOutput, ReviewOutput
 from ..memory.db import Transaction, utcnow
 from ..qa.rules import CONFIRM_RULES, CONFIRMED, Finding, worst
-from .cache import glossary_hash, latest_translation, relevant_glossary
+from .cache import glossary_hash, latest_translation, relevant_glossary, settle_translation
 from .translator import BatchResult, UnitInput, call_structured
 
 SEV = {"low": "low", "medium": "medium", "high": "high"}
@@ -278,12 +278,8 @@ def _clear_confirmed(orch: Any, reviewed: dict[str, int], stats: dict[str, int])
                                   "(type LIKE 'review%' AND run_id IS NOT ?)) AND "
                                   "(translation_id IS NULL OR translation_id<=?)",
                                   (orch.book.id, uid, orch.run_id, tid)).rowcount
-            t = orch.conn.execute("SELECT id FROM translations WHERE id=? AND status='needs_review'", (tid,)).fetchone()
-            if t is not None:
-                orch.conn.execute("UPDATE translations SET status='succeeded' WHERE id=?", (t[0],))
-                orch.conn.execute("UPDATE jobs SET status='succeeded' WHERE run_id=? AND stage='translate' AND "
-                                  "target_id=? AND status='needs_review'", (orch.run_id, uid))
-            if n or t is not None:
+            settled = settle_translation(orch.conn, tid)
+            if n or settled:
                 stats["cleared"] = stats.get("cleared", 0) + 1
 
 
@@ -457,12 +453,14 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
                 orch.conn.executemany("UPDATE qa_findings SET status='dismissed_by_check' WHERE id=? AND status='open'",
                                       [(f,) for f in fids + [mark[uid]] if f])
                 old = current.get(uid)
-                if old is not None and old["status"] == "needs_review" and not orch.conn.execute(
-                        "SELECT 1 FROM qa_findings WHERE unit_id=? AND status='open' AND severity='high'",
-                        (uid,)).fetchone():
-                    orch.conn.execute("UPDATE translations SET status='succeeded' WHERE id=?", (old["id"],))
-                orch.conn.execute("UPDATE jobs SET status='succeeded' WHERE run_id=? AND stage='translate' AND "
-                                  "target_id=?", (orch.run_id, uid))
+                if old is not None and old["status"] == "needs_review":
+                    # still waiting while another serious finding on the unit is open: the job waits with it
+                    if not orch.conn.execute("SELECT 1 FROM qa_findings WHERE unit_id=? AND status='open' AND "
+                                             "severity='high'", (uid,)).fetchone():
+                        settle_translation(orch.conn, old["id"])
+                else:
+                    orch.conn.execute("UPDATE jobs SET status='succeeded' WHERE run_id=? AND stage='translate' AND "
+                                      "target_id=?", (orch.run_id, uid))
                 stats["issue_invalid"] += 1
                 stats["resolved"] += 1
                 continue
