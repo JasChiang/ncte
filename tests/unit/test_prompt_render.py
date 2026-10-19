@@ -35,3 +35,17 @@ def test_later_paragraphs_are_for_understanding_not_for_adding():
     assert "也應該用來理解" in rule and "增譯" in rule and "推測" in rule and "懸念" in rule
     assert "推測或後文資訊寫進譯文" not in rule  # the old wording that read as "do not look ahead"
 
+
+
+def test_the_reactions_around_a_line_are_a_rule_of_their_own():
+    """3.2 (ADR-064): making the reactions before and after a line work is a general rule of its own, between the
+    order of judgement and the translation rules, about what is said as well as how; the sentence about a way of
+    speaking being mocked moved out of rule 7 into it."""
+    static, _ = load_prompt("translate").render_parts({"units": []})
+    order, rules = static.index("## 判斷順序"), static.index("## 翻譯規則")
+    at = static.index("## 讓前後的反應成立")
+    assert order < at < rules
+    section = static[at:rules]
+    for word in ("反駁", "追問", "糾正", "評論", "吐槽", "模仿", "比較", "指的是誰", "說法", "不是補資訊"):
+        assert word in section, word
+    assert "讓後面的反應說得通" not in _rules(static)["7"]
