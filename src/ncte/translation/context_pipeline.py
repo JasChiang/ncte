@@ -536,8 +536,9 @@ class ContextOrchestrator(Orchestrator):
         after = saved.pop("done_until_ordinal", None)
         wanted = set(self.opts.unit_ids) if self.opts.unit_ids else None
         with self.lock:
-            parts = reader.chunks(self.conn, self.book.id, wanted, after=after)
-            prev = reader.tail(self.conn, self.book.id, after, wanted) if after is not None else []
+            story = self._story_files()
+            parts = reader.chunks(self.conn, self.book.id, wanted, after=after, story=story)
+            prev = reader.tail(self.conn, self.book.id, after, wanted, story=story) if after is not None else []
         prompt = load_prompt("reader")
         stats = {**new_stats(read=0, blocked=0, failed=0), **saved}
         for part in parts:
@@ -554,6 +555,15 @@ class ContextOrchestrator(Orchestrator):
             self._set_job("reader", self.book.id, self._pass_status(stats), None, stats)
         self.log(f"reader's look: {stats}")
         return stats
+
+    def _story_files(self) -> set[str] | None:
+        """The files proofreading and the reader's look go through: the story only (ADR-024) unless book matter is
+        asked for too."""
+        if not self.cfg.context.skip_book_matter:
+            return None
+        from ..epub.matter import story_hrefs
+
+        return story_hrefs(self.conn, self.book.id)
 
     def _pass_status(self, stats: dict[str, int]) -> str:
         # a stretch refused or failed was not looked at; with chosen paragraphs only, the book was not looked at whole
@@ -626,9 +636,10 @@ class ContextOrchestrator(Orchestrator):
         after = saved.pop("done_until_ordinal", None)
         wanted = set(self.opts.unit_ids) if self.opts.unit_ids else None
         with self.lock:
+            story = self._story_files()
             parts = proofread.chunks(self.conn, self.book.id, wanted, size=self.cfg.context.proofread_chunk_units,
-                                     after=after)
-            prev = proofread.tail(self.conn, self.book.id, after, wanted) if after is not None else []
+                                     after=after, story=story)
+            prev = proofread.tail(self.conn, self.book.id, after, wanted, story=story) if after is not None else []
         prompt = load_prompt("proofread")
         stats = {**new_stats(checked=0, blocked=0, failed=0), **saved}
         for part in parts:

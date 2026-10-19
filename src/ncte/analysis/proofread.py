@@ -31,10 +31,12 @@ _UNITS = ("SELECT * FROM units WHERE book_id=? AND translatable=1 AND kind IN ('
 
 
 def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = None,
-           size: int = CHUNK_UNITS, after: int | None = None) -> list[list[dict[str, Any]]]:
-    """Consecutive translated story paragraphs, chapter by chapter, each with its source and who says its lines.
+           size: int = CHUNK_UNITS, after: int | None = None,
+           story: set[str] | None = None) -> list[list[dict[str, Any]]]:
+    """Consecutive translated paragraphs, chapter by chapter, each with its source and who says its lines.
     ``after``: only paragraphs after this ordinal (a resumed pass; a stretch starts afresh after each one checked, so
-    the stretches are the same as in the first run)."""
+    the stretches are the same as in the first run). ``story``: only paragraphs of these files (the story without
+    covers, table of contents, afterword or colophon, ADR-024, when ``context.skip_book_matter``); None: every file."""
     from ..memory.visibility import form_positions, visible_names
 
     best = latest_texts(conn, book_id)
@@ -58,7 +60,8 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
     href = None
     for r in conn.execute(_UNITS + " AND ordinal>? ORDER BY ordinal", (book_id, -(1 << 62) if after is None else after)):
         t = best.get(r["id"])
-        if t is None or (unit_ids is not None and r["id"] not in unit_ids):
+        if t is None or (unit_ids is not None and r["id"] not in unit_ids) or (story is not None and
+                                                                             r["resource_href"] not in story):
             continue
         if cur and (r["resource_href"] != href and len(cur) >= size // 3 or len(cur) >= size):
             out.append(cur)
@@ -88,13 +91,15 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
 
 
 def tail(conn: sqlite3.Connection, book_id: str, upto: int, unit_ids: set[str] | None = None,
-         n: int = BEFORE_UNITS) -> list[dict[str, Any]]:
-    """The last ``n`` translated paragraphs up to ``upto``: the stretch before, for a pass resumed after it."""
+         n: int = BEFORE_UNITS, story: set[str] | None = None) -> list[dict[str, Any]]:
+    """The last ``n`` translated paragraphs up to ``upto`` (of the ``story`` files, when given): the stretch before,
+    for a pass resumed after it."""
     best = latest_texts(conn, book_id)
     out: list[dict[str, Any]] = []
     for r in conn.execute(_UNITS + " AND ordinal<=? ORDER BY ordinal DESC", (book_id, upto)):
         t = best.get(r["id"])
-        if t is None or (unit_ids is not None and r["id"] not in unit_ids):
+        if t is None or (unit_ids is not None and r["id"] not in unit_ids) or (story is not None and
+                                                                             r["resource_href"] not in story):
             continue
         out.append({"unit_id": r["id"], "ja": r["plain_text"], "zh": PH_RE.sub("", t["text"]), "_tid": t["id"],
                     "_at": r["ordinal"], "_href": r["resource_href"]})

@@ -166,3 +166,37 @@ def test_a_second_reading_is_recorded_for_a_person_and_not_retranslated(conn, cf
     shown = [u for u in data.units(conn, book)["units"] if u["readings"]]
     assert {u["id"] for u in shown} == {f["unit_id"] for f in found}
     assert "比年紀" in shown[0]["readings"][0]
+
+
+def test_proofreading_and_the_readers_look_leave_book_matter_out(conn, cfg, fixtures, monkeypatch):
+    """2.10: with ``skip_book_matter`` (the default), an afterword or colophon is translated but neither proofread
+    nor read by the reader (as naming and the read pass leave it out); turned off, they look at it too."""
+    import ncte.epub.matter as matter
+    from ncte.library import import_book
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    hrefs = [r[0] for r in conn.execute("SELECT resource_href, MIN(ordinal) o FROM units WHERE book_id=? AND "
+                                        "spine_index IS NOT NULL GROUP BY resource_href ORDER BY o", (book.id,))]
+    monkeypatch.setattr(matter, "story_hrefs", lambda c, b: set(hrefs[:-1]))  # last file = afterword
+    last = {r[0] for r in conn.execute("SELECT id FROM units WHERE book_id=? AND resource_href=? AND translatable=1 "
+                                       "AND kind IN ('text','heading')", (book.id, hrefs[-1]))}
+    assert last
+
+    def looked(skip: bool) -> tuple[set[str], set[str]]:
+        seen: dict[str, set[str]] = {"proofread": set(), "reader": set()}
+
+        def note(task):
+            def respond(payload, req):
+                seen[task] |= {p["unit_id"] for p in payload["paragraphs"]}
+                return {"issues": []}
+            return respond
+
+        cfg.context.skip_book_matter = skip
+        fake = FakeLLM(responders={**RESPONDERS, "proofread": note("proofread"), "reader": note("reader")})
+        run_book(conn, cfg, fixtures["basic"], fake, mode="context", force=True)
+        return seen["proofread"], seen["reader"]
+
+    proof, read = looked(True)
+    assert proof and read and not (proof & last) and not (read & last)
+    proof, read = looked(False)
+    assert last <= proof and last <= read
