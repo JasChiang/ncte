@@ -293,6 +293,8 @@
   5. 人工譯文不被機器修正覆蓋；`ncte recheck` 不因程式規則沒找到問題就結案語義問題。
   6. 「可驗收」與「可匯出」分開：`reports/acceptance.py` 逐項列出還缺什麼，匯出時一併報告；可驗收不等於品質合格。
 
+- 補充（2026-10-19，review 後的修正）：只校稿（`ncte proofread`）、只做讀者檢查（`ncte reader-check`）的執行也為這一步建一筆 job（target 為書），可驗收照常看該步驟最後一筆 job；原本不記 job，被擋一段變 partial 後用指令整本重跑也翻不回來。加 `--unit-id` 時 job 最多是 partial（沒看整本）。校稿與讀者檢查每完成一批（含該批的重譯與修正驗收）把進度寫進 `jobs.checkpoint_json`（`done_until_ordinal` 與累計統計）；暫停（網頁按鈕）或程序被關掉時 job 留在 running，續跑從下一批接，前面的批次不再送。覆核、人物關係、角色印象在每批之前也檢查暫停；關係與印象是全部問完才寫入，中途暫停時這次問到的不寫入、續跑重問整步。
+
 ## ADR-056 同一個故事位置只有一套名字；推測與觀點跟著資料走
 - 一個步驟送給模型的任何欄位（人物卡、說話者、說話對象、稱呼表、敘述視角、校稿的人物卡）都用 `visibility.visible_names` 取名字；後文才揭曉的名字不再從稱呼或視角帶回前文。
 - 事實與關係轉成文字給後續步驟時保留觀點與確定程度（`qualified_fact`：「〔某人認為〕…」「〔敘述者的說法〕…」「…（推測）」；推測的關係附 `certainty: inferred`）。推測歸屬的台詞在體例中標 `guess`，不可只憑它定口癖。
@@ -352,3 +354,7 @@
   - 把 ncte-agent 併回：任務佇列、背景引擎、`ncte agent start|next|submit|status|export|stop|resume`、`ncte mcp`（MCP 伺服器，選用套件 `pip install 'ncte[agent]'`）、`skills/ncte-translate`。來源名 `agent`；這種執行不能經 API 續譯（`ncte resume` 會要求改用 `ncte agent resume`）。ncte-agent 的 `drive` 由 `claude` 來源取代。
   - 預設來源改為 `claude`（沒有設定 `NCTE_LLM_PROVIDER` 時）；README 以 Claude 方案為主、OpenRouter 並列。OpenRouter 較快（一本約 3 小時對約 6 小時）、不占訂閱額度，留給沒有 Claude 訂閱的人。已在 `.env` 選了 openrouter／fal 的照舊。
 - 不做：讓 agent 自己探索資料（開放工具讀全書）。理由：Sonnet 翻錯的段落，判斷所需的後文都已在輸入裡（模型沒用上，不是沒資料）；開工具每次重送累積的上下文（子代理每題約 4–5 萬 token）；自由搜尋會讀到後面才揭曉的身分與伏筆，繞過可見範圍。若要做，先做只能查 NCTE 紀錄、受可見範圍限制的「查筆記」工具，並先統計缺資料的錯有多少。
+- 補充（2026-10-19，review 後的修正）：
+  - 提示詞快取：Claude Code 把整段 `--system-prompt` 當一個快取區塊，只有逐字相同才讀快取；原本系統提示詞＝固定規則＋本批條件段（＋重試更正），schema 附在 user 訊息，smoke run 15 個請求只有 23% 讀快取，條件段不同的翻譯請求 0 命中。改為依 `cached_prefix_chars` 切開：`--system-prompt`＝該步驟固定的規則（含回答格式）＋該步驟的 JSON schema，每個請求逐字相同；本批條件段與重試的「重要更正」放進 user 訊息、在資料之前。OpenRouter 的 `cache_control` 做法不變（ADR-043）。回答格式只說一次（`translator.COMPACT_JSON`：只輸出一個 JSON 物件、不要說明與 code fence、寫成一行、代號照原樣），所有來源共用；原本 Claude 專用的 `ANSWER_RULE` 移除。實際命中率要用額度跑 smoke 才知道，尚未量。
+  - 重試：Claude Code 拒絕指令本身（exit 2、stderr 有 unknown option／unknown argument／too many arguments）每次都一樣，立即停止並附 stderr，不再等最長約 4 小時；「沒登入」的字樣只在失敗（`is_error` 或 exit 非零）時檢查，模型的回答裡出現同樣的字不算。每次等待前寫一行原因到指令列或網頁的紀錄。
+  - 模型分配的說明更正：本 ADR 前文「翻譯、定名與所有檢查用 Opus」與程式不同；程式（`CLAUDE_READ_STAGES`）是切場景、讀場景、記憶整理、覆核、人物關係、角色印象、體例用 Sonnet，其餘（翻譯、定名、規則確認、審稿、對照校稿、讀者檢查、修正驗收）用 Opus。README 與網頁照程式改。
