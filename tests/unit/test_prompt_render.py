@@ -49,3 +49,17 @@ def test_the_reactions_around_a_line_are_a_rule_of_their_own():
     for word in ("反駁", "追問", "糾正", "評論", "吐槽", "模仿", "比較", "指的是誰", "說法", "不是補資訊"):
         assert word in section, word
     assert "讓後面的反應說得通" not in _rules(static)["7"]
+
+
+def test_every_task_has_a_prompt_and_every_prompt_a_task():
+    """A1 (ADR-067): the old long-paragraph scene prompt (ADR-036, removed by ADR-059) is gone with its task."""
+    from pathlib import Path
+
+    from ncte.llm.prompt_loader import TASKS
+    from ncte.llm.schemas import SCHEMAS
+
+    root = Path(__file__).resolve().parents[2] / "prompts"
+    assert "scenes" not in TASKS and "scenes" not in SCHEMAS
+    assert {d.name for d in root.iterdir() if d.is_dir()} == set(TASKS)
+    for t in TASKS:
+        assert "<!--" not in load_prompt(t).render()

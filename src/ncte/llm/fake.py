@@ -104,11 +104,6 @@ def default_verify(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     return {"items": []}
 
 
-def default_scenes(payload: dict[str, Any], req: Any) -> dict[str, Any]:
-    """No opinion: the program's own cuts stay."""
-    return {"breaks": []}
-
-
 def default_scene_windows(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     """The author's separators and blank lines, as the program cut before."""
     return {"first_kind": "present", "breaks": [
@@ -165,7 +160,6 @@ DEFAULTS: dict[str, Responder] = {
     "naming": default_naming,
     "review": default_review,
     "verify": default_verify,
-    "scenes": default_scenes,
     "scene_windows": default_scene_windows,
     "reader": default_reader,
     "proofread": default_proofread,

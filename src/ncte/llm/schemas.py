@@ -332,16 +332,7 @@ class VerifyOutput(_M):
     items: list[VerifyItem]
 
 
-# ------------------------------------------------------------------ scene breaks (ADR-036)
-class SceneBreak(_M):
-    unit_id: str  # the first paragraph of a new scene
-    reason: str
-
-
-class SceneBreaksOutput(_M):
-    breaks: list[SceneBreak]
-
-
+# ------------------------------------------------------------------ scene windows (ADR-057)
 # present: the story's now · flashback: a remembered past told as scenes · parallel: elsewhere at the same time ·
 # summary: time passing told in brief (「それから数週間、」) · other: a dream, a letter, an in-story text
 SceneKind = Literal["present", "flashback", "parallel", "summary", "other"]
@@ -467,7 +458,6 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "naming": NamingOutput,
     "review": ReviewOutput,
     "verify": VerifyOutput,
-    "scenes": SceneBreaksOutput,
     "scene_windows": SceneWindowsOutput,
     "reader": ReaderOutput,
     "proofread": ProofreadOutput,
