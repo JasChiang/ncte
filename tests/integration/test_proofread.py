@@ -89,8 +89,9 @@ def test_with_verdicts_every_paragraph_is_answered_for(conn, cfg, fixtures):
 
 
 def test_the_commands_record_their_pass_so_a_whole_book_rerun_makes_it_complete(tmp_path, fixtures):
-    """`ncte proofread` and `ncte reader-check` record a job of their own: run on chosen paragraphs only, the pass is
-    partial (the book was not checked whole); a later whole-book run that succeeds makes it complete again."""
+    """`ncte proofread` and `ncte reader-check` over the whole book record a job of their own, so a run that succeeds
+    makes the pass complete again; run on chosen paragraphs only, they record none (the book was not checked whole,
+    and a book already complete stays so)."""
     from typer.testing import CliRunner
 
     from ncte.cli import app
@@ -122,8 +123,10 @@ def test_the_commands_record_their_pass_so_a_whole_book_rerun_makes_it_complete(
     last, ok, uid = db()
     assert (last, ok) == ("succeeded", True)
     out = r.invoke(app, ["-w", str(ws), "proofread", epub, "--fake", "--unit-id", uid])
-    assert out.exit_code == 0, out.output
-    assert db()[:2] == ("partial", False)  # chosen paragraphs only: recorded, never complete
+    assert out.exit_code == 0, out.output and "proofreading:" in out.output
+    # chosen paragraphs only: not a pass over the book, so not recorded (a finished book stays complete)
+    assert db()[:2] == ("succeeded", True)
+    assert db("UPDATE jobs SET status='partial' WHERE book_id=? AND stage=?")[:2] == ("partial", False)
     out = r.invoke(app, ["-w", str(ws), "proofread", epub, "--fake"])
     assert out.exit_code == 0, out.output
     assert db()[:2] == ("succeeded", True)  # the whole book again: complete
