@@ -45,7 +45,7 @@ context:
 memory:
   fts_enabled: true
   vector_rag_enabled: false
-  max_retrieved_evidence: 8
+  max_retrieved_evidence: 8   # facts per 25 paragraphs of a translation batch; a longer batch gets more, up to 4× (ADR-069)
   future_knowledge_policy: "up_to_current_scene"
   max_scene_units: 80
 export:

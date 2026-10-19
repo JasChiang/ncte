@@ -45,9 +45,32 @@ def _cap(items: list[Any], n: int) -> list[Any]:
     return items[-n:] if n >= 0 else items
 
 
+QUOTA_UNITS = 25  # a quota (facts, forms of address) is for this many paragraphs of the batch
+QUOTA_MAX_TIMES = 4  # a long batch gets at most this many quotas
+MEMORY_CHARS_MAX = 8000  # the memory block of a long batch grows with it up to this many characters
+
+
+def batch_quota(base: int, n_units: int) -> int:
+    """``base`` per QUOTA_UNITS paragraphs of the batch (rounded up), at least ``base``, at most QUOTA_MAX_TIMES times
+    it (ADR-069): a whole scene of 120 paragraphs in one request is not given the handful of facts a 20-paragraph batch
+    gets. Only how many are kept changes, not how they are chosen."""
+    return base * min(QUOTA_MAX_TIMES, max(1, -(-n_units // QUOTA_UNITS)))
+
+
+def memory_chars(chars_budget: int, n_units: int) -> int:
+    """The memory block's character budget for a batch of ``n_units`` paragraphs: grows like the fact quota, capped."""
+    return max(chars_budget, min(MEMORY_CHARS_MAX, batch_quota(chars_budget, n_units)))
+
+
 def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row, batch_rows: list[sqlite3.Row],
                    max_evidence: int = 8, chars_budget: int = 2400) -> dict[str, Any]:
-    """Characters, scene state, summaries, facts and props visible at this scene."""
+    """Characters, scene state, summaries, facts and props visible at this scene.
+
+    ``max_evidence`` and ``chars_budget`` are for a batch of up to QUOTA_UNITS paragraphs; a longer batch gets one
+    more quota of facts per QUOTA_UNITS paragraphs (rounded up, at most QUOTA_MAX_TIMES times) and a character budget
+    grown in proportion, up to MEMORY_CHARS_MAX (``batch_quota``, ``memory_chars``; ADR-069)."""
+    max_evidence = batch_quota(max_evidence, len(batch_rows))
+    chars_budget = memory_chars(chars_budget, len(batch_rows))
     horizon = scene["start_ordinal"]
     upto = batch_rows[-1]["ordinal"]
     scene_text = " ".join(match_text(r["plain_text"]) for r in conn.execute(

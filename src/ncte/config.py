@@ -99,7 +99,7 @@ class ReviewConfig(_Strict):
 class MemoryConfig(_Strict):
     fts_enabled: bool = True
     vector_rag_enabled: bool = False
-    max_retrieved_evidence: int = Field(5, ge=0, le=50)  # facts per batch, most related first
+    max_retrieved_evidence: int = Field(5, ge=0, le=50)  # facts per 25 paragraphs of a batch (up to 4×), most related first
     future_knowledge_policy: Literal["up_to_current_scene"] = "up_to_current_scene"
     max_scene_units: int = Field(80, ge=5)
 
