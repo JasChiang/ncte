@@ -325,12 +325,12 @@ class ContextOrchestrator(Orchestrator):
     def _stretches(self, stage: str, what: str, parts: list[list[dict[str, Any]]],
                    befores: list[list[dict[str, Any]]], one: Callable[..., None], stats: dict[str, Any],
                    after: int | None, done_beyond: list[str], record_job: bool,
-                   fresh: Callable[[], dict[str, int]]) -> bool:
+                   fresh: Callable[[], dict[str, int]], mark: dict[str, Any] | None = None) -> bool:
         """Proofreading's or the reader's stretches side by side (4.1, ADR-065): ``one(part, before, counts)`` does a
         stretch with its retranslations and their checks into counts of its own, added to ``stats`` when it is done.
         The checkpoint's ``done_until_ordinal`` moves only as far as the stretches done without a gap; a stretch done
-        past a gap is kept in ``done_beyond`` (its paragraphs) and not done again on resume. Returns True when
-        stopped (paused) before the end."""
+        past a gap is kept in ``done_beyond`` (its paragraphs) and not done again on resume; ``mark`` is kept in the
+        checkpoint as it is (proofreading's pass, ADR-066). Returns True when stopped (paused) before the end."""
         beyond = set(done_beyond)  # paragraphs of stretches done past the gap by an earlier attempt
         todo = [k for k, p in enumerate(parts) if not {x["unit_id"] for x in p} <= beyond]
         finished: set[int] = set()
@@ -358,7 +358,7 @@ class ContextOrchestrator(Orchestrator):
                 left = sorted(u for u in beyond if until is None or at.get(u, -1) > until)
                 self._set_job(stage, self.book.id, "running", None,
                               {**({"done_until_ordinal": until} if until is not None else {}),
-                               **({"done_beyond": left} if left else {}), **stats})
+                               **({"done_beyond": left} if left else {}), **stats, **(mark or {})})
 
         return self._side_by_side(len(todo), work, done, what) or len(finished) < len(todo)
 
@@ -753,17 +753,56 @@ class ContextOrchestrator(Orchestrator):
         for group in by_scene.values():  # one scene at a time: the translation keeps that scene's memory
             _retranslate_with_feedback(self, group, {r["id"]: feedback[r["id"]] for r in group}, stats)
 
-    def proofread_pass(self, *, record_job: bool = True) -> dict[str, int]:
+    def proofread_pass(self, *, record_job: bool = True) -> dict[str, Any]:
         """Pass 3b (ADR-051): every paragraph against its source; real errors go back to the translator. Recorded as
         a job, it keeps how far it got after each stretch (with its retranslations and their checks): paused or
-        killed, the resumed run checks on from there."""
-        from ..analysis import proofread
+        killed, the resumed run checks on from there. With ``context.proofread_passes`` above 1 (ADR-066), each later
+        pass checks the whole current translation again once the pass before has retranslated and checked its fixes;
+        the checkpoint also keeps which pass it is in (``pass``) and each finished pass's counts (``passes``), and
+        the job's counts are the passes added up."""
         from .review import new_stats
 
         job = self._job("proofread", self.book.id)
         if record_job and (job is None or job["status"] not in ("pending", "running")):
             return {}
         saved = self._begin_job("proofread") if record_job else {}
+        n = self.cfg.context.proofread_passes
+        k = int(saved.pop("pass", 1))
+        done: list[dict[str, Any]] = list(saved.pop("passes", []))
+        since = saved.get("since_translation_id")  # an earlier whole-book pass: only what is newer (2.11)
+        prompt = load_prompt("proofread")
+        while True:
+            mark = {"pass": k, "passes": done} if n > 1 else {}
+            stats, stopped = self._proofread_once(saved, prompt, record_job, mark)
+            if stopped:
+                return stats
+            if k >= n:
+                break
+            done = [*done, _one_pass(stats)]
+            k += 1
+            saved = {**new_stats(checked=0, blocked=0, failed=0),
+                     **({"since_translation_id": since} if since is not None else {})}
+            if record_job:  # the next pass begins: a run stopped now starts it again on resume, not the one before
+                self._set_job("proofread", self.book.id, "running", None, {**saved, "pass": k, "passes": done})
+            self.log(f"proofreading pass {k - 1} of {n}: {done[-1]}; pass {k} checks the whole current translation")
+        if n > 1:
+            passes = [*done, _one_pass(stats)]
+            stats = {**_added_up(passes), **({"since_translation_id": since} if since is not None else {}),
+                     "passes": passes}
+        if record_job:  # a stretch refused or failed was not checked: the pass is partial, not done
+            self._set_job("proofread", self.book.id, self._pass_status(stats), None,
+                          {**stats, "upto_translation_id": self._last_translation_id()})
+        self.log(f"proofreading: {stats}")
+        return stats
+
+    def _proofread_once(self, saved: dict[str, Any], prompt: Any, record_job: bool,
+                        mark: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+        """One pass over the book (or the chosen paragraphs), from where ``saved`` says a stopped attempt got to.
+        Returns its counts and whether it was stopped (paused) before the end."""
+        from ..analysis import proofread
+        from .review import new_stats
+
+        saved = dict(saved)
         after = saved.pop("done_until_ordinal", None)
         beyond = saved.pop("done_beyond", [])  # stretches done past a gap by a stopped attempt (4.1)
         wanted = set(self.opts.unit_ids) if self.opts.unit_ids else None
@@ -772,22 +811,17 @@ class ContextOrchestrator(Orchestrator):
             parts = proofread.chunks(self.conn, self.book.id, wanted, size=self.cfg.context.proofread_chunk_units,
                                      after=after, story=story, since=saved.get("since_translation_id"))
             prev = proofread.tail(self.conn, self.book.id, after, wanted, story=story) if after is not None else []
-        prompt = load_prompt("proofread")
         stats = {**new_stats(checked=0, blocked=0, failed=0), **saved}
         befores = []
         for part in parts:
             # the end of the stretch before, in the same chapter: read for who is talking and about what, not checked
             befores.append([p for p in prev[-proofread.BEFORE_UNITS:] if p["_href"] == part[0]["_href"]])
             prev = part
-        if self._stretches("proofread", "proofreading", parts, befores,
-                           lambda part, before, counts: self._proofread_part(part, before, prompt, counts),
-                           stats, after, beyond, record_job, lambda: new_stats(checked=0, blocked=0, failed=0)):
-            return stats
-        if record_job:  # a stretch refused or failed was not checked: the pass is partial, not done
-            self._set_job("proofread", self.book.id, self._pass_status(stats), None,
-                          {**stats, "upto_translation_id": self._last_translation_id()})
-        self.log(f"proofreading: {stats}")
-        return stats
+        stopped = self._stretches("proofread", "proofreading", parts, befores,
+                                  lambda part, before, counts: self._proofread_part(part, before, prompt, counts),
+                                  stats, after, beyond, record_job, lambda: new_stats(checked=0, blocked=0, failed=0),
+                                  mark=mark)
+        return stats, stopped
 
     def _proofread_part(self, part: list[dict[str, Any]], before: list[dict[str, Any]], prompt: Any,
                         stats: dict[str, int]) -> None:
@@ -1329,3 +1363,18 @@ def with_cards(value: Any, refs: dict[str, str]) -> Any:
         else:
             out[k] = with_cards(v, refs)
     return out
+
+
+def _one_pass(stats: dict[str, Any]) -> dict[str, Any]:
+    """A proofreading pass's own counts, as kept in ``passes`` (ADR-066)."""
+    return {k: v for k, v in stats.items() if k not in ("since_translation_id", "passes", "pass")}
+
+
+def _added_up(passes: list[dict[str, Any]]) -> dict[str, Any]:
+    """The counts of several proofreading passes added up (ADR-066)."""
+    total: dict[str, Any] = {}
+    for p in passes:
+        for k, v in p.items():
+            if isinstance(v, int) and not isinstance(v, bool):
+                total[k] = total.get(k, 0) + v
+    return total

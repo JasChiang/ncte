@@ -762,14 +762,20 @@ def reader_check(epub: Annotated[str, typer.Argument()],
 def proofread_cmd(epub: Annotated[str, typer.Argument()],
                   budget_usd: Annotated[float, typer.Option("--budget-usd")] = 2.0,
                   unit_id: Annotated[list[str] | None, typer.Option("--unit-id", help="Only these units")] = None,
+                  passes: Annotated[int | None, typer.Option("--passes", min=1, max=3,
+                                                             help="Passes over the book (default: context.proofread_passes)")] = None,
                   fake: Annotated[bool, typer.Option("--fake")] = False) -> None:
     """Check every paragraph against its source like a proofreader; real errors (meaning, omission, addition, speaker,
     tone, voice, house style) are retranslated with the source — ADR-051. For a book already translated. Recorded as
-    the book's proofreading pass (what "acceptable" reads); with --unit-id it is partial, never complete."""
+    the book's proofreading pass (what "acceptable" reads); with --unit-id it is partial, never complete. --passes
+    checks the whole current translation again after each pass's fixes (ADR-066)."""
     from .cli import _run
     from .translation.orchestrator import RunOptions
 
     cfg = state.cfg
+    if passes is not None:
+        cfg = cfg.model_copy(deep=True)
+        cfg.context.proofread_passes = passes
     book = _book(epub)
     opts = RunOptions(mode="context", model=cfg.openrouter.model, budget_usd=budget_usd,
                       client="fake" if fake else cfg.openrouter.provider, proofread_only=True, unit_ids=unit_id or None)

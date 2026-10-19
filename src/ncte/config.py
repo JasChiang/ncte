@@ -111,6 +111,9 @@ class ContextConfig(_Strict):
     # ADR-051: after translating, every paragraph is checked against its source; real errors go back to the translator
     proofread: bool = True
     proofread_chunk_units: int = 60  # paragraphs per proofreading request
+    # ADR-066: passes over the whole book; each later one checks the current translation again after the one before
+    # has retranslated and checked its fixes (a pass found about half of what three found together)
+    proofread_passes: int = Field(1, ge=1, le=3)
     # each paragraph gets a verdict (what the source says, and whether the translation says it), so none is skipped
     proofread_verdicts: bool = False
     read_first: bool = True  # ADR-023: analyse + remember every scene first, then name, then translate

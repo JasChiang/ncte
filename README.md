@@ -270,8 +270,11 @@ ncte unit ./samples/book.epub u_xxx                  # 原文、placeholder、�
 ncte edit ./samples/book.epub --unit-id u_xxx --text "還有，明天⟦1⟧一定⟦/1⟧要早點來。」"
 ncte review ./samples/book.epub --scope flagged --budget-usd 0.5
 ncte proofread ./samples/book.epub                   # 逐段對照原文校稿，真正的錯誤交回翻譯（ADR-051）
+ncte proofread ./samples/book.epub --passes 2        # 校兩輪：第二輪在第一輪修完後再校整本（ADR-066）
 ncte reader-check ./samples/book.epub                # 以不懂日文的讀者身分讀中文，看不懂的地方對照原文修正或加註（ADR-038）
 ```
+校稿預設一輪；一輪大約只抓到一半，同一個模型再校一次會抓到另一批，所以可以設 `context.proofread_passes: 2`（最多 3，或指令加 `--passes`）讓它在修完後再校整本，代價是每多一輪約多一次校稿的額度（ADR-066）。
+
 自動複查由設定 `review.automatic_review: off | flagged_only | all` 控制（預設只複查被程式 QA 或說話者衝突標記的單元，最多一輪）。審稿看前後各 5 段與每句說話者。
 
 **修正要對照原文驗收（ADR-055）**：審稿、對照校稿、讀者檢查提出的問題交回翻譯時，會附上現行譯文，只改有問題的地方；改完再把原文、修改前後與原本的問題交給模型判斷一次（關於原文意思的問題只告訴它類別、不給找錯者的理由，讓它自己讀原文）：

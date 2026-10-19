@@ -209,7 +209,7 @@ def _full_estimate(cfg: Config, opts: RunOptions, conns: list[sqlite3.Connection
         if breaks:
             want["scene_windows"] = chars
         if cfg.context.proofread:
-            want["proofread"] = chars
+            want["proofread"] = chars * cfg.context.proofread_passes  # each pass reads the book again (ADR-066)
         if cfg.context.reader_pass:
             want["reader"] = chars
         for st in PER_RUN_STAGES:
@@ -232,6 +232,8 @@ def _full_estimate(cfg: Config, opts: RunOptions, conns: list[sqlite3.Connection
             continue  # in the token model's range
         else:
             share = SAMPLE_SHARE.get(f"{st}:{effort.get(st)}", SAMPLE_SHARE.get(st, 0.0))
+            if st == "proofread":  # a share of one pass (ADR-066)
+                share *= cfg.context.proofread_passes
             stages[st] = {"usd": round(base_lo * share, 4), "high_usd": round(base_hi * share * UNCALIBRATED_HIGH, 4),
                           "from": "sample share"}
     if base_lo == cost_low and not all(st in rates for st in core if st in want):
