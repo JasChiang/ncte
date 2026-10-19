@@ -171,6 +171,34 @@ def test_a_whole_book_runs_on_the_claude_provider(monkeypatch, tmp_path, fixture
     assert all(json.loads(r[1])["list_cost_usd"] == 0.042 for r in rows)
 
 
+@pytest.mark.parametrize(("yaml", "run_model", "translate"), [
+    ("", None, ("opus", "medium")),  # Opus translating: as it was
+    ("", "claude/sonnet", ("sonnet", "high")),  # --model claude/sonnet
+    ("openrouter:\n  model: claude/sonnet\n", None, ("sonnet", "high")),
+    ("openrouter:\n  model: claude/sonnet\n  stage_reasoning: {translate: medium}\n", None, ("sonnet", "medium")),
+])
+def test_sonnet_translating_on_the_claude_plan_thinks_at_high(monkeypatch, tmp_path, fixtures, yaml, run_model,
+                                                               translate):
+    """ADR-064: Sonnet used the later-paragraph cues only at high; the user's own setting wins."""
+    from ncte.memory.db import connect, migrate
+
+    from ..helpers import run_book
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "claude")
+    (tmp_path / "ncte.yaml").write_text(yaml or "{}\n", encoding="utf-8")
+    cfg = load_config(tmp_path / "ncte.yaml", workspace=str(tmp_path / "ws"))
+    client = FakeBacked()
+    monkeypatch.setattr(subprocess, "run", client.run)
+    conn = connect(tmp_path / "t.db")
+    migrate(conn)
+    kw = {"model": run_model} if run_model else {}
+    book, rid, summary = run_book(conn, cfg, fixtures["basic"], client, mode="context", **kw)
+    assert summary.status == "completed", summary
+    assert {(m, e) for st, m, e in client.seen if st == "translate"} == {translate}
+    assert {e for st, m, e in client.seen if st == "scene_analyze"} == {"medium"}  # only translating changes
+
+
 def test_a_wrong_command_stops_at_once_and_says_why(monkeypatch):
     """Exit 2 or a rejected option is the same on every try: no hours of waiting."""
     for bad in (subprocess.CompletedProcess([], 2, "", "error: unknown option '--frobnicate'\n(Did you mean …?)"),

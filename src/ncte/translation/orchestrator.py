@@ -112,12 +112,18 @@ def reasoning_label(param: dict[str, Any] | None) -> str | None:
 # each: 4 → 6 and 1–3 → 5), none more wrongly changed; about +US$1 a book. Used when the model offers "high" and the step
 # has no setting of its own.
 DEFAULT_STAGE_REASONING = {"relations": "high", "verify": "high", "fix_check": "high", "proofread": "high"}
+# Sonnet translating on the Claude plan thinks at high (ADR-064): in a small test (four whole scenes, two runs each) it
+# listed the later paragraph that settles a sentence and still translated it wrong at medium, also with read_through on;
+# at high it got those sentences right. Opus translating is left as it is. A step's own setting wins.
+CLAUDE_SONNET_TRANSLATE = ("claude/sonnet", "high")
 
 
 def check_reasoning_effort(cfg: Config, pricing: Pricing) -> None:
     if "reasoning" in pricing.supported_parameters and (not pricing.reasoning_efforts or "high" in pricing.reasoning_efforts):
         for stage, level in DEFAULT_STAGE_REASONING.items():
             cfg.openrouter.stage_reasoning.setdefault(stage, level)
+        if cfg.openrouter.provider == "claude" and pricing.model == CLAUDE_SONNET_TRANSLATE[0]:
+            cfg.openrouter.stage_reasoning.setdefault("translate", CLAUDE_SONNET_TRANSLATE[1])
     settings = {"(run)": cfg.openrouter.reasoning_effort, **cfg.openrouter.stage_reasoning}
     for where, eff in settings.items():
         if not eff or eff == "default":

@@ -19,7 +19,7 @@ openrouter:
   temperature: 0.3
   reasoning_effort: null    # low | medium | high (model-dependent); null = model default; --reasoning-effort overrides
   stage_models: {}          # per step, another model for steps that judge (e.g. {fix_check: anthropic/claude-sonnet-5.5}); checked against /models at start; translate is refused
-  stage_reasoning: {}       # per step, e.g. {memory_update: high, translate: "max:3000"} (level, default, or max:<reasoning tokens>); relations and verify default to high when the model offers it
+  stage_reasoning: {}       # per step, e.g. {memory_update: high, translate: "max:3000"} (level, default, or max:<reasoning tokens>); relations and verify default to high when the model offers it; on the Claude plan with claude/sonnet translating, translate defaults to high (ADR-064)
 translation:
   style: "natural_traditional_taiwan"
   unit_target_japanese_chars: 1400   # baseline mode / scene_max_chars: 0
