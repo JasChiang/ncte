@@ -51,11 +51,14 @@ class Watching(FakeLLM):
 
     def complete(self, req: Any) -> Any:
         st = req.stage.split(":")[0]
+        # a scene's first translation, not a fix sent back by a later pass
+        first = st == "translate" and "review_feedback" not in req.messages[-1]["content"]
         with self.guard:
             self.asked[st] = self.asked.get(st, 0) + 1
             n = self.asked[st]
-            self.now[st] = self.now.get(st, 0) + 1
-            self.most[st] = max(self.most.get(st, 0), self.now[st])
+            for key in (st, "first") if first else (st,):
+                self.now[key] = self.now.get(key, 0) + 1
+                self.most[key] = max(self.most.get(key, 0), self.now[key])
         try:
             if self.stop_at and self.stop_at[:2] == (st, n) and self.stop_at[2] == "kill":
                 time.sleep(0.3)  # the stretches started with it finish first: some are done past the gap
@@ -68,7 +71,8 @@ class Watching(FakeLLM):
             return resp
         finally:
             with self.guard:
-                self.now[st] -= 1
+                for key in (st, "first") if first else (st,):
+                    self.now[key] -= 1
 
 
 def _book(conn, cfg, fixtures, client):
@@ -156,3 +160,89 @@ def test_stopped_side_by_side_the_resumed_run_does_no_stretch_twice(conn, cfg, f
                                  (rid,)).fetchone()[0])
     assert cp["checked"] == sum(len(p) for p in parts) and cp["retranslated"] == total
     assert "done_beyond" not in cp
+
+
+def _first_texts(conn, rid):
+    """Each paragraph's first translation in the run (the scene pass, before any fix), with its scene."""
+    return conn.execute("SELECT t.unit_id, t.text, t.id, u.scene_id FROM translations t JOIN units u ON u.id=t.unit_id "
+                        "WHERE t.run_id=? AND t.id=(SELECT MIN(id) FROM translations WHERE unit_id=t.unit_id AND "
+                        "run_id=t.run_id)", (rid,)).fetchall()
+
+
+def test_chapters_side_by_side_translate_as_one_at_a_time(cfg, fixtures, tmp_path):
+    """4.2 (ADR-065): chapters are translated side by side, the scenes of a chapter in order."""
+    results = {}
+    for conc in (1, 3):
+        cfg.openrouter.max_concurrency = conc
+        conn = _db(tmp_path, f"t{conc}")
+        client = Watching(responders=RESP)
+        book, rid, summary = _book(conn, cfg, fixtures, client)
+        assert summary.status == "completed", summary
+        first = _first_texts(conn, rid)
+        results[conc] = (_outcome(conn, rid), sorted((r["unit_id"], r["text"]) for r in first), dict(client.asked),
+                         client.most.get("first", 0))
+        # inside a chapter the scenes go in reading order: every paragraph of a scene is written before the next's
+        scenes = conn.execute("SELECT s.id, s.start_ordinal, c.seq FROM scenes s JOIN chapters c ON c.book_id=s.book_id "
+                              "AND s.start_ordinal BETWEEN c.start_ordinal AND c.end_ordinal WHERE s.book_id=? "
+                              "ORDER BY s.start_ordinal", (book.id,)).fetchall()
+        ids = {}
+        for r in first:
+            ids.setdefault(r["scene_id"], []).append(r["id"])
+        for a, b in zip(scenes, scenes[1:], strict=False):
+            if a["seq"] == b["seq"] and a["id"] in ids and b["id"] in ids:
+                assert max(ids[a["id"]]) < min(ids[b["id"]])
+        assert len({r["seq"] for r in scenes}) > 1
+        conn.close()
+    one, three = results[1], results[3]
+    assert one[1] == three[1]  # the same translations
+    assert one[0] == three[0]  # and the same findings, fixes and counts after them
+    assert one[2] == three[2]  # the same requests, step by step
+    assert one[3] == 1 and three[3] > 1  # chapters really side by side
+
+
+def test_a_pause_while_chapters_go_side_by_side_resumes_without_translating_twice(conn, cfg, fixtures):
+    cfg.openrouter.max_concurrency = 3
+    client = Watching(("translate", 1, "pause"), responders=RESP)
+    book, rid, summary = _book(conn, cfg, fixtures, client)
+    assert summary.status == "interrupted"
+    asked = client.asked["translate"]
+    again = Watching(responders=RESP)
+    assert resume_run(conn, cfg, rid, again).status == "completed"
+    n = conn.execute("SELECT COUNT(*) FROM translations WHERE run_id=? AND flags_json NOT LIKE '%review_retranslation%'",
+                     (rid,)).fetchone()[0]
+    assert n == conn.execute("SELECT COUNT(DISTINCT unit_id) FROM translations WHERE run_id=?", (rid,)).fetchone()[0]
+    assert asked + again.asked["translate"] >= 4  # every scene asked once at least; none written twice (above)
+
+
+def test_a_fatal_error_in_one_chapter_stops_the_others_at_their_next_scene(conn, cfg, fixtures):
+    from ncte.errors import FatalAPIError
+
+    cfg.openrouter.max_concurrency = 3
+
+    class Fatal(Watching):
+        """The second chapter's first request fails for good; the first chapter's requests are slow, so it is still
+        in its first scene then."""
+
+        def complete(self, req: Any) -> Any:
+            if req.stage.split(":")[0] == "translate":
+                with self.orch.lock:
+                    scenes = {r[0] for r in self.orch.conn.execute(
+                        f"SELECT scene_id FROM units WHERE id IN ({','.join('?' * len(req.id_codes))})",
+                        list(req.id_codes.values()))}
+                if "s_001_01" in scenes:
+                    raise FatalAPIError("no key")
+                time.sleep(0.3)
+            return super().complete(req)
+
+    client = Fatal(responders=RESP)
+    book, rid, summary = _book(conn, cfg, fixtures, client)
+    assert summary.status == "stopped_fatal"
+    groups = client.orch._chapter_groups([r[0] for r in conn.execute(
+        "SELECT id FROM scenes WHERE book_id=? ORDER BY seq", (book.id,))])
+    later = [sid for g in groups for sid in g[1:]]  # scenes that wait for another in their chapter
+    assert later
+    done = {r[0] for r in conn.execute("SELECT DISTINCT u.scene_id FROM translations t JOIN units u ON u.id=t.unit_id "
+                                       "WHERE t.run_id=?", (rid,))}
+    assert not done & set(later)  # no chapter went on to its next scene after the failure
+    assert conn.execute("SELECT COUNT(*) FROM jobs WHERE run_id=? AND stage='proofread' AND status='pending'",
+                        (rid,)).fetchone()[0] == 1  # nothing after translating was started

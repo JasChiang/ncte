@@ -276,12 +276,13 @@ class ContextOrchestrator(Orchestrator):
         return False
 
     def _side_by_side(self, n: int, work: Callable[[int], Any], done: Callable[[int, Any], None],
-                      what: str) -> bool:
+                      what: str, halt: threading.Event | None = None) -> bool:
         """Runs ``work(0)…work(n-1)`` up to ``openrouter.max_concurrency`` at a time (ADR-065), started in order, each
         in a daemon thread as ``run_batches`` does; ``done(i, result)`` is called here, in this thread, as each one
         finishes (in any order). A stop (pause) or a failure starts nothing more; what was started is waited for and
         its result kept (``done``), then the failure is raised — ``FatalAPIError``, ``BudgetExceededError`` or anything
-        else, the first one. Returns True when stopped before all ``n`` were started."""
+        else, the first one. ``halt`` is set on a failure, for a ``work`` that goes through several items to stop at
+        the next one. Returns True when stopped before all ``n`` were started."""
         conc = max(1, self.cfg.openrouter.max_concurrency)
         done_q: queue.Queue[tuple[int, Any, BaseException | None]] = queue.Queue()
         active = idx = 0
@@ -311,6 +312,8 @@ class ContextOrchestrator(Orchestrator):
             active -= 1
             if exc is not None:
                 failure = failure or exc
+                if halt is not None:
+                    halt.set()
                 continue
             done(i, result)
         if failure is not None:
@@ -941,17 +944,49 @@ class ContextOrchestrator(Orchestrator):
         return make_batches(pending, self.cfg.translation.unit_target_japanese_chars, by_scene=True, position=positions)
 
     def translate_pass(self, scenes: list[str]) -> None:
+        """Chapters side by side (``openrouter.max_concurrency`` at a time, 4.2, ADR-065), the scenes of a chapter in
+        order, each with its rule check and review. Trade-off: a chapter's first batch may not see the end of the
+        chapter before translated yet (its ``context_before`` then has the source only)."""
         positions = self.body_positions()
-        for i, sid in enumerate(scenes):
-            if self._stop_reason:
-                break
-            pending, _ = self._scene_pending(sid)
-            if not pending:
-                continue
-            self.log(f"translate {sid} ({i + 1}/{len(scenes)})")
-            self.reload_glossary()  # a rendering changed while the run goes on is used from the next scene
-            self.run_batches(self.scene_batches(pending, positions), concurrency=1)
-            self.after_scene(sid)
+        groups = self._chapter_groups(scenes)
+        order = {sid: i for i, sid in enumerate(scenes)}
+        halt = threading.Event()  # another chapter failed (a fatal error, the budget): stop at the next scene
+
+        def work(g: int) -> None:
+            for sid in groups[g]:
+                if self._stop_reason or halt.is_set():
+                    break
+                pending, _ = self._scene_pending(sid)
+                if not pending:
+                    continue
+                self.log(f"translate {sid} ({order[sid] + 1}/{len(scenes)})")
+                with self.lock:
+                    self.reload_glossary()  # a rendering changed while the run goes on is used from the next scene
+                self.run_batches(self.scene_batches(pending, positions), concurrency=1)
+                self.after_scene(sid)
+
+        self._side_by_side(len(groups), work, lambda g, _r: None, "translation", halt)
+
+    def _chapter_groups(self, scenes: list[str]) -> list[list[str]]:
+        """The scenes by chapter (``chapters``), in reading order; a scene outside every chapter goes with the one
+        before it. Without chapters the book is one group."""
+        with self.lock:
+            bounds = [(r["start_ordinal"], r["end_ordinal"]) for r in self.conn.execute(
+                "SELECT start_ordinal, end_ordinal FROM chapters WHERE book_id=? ORDER BY seq", (self.book.id,))]
+            starts = {r["id"]: r["start_ordinal"] for r in self.conn.execute(
+                "SELECT id, start_ordinal FROM scenes WHERE book_id=?", (self.book.id,))}
+        groups: list[list[str]] = []
+        last: int | None = None
+        for sid in scenes:
+            at = starts.get(sid)
+            ch = next((k for k, (a, b) in enumerate(bounds) if at is not None and a <= at <= b), None)
+            if groups and (ch is None or ch == last):
+                groups[-1].append(sid)
+            else:
+                groups.append([sid])
+            if ch is not None:
+                last = ch
+        return groups
 
     def after_scene(self, sid: str) -> None:
         ids = self.translated_unit_ids(sid)
