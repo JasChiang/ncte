@@ -194,3 +194,16 @@ def test_the_read_pass_s_questions_are_explained_where_they_are_asked_and_used()
         text = load_prompt(task).render(payload)
         line = next(x for x in text.split("\n") if "`scene.uncertainties`" in x)
         assert "`answer`" in line and "不是確定" in line, task
+
+
+EVIDENCE_SENTENCE = ("`evidence_quote` 要選原文中直接寫出這筆事實的那一句，包含事實的主體與關鍵詞，"
+                     "不要選只是在同一段開頭、沒有寫出這件事的句子。")
+
+
+def test_a_fact_s_evidence_is_the_sentence_that_states_it():
+    """ADR-069: a fact's evidence was the paragraph's first sentence, without the word the fact is about, so nothing
+    searching by that word found it. Rule 1 of the memory update says so, in both prompts that carry it, word for word."""
+    for task in ("memory_update", "scene_read"):
+        text = load_prompt(task).render()
+        rule = next(line for line in text.splitlines() if line.startswith("1. 每一筆 `facts` 必須附"))
+        assert EVIDENCE_SENTENCE in rule, task
