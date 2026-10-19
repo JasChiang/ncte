@@ -133,3 +133,36 @@ def test_the_commands_record_their_pass_so_a_whole_book_rerun_makes_it_complete(
     out = r.invoke(app, ["-w", str(ws), "reader-check", epub, "--fake"])
     assert out.exit_code == 0, out.output
     assert db(stage="reader")[:2] == ("succeeded", True)
+
+
+def test_a_second_reading_is_recorded_for_a_person_and_not_retranslated(conn, cfg, fixtures):
+    """ADR-063: a passage the source lets be read two ways is not an error: it is kept as「兩種讀法」for a person to
+    look at, never sent back to the translator."""
+    from ncte.gui import data
+    from ncte.llm.schemas import ProofreadIssue
+
+    seen = []
+
+    def proofread(payload, req):
+        seen.append(payload)
+        p = payload["paragraphs"][0]
+        return {"issues": [{"unit_id": p["unit_id"], "kind": "ambiguity", "severity": "medium", "quote": p["zh"][:4],
+                            "problem": "原文也可以讀成在比年紀", "fix": "另一種讀法：比年紀"}]}
+
+    assert "ambiguity" in ProofreadIssue.model_fields["kind"].annotation.__args__
+    fake = FakeLLM(responders={**RESPONDERS, "proofread": proofread})
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    found = conn.execute("SELECT unit_id, type, severity, evidence FROM qa_findings WHERE run_id=? AND "
+                         "type LIKE 'review:proofread%'", (rid,)).fetchall()
+    assert [(f["type"], f["severity"]) for f in found] == [("review:proofread_ambiguity", "low")] * len(seen)
+    assert all("比年紀" in f["evidence"] for f in found)
+    # no retranslation was asked for those paragraphs
+    marks = ",".join("?" * len(found))
+    assert not conn.execute(f"SELECT 1 FROM translations WHERE unit_id IN ({marks}) AND flags_json LIKE "
+                            "'%review_retranslation%'", [f["unit_id"] for f in found]).fetchone()
+    job = conn.execute("SELECT checkpoint_json FROM jobs WHERE run_id=? AND stage='proofread'", (rid,)).fetchone()
+    assert '"ambiguities": %d' % len(seen) in job["checkpoint_json"] and '"retranslated": 0' in job["checkpoint_json"]
+    # the review page shows it as a second reading
+    shown = [u for u in data.units(conn, book)["units"] if u["readings"]]
+    assert {u["id"] for u in shown} == {f["unit_id"] for f in found}
+    assert "比年紀" in shown[0]["readings"][0]

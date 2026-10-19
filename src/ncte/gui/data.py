@@ -155,6 +155,8 @@ def units(conn: sqlite3.Connection, book: Book, *, start: int | None = None, end
                     "status": tr["status"] if tr is not None else None,
                     "note": (tr["translator_note"] or "") if tr is not None else "",
                     "quotes": quotes.get(r["id"], []), "findings": serious, "minor": len(f) - len(serious),
+                    # two readings proofreading found the source allows (ADR-063): not an error, for a person to see
+                    "readings": [x["evidence"] for x in f if x["type"] == "review:proofread_ambiguity"],
                     "wordplay": found.get(r["id"], [])})
         if len(out) >= limit:
             break

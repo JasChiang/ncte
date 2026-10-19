@@ -677,6 +677,13 @@ class ContextOrchestrator(Orchestrator):
             stats["no_verdict"] = stats.get("no_verdict", 0) + len(valid - {c.unit_id for c in parsed.checked})
         feedback: dict[str, list[dict[str, Any]]] = {}
         for it in parsed.issues:
+            if it.unit_id in valid and it.kind == "ambiguity" and it.problem.strip():
+                # two readings the source allows (ADR-063): kept for a person to look at, never retranslated
+                stats["ambiguities"] = stats.get("ambiguities", 0) + 1
+                self._finding(it.unit_id, "review:proofread_ambiguity", "low",
+                              f"{it.problem[:300]}" + (f" → {it.fix[:160]}" if it.fix.strip() else ""),
+                              translation_id=tids[it.unit_id])
+                continue
             if it.unit_id not in valid or it.severity == "low" or not it.problem.strip():
                 continue  # a small slip is not worth a retranslation
             stats["issues"] += 1

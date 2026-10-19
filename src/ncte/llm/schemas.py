@@ -368,7 +368,8 @@ class HouseStyleOutput(_M):
 # ------------------------------------------------------------ bilingual proofreading (ADR-051)
 class ProofreadIssue(_M):
     unit_id: str
-    kind: Literal["meaning", "omission", "addition", "speaker", "tone", "voice", "style"]
+    # ambiguity: the source allows another reading at least as natural as the current one (ADR-063) — not an error
+    kind: Literal["meaning", "omission", "addition", "speaker", "tone", "voice", "style", "ambiguity"]
     severity: Literal["low", "medium", "high"]
     quote: str
     problem: str  # what is wrong, quoting the source

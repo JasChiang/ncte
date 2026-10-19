@@ -181,7 +181,7 @@ function findingLine(f) {
 const ISSUE = {meaning: "意思譯錯", tone: "語氣不對", speaker: "說話者或對象弄錯", mistranslation: "意思譯錯", omission: "漏譯", addition: "加了原文沒有的內容", speaker_error: "說話者弄錯",
   name_inconsistency: "譯名前後不一致", subject_object_error: "主詞或受詞弄錯", spoiler: "提前劇透", placeholder: "排版標記",
   style: "用語或文風", other: "其他", unclear: "讀不懂", wordplay: "文字遊戲（可能要譯註）", translationese: "翻譯腔", voice: "口吻不像這個角色",
-  contradiction: "前後矛盾"};
+  contradiction: "前後矛盾", ambiguity: "兩種讀法"};
 function findingLabel(t) {
   if (FINDING[t]) return FINDING[t];
   if (t.startsWith("after_review:")) return "審稿後仍有：" + findingLabel(t.slice(13));
@@ -334,7 +334,8 @@ function rowHtml(u) {
       ${u.status === "human" ? chip("c-acc", "人工修改") + ` <button class="btn small" data-act="revert">改回機器譯文</button>` : ""}
       ${u.note ? `<div class="note">（註：${esc(u.note)}） <button class="btn small" data-act="drop-note">刪除譯註</button></div>` : ""}
       ${u.wordplay.map(w => `<div class="note">梗「${esc(w.term)}」：${esc(w.explanation)}</div>`).join("")}
-      ${u.findings.map(findingLine).join("")}</div>
+      ${u.findings.map(findingLine).join("")}
+      ${(u.readings || []).map(r => `<div class="note" title="對照校稿認為原文容得下兩種讀法，不算錯，沒有重譯">兩種讀法：${esc(r)}</div>`).join("")}</div>
     <div>${u.quotes.map(q => { const [c, l] = STATUS[q.status] || ["c-unk", q.status];
       return `<div>${esc(q.speaker || "？")} ${chip(c, l)}${q.disputed ? chip("c-warn", "有爭議") : ""}${q.second ? `<div class="muted small" title="讀完後再確認一次的結果">再確認：${esc(q.second)}</div>` : ""}</div>`; }).join("") || `<span class="muted small">敘述</span>`}</div></div>`;
 }
