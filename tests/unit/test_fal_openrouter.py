@@ -59,6 +59,7 @@ def test_factory_selects_credentials_without_network(monkeypatch, tmp_path):
     monkeypatch.setenv("OPENROUTER_API_KEY", "direct-secret")
     monkeypatch.setenv("FAL_KEY", KEY)
     cfg = Config()
+    cfg.openrouter.provider = "openrouter"
     direct = make_client(cfg)
     assert type(direct) is OpenRouterClient and direct.api_key == "direct-secret"
     cfg.openrouter.provider = "fal"
@@ -74,7 +75,7 @@ def test_factory_selects_credentials_without_network(monkeypatch, tmp_path):
 def test_provider_setting_and_legacy_config(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("NCTE_LLM_PROVIDER", raising=False)
-    assert load_config().openrouter.provider == "openrouter"
+    assert load_config().openrouter.provider == "claude"  # nothing chosen: the Claude plan (ADR-062)
     (tmp_path / ".env").write_text("NCTE_LLM_PROVIDER=fal\nFAL_KEY=" + KEY)
     assert load_config().openrouter.provider == "fal"
     assert get_api_key("fal") == KEY

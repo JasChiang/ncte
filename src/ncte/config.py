@@ -35,7 +35,7 @@ class AppConfig(_Strict):
 class OpenRouterConfig(_Strict):
     # "claude": the user's Claude plan through Claude Code (`claude -p`), no key, nothing billed (ADR-062)
     # "agent": an agent in a conversation answers each request as a task (`ncte agent`, the MCP server)
-    provider: Literal["openrouter", "fal", "claude", "agent"] = "openrouter"
+    provider: Literal["openrouter", "fal", "claude", "agent"] = "claude"
     base_url: str = "https://openrouter.ai/api/v1"
     model: str = DEFAULT_MODEL
     review_model: str | None = None

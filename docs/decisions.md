@@ -350,4 +350,5 @@
   - 不收費：記錄的 `cost_usd` 為 0；CLI 回報的定價換算金額記在 `usage_json.list_cost_usd`，網頁顯示「Claude 方案・照定價約 US$X（不另收費）」，不顯示預算上限。
   - 預設模型：翻譯、定名與所有檢查用 Opus；切場景、讀場景、記憶整理、覆核、關係、角色印象、體例用 Sonnet（`stage_models`）。設定裡已選的 `claude/…` 模型保留；API 模型 id（OpenRouter 預設、審稿或備援模型）在這個來源沒有意義，換掉或移除。原本註解寫「讀書與翻譯用同一個模型」；程式只禁止換翻譯模型，讀書步驟本來就可以設，這次的整本實測顯示分開比較好，註解改正。
   - 把 ncte-agent 併回：任務佇列、背景引擎、`ncte agent start|next|submit|status|export|stop|resume`、`ncte mcp`（MCP 伺服器，選用套件 `pip install 'ncte[agent]'`）、`skills/ncte-translate`。來源名 `agent`；這種執行不能經 API 續譯（`ncte resume` 會要求改用 `ncte agent resume`）。ncte-agent 的 `drive` 由 `claude` 來源取代。
+  - 預設來源改為 `claude`（沒有設定 `NCTE_LLM_PROVIDER` 時）；README 以 Claude 方案為主、OpenRouter 並列。OpenRouter 較快（一本約 3 小時對約 6 小時）、不占訂閱額度，留給沒有 Claude 訂閱的人。已在 `.env` 選了 openrouter／fal 的照舊。
 - 不做：讓 agent 自己探索資料（開放工具讀全書）。理由：Sonnet 翻錯的段落，判斷所需的後文都已在輸入裡（模型沒用上，不是沒資料）；開工具每次重送累積的上下文（子代理每題約 4–5 萬 token）；自由搜尋會讀到後面才揭曉的身分與伏筆，繞過可見範圍。若要做，先做只能查 NCTE 紀錄、受可見範圍限制的「查筆記」工具，並先統計缺資料的錯有多少。

@@ -112,7 +112,7 @@ async function settingsView() {
   const fal = k.provider === "fal", claude = k.provider === "claude", label = fal ? "fal" : "OpenRouter";
   const claudeCard = `<div class="card"><strong>Claude 方案</strong>
     <p>用這台電腦上已登入的 Claude Code（<code>claude</code> 指令）翻譯，使用你的 Claude 訂閱額度：不需要金鑰，NCTE 不另外收費。讀書的步驟用 Sonnet，翻譯與各種檢查用 Opus。</p>
-    <p>${k.set ? `${chip("c-ok", "找到 Claude Code")} <span class="small muted">${esc(k.claude)}</span>` : `${chip("c-warn", "找不到 Claude Code")} 請先安裝並在終端機執行 <code>claude</code> 登入。`}</p>
+    <p>${k.set ? `${chip("c-ok", "找到 Claude Code")} <span class="small muted">${esc(k.claude)}</span>` : `${chip("c-warn", "找不到 Claude Code")} 請先安裝 <a href="https://docs.claude.com/en/docs/claude-code" target="_blank" rel="noopener">Claude Code</a>，並在終端機執行 <code>claude</code> 登入；或在下方「連線方式」改用 OpenRouter。`}</p>
     <p class="small muted">額度用完時會自動等到重置再接著翻，不會中斷；一本書通常要好幾個小時。畫面上的金額是照定價換算的參考，不會向你收費。</p></div>`;
   view.innerHTML = `<h2>設定</h2>
     ${claude ? claudeCard : `<div class="card"><strong>${label} 金鑰</strong>
@@ -125,10 +125,10 @@ async function settingsView() {
     <p class="muted small">只存在這台電腦的 ${esc(k.file)}，不會顯示在畫面上，也不會寫進紀錄。</p>
     <div id="bal"></div></div>`}
     <div class="card"><strong>翻譯設定</strong><p>模型與推理程度用預設（目前測試結果最好的組合），不需要選。預算上限會依每本書估價的「最多」金額自動設定，到了會先停下來問你。</p></div>
-    <details class="card" ${fal || claude ? "open" : ""}><summary><strong>進階：連線方式</strong> <span class="muted small">一般不用改</span></summary>
-    <p><select id="provider"><option value="openrouter" ${fal || claude ? "" : "selected"}>直連 OpenRouter（建議）</option>
-    <option value="fal" ${fal ? "selected" : ""}>透過 fal 連 OpenRouter</option>
-    <option value="claude" ${claude ? "selected" : ""}>Claude 方案（用 Claude 訂閱額度，不需金鑰）</option></select> <button class="btn" id="saveProvider">套用</button></p>
+    <details class="card" ${claude ? "" : "open"}><summary><strong>連線方式</strong> <span class="muted small">有 Claude 訂閱用 Claude 方案；沒有的話用 OpenRouter 付費</span></summary>
+    <p><select id="provider"><option value="claude" ${claude ? "selected" : ""}>Claude 方案（用 Claude 訂閱額度，不需金鑰；建議）</option>
+    <option value="openrouter" ${!fal && !claude ? "selected" : ""}>OpenRouter（Gemini，需要金鑰並儲值）</option>
+    <option value="fal" ${fal ? "selected" : ""}>透過 fal 連 OpenRouter</option></select> <button class="btn" id="saveProvider">套用</button></p>
     <p class="small muted">新任務使用此設定；續譯沿用原任務的連線方式。</p>
     ${fal ? `<p class="small">費用由 fal 結算；估價參考 OpenRouter 價目，實際帳單以 fal 為準。此處不提供 fal 餘額查詢。</p>` : ""}</details>`;
   $("#saveProvider").onclick = async () => {

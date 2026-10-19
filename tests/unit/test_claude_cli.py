@@ -81,7 +81,7 @@ def test_a_usage_limit_is_waited_out_and_a_missing_login_stops_at_once(monkeypat
 
 def test_the_claude_provider_reads_on_sonnet_and_translates_and_checks_on_opus(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("NCTE_LLM_PROVIDER", "claude")
+    monkeypatch.delenv("NCTE_LLM_PROVIDER")  # nothing chosen: the Claude plan is the default (ADR-062)
     cfg = load_config()
     o = cfg.openrouter
     assert o.provider == "claude" and o.model == "claude/opus" and o.temperature is None

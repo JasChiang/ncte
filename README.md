@@ -1,6 +1,10 @@
 # NCTE — Novel Context Translation Engine
 
-把**有權使用、無 DRM** 的日文 EPUB 小說（主要是輕小說），透過 OpenRouter 上的模型、或你自己的 Claude 訂閱（Claude Code），翻成臺灣繁體中文，輸出一般閱讀器能開的完整 EPUB。在自己的 Mac 上執行（網頁介面或指令），資料都存在本機。
+把**有權使用、無 DRM** 的日文 EPUB 小說（主要是輕小說）翻成臺灣繁體中文，輸出一般閱讀器能開的完整 EPUB。在自己的 Mac 上執行（網頁介面或指令），資料都存在本機。
+
+模型有兩種用法：
+- **Claude 方案（建議、預設）**：用你自己的 Claude 訂閱（電腦上裝好並登入 Claude Code），不需要金鑰，NCTE 不另外收費。
+- **OpenRouter**：沒有 Claude 訂閱時，用 OpenRouter 上的模型（預設 Gemini），需要金鑰並儲值，依用量付費。
 
 ## 它怎麼翻：先像譯者一樣讀完，再動筆
 一般的機器翻譯一次只看一小段，所以常常搞錯「這句是誰說的」「這個角色是男是女」「敘述是不是主角自己在講」。日文又常省略主語，前後文一斷就容易翻錯。NCTE 模仿譯者的做法：**先把整本讀完、做筆記，翻譯時帶著筆記翻**。
@@ -21,7 +25,9 @@ flowchart LR
 - **證據**：模型的判斷都要附原文證據，程式會檢查；推測的不會被當成確定的事。第一人稱的敘述者怎麼稱呼自己，讀的時候決定、全書固定。
 - **不劇透**：翻到第 3 章時，只會用到第 3 章以前揭露的資訊。身分揭曉前，角色只以當時的稱呼出現。
 - **少打擾**：名字、稱呼的譯法由模型決定、程式檢查，不會停下來問；有疑點的地方自動交給審稿處理。想改譯名可以翻完再改，已翻好的段落會一起換掉。
-- **費用**：依 2026-10-18 三本各 300 段的抽樣推估，一本輕小說（約 11–14 萬字）約 US$8–11（含對照校稿用較高的推理），約 2 小時；新流程還沒有整本實測。開始前會顯示「約多少、最多多少」，預算上限依「最多」的金額自動設定。
+- **時間與費用**（一本輕小說約 11–14 萬字，2026-10-18～19 整本實測）：
+  - Claude 方案：約 6 小時（額度用完時自動等重置，另計），不另收費；約用掉一週額度的 3–4 個百分點（依方案而定）。
+  - OpenRouter（Gemini）：約 3 小時、US$9 左右。開始前會顯示「約多少、最多多少」，預算上限依「最多」的金額自動設定。
 
 ## 畫面
 以下截圖都是青空文庫的公共領域作品（夏目漱石『坊っちゃん』前兩章）。
@@ -57,7 +63,18 @@ flowchart LR
 | 夏目漱石『吾輩は猫である』（30 段） | 以貓為敘述者的特殊自稱 | 自稱原本「我」「吾輩」混用，改成讀的階段決定、全書固定後 17 段一致；主人的日記仍用「我」 |
 | 夢野久作『ドグラ・マグラ』（150 段） | 第一人稱、失憶的敘述者 | 人稱判斷正確 |
 
-**現行流程的抽樣**（2026-10-18，三本各前 300 段，與正式中文版逐段對照；細節見 [`docs/changelog.md`](docs/changelog.md)）
+**整本比較**（2026-10-18～19，奇幻戀愛那本整本約 3,600 段，同一套流程只換模型；細節見 [`docs/changelog.md`](docs/changelog.md) 與 ADR-062）
+
+| 模型 | 時間 | 費用 | 你／妳與正式中文版不同 | 由 Opus 依同一套標準重新校稿，留下影響理解的錯 |
+|---|---|---|---|---|
+| **Claude 方案：Sonnet 讀、Opus 翻與檢查（預設）** | 約 6 小時 | 不另收費（照定價約 US$39） | 2 句 | **2 處** |
+| Claude：全部 Opus | 約 6.5 小時 | 不另收費（照定價約 US$60） | 3 句 | 4 處 |
+| Claude：全部 Sonnet | 約 6 小時 | 不另收費（照定價約 US$38） | 5 句 | 28 處（意思讀錯、口吻與敬語效果不見、性別稱呼） |
+| OpenRouter：Gemini（`gemini-3.8-flash`） | 約 3 小時 | US$9.10 | 4 句 | 未用同一方法測（逐段對照官方的結果見 changelog） |
+
+你／妳是同一段落和正式中文版逐句比對；其中幾句四個版本都一樣、只和官方不同（前後文本身有兩種讀法）。全部 Sonnet 雖然單價低，初稿錯得多、校稿後逐段重譯，花費反而和預設組合差不多。
+
+**現行流程的抽樣**（2026-10-18，OpenRouter／Gemini，三本各前 300 段，與正式中文版逐段對照；細節見 [`docs/changelog.md`](docs/changelog.md)）
 
 | 類型 | 考驗的地方 | 結果 |
 |---|---|---|
@@ -72,20 +89,21 @@ flowchart LR
 ## 不用指令的用法（網頁介面）
 1. 安裝 [Python 3.12 以上](https://www.python.org/downloads/)，下載本專案資料夾。
 2. 在 Finder 雙擊 **`NCTE.command`**（第一次會自動安裝，約幾分鐘；macOS 若擋下，請按右鍵 →「打開」）。瀏覽器會打開 NCTE。
-3. 右上角「設定」貼上 [OpenRouter](https://openrouter.ai/keys) 金鑰並儲值（或在「進階：連線方式」選「Claude 方案」，見下方）；書庫頁把 EPUB 拖進去 → 選系列 → 書的概況頁按「開始翻譯」。
-   - 開始前會顯示估價（約多少、最多多少，每個步驟都算進去）；預算上限依「最多」的金額自動設定（只擋異常），到了會先停下來問你。
+3. 右上角「設定」確認連線方式：
+   - **Claude 方案**（預設）：顯示「找到 Claude Code」就可以開始；找不到的話先安裝 [Claude Code](https://docs.claude.com/en/docs/claude-code)，在終端機執行 `claude` 登入。
+   - **OpenRouter**：「連線方式」改選 OpenRouter，貼上 [OpenRouter](https://openrouter.ai/keys) 金鑰並儲值。開始前會顯示估價（約多少、最多多少，每個步驟都算進去）；預算上限依「最多」的金額自動設定（只擋異常），到了會先停下來問你。
+
+   書庫頁把 EPUB 拖進去 → 選系列 → 書的概況頁按「開始翻譯」。
    - 先讀完整本再翻：讀的階段（約占費用一半）還看不到譯文。名字與稱呼的譯法由模型決定、程式檢查，不會停下來問；想改的話翻完後到「定名」頁改，已翻好的段落會一起換掉。
    - 可以暫停；關掉視窗也不會遺失進度，下次按「繼續」接著做。
 4. 翻完在概況頁按「匯出 EPUB」→「下載」。「對照審稿」可以逐段修改譯文。
 
-模型與推理程度不用選：預設 `google/gemini-3.8-flash`（推理 medium；做判斷的步驟——對照校稿、人物關係、覆核、修正驗收——用 high）。比較紀錄見 [`docs/changelog.md`](docs/changelog.md)：同一章節裡，便宜的模型會忽略角色性別（你／妳）、或整批改寫成簡體。
+模型與推理程度不用選（推理一般 medium；做判斷的步驟——對照校稿、人物關係、覆核、修正驗收——用 high）：
+- Claude 方案：讀書的步驟用 Sonnet，翻譯、定名與各種檢查用 Opus（比較見上方〈整本比較〉）。
+- OpenRouter：`google/gemini-3.8-flash`。同一章節的比較裡，更便宜的模型會忽略角色性別（你／妳）、或整批改寫成簡體（[`docs/changelog.md`](docs/changelog.md)）。
 
-### 用 Claude 訂閱翻譯（Claude 方案）
-已經有 Claude 訂閱、電腦上裝好並登入 [Claude Code](https://docs.claude.com/en/docs/claude-code)（終端機能執行 `claude`）的話，不需要任何金鑰：網頁「設定 → 進階：連線方式」選「Claude 方案」，或指令前加 `NCTE_LLM_PROVIDER=claude`。
-
-- 用你的訂閱額度，NCTE 不另外收費；畫面上的金額是照定價換算的參考。額度用完會自動等到重置再接著翻。
-- 讀書的步驟用 Sonnet，翻譯、定名與各種檢查用 Opus。同一本書整本實測（Opus 依同一套標準重新校稿三種組合的最終譯文），留下的影響理解的錯：全 Sonnet 28 處、全 Opus 4 處、這個組合 2 處；照定價換算約是全 Opus 的三分之二。
-- 一本書約 6 小時（不含等額度重置）。整本約用掉一週額度的 3–4 個百分點（依方案而定）。
+### Claude 方案怎麼運作
+NCTE 的每個請求都是一次全新的 `claude -p`（Claude Code 的非互動模式）：步驟的提示詞取代 Claude Code 自己的系統提示，不帶工具、不讀你的 Claude Code 設定、不留對話紀錄。用你的訂閱額度，NCTE 不另外收費；畫面上的金額是照定價換算的參考，不會向你收費。額度用完會自動等到重置再接著翻；沒登入會立刻停下來告訴你。指令列在命令前加 `NCTE_LLM_PROVIDER=claude`（預設就是），改回 API 用 `NCTE_LLM_PROVIDER=openrouter`。
 
 ```mermaid
 flowchart LR
@@ -99,7 +117,7 @@ flowchart LR
 > 開發狀態與測試紀錄：[`docs/changelog.md`](docs/changelog.md)　決策：[`docs/decisions.md`](docs/decisions.md)　架構：[`docs/architecture.md`](docs/architecture.md)
 
 ## 隱私與權利（請先讀）
-- 翻譯時（包括從網頁介面開始的翻譯），**所需的原文段落與上下文會送到 OpenRouter**，再由 OpenRouter 路由給第三方模型供應商（例如 Google）。各供應商的資料保留／訓練政策不同，請在 OpenRouter 帳號的 Privacy 設定中確認。用 Claude 方案時則經 Claude Code 送到 Anthropic，適用你的 Claude 帳號的資料設定。目前沒有純本機模型模式。
+- 翻譯時（包括從網頁介面開始的翻譯），**所需的原文段落與上下文會送到模型供應商**：Claude 方案經 Claude Code 送到 Anthropic，適用你的 Claude 帳號的資料設定；OpenRouter 則由 OpenRouter 路由給第三方模型供應商（例如 Google），各供應商的資料保留／訓練政策不同，請在 OpenRouter 帳號的 Privacy 設定中確認。目前沒有純本機模型模式。
 - 只處理你有權使用的無 DRM EPUB。翻譯輸出不代表你取得再散布或公開分享的權利。
 - 原始 EPUB、資料庫、匯出檔都在 `./workspace/`（已列入 `.gitignore`）。API Key 不會寫入 log、報告或錯誤訊息。
 
@@ -122,8 +140,12 @@ unzip epubcheck-5.4.0.zip && cd ../..
 ```
 NCTE 會自動尋找 PATH 上的 `epubcheck`、`EPUBCHECK_JAR` 環境變數或 `workspace/tools/**/epubcheck.jar`；也可在設定檔指定 `export.epubcheck_path`。找不到時只做內部檢查，並標示「尚未經 EPUBCheck 驗證」。
 
-### API Key
+### Claude 方案（預設）
+安裝 [Claude Code](https://docs.claude.com/en/docs/claude-code)，在終端機執行一次 `claude` 登入你的 Claude 帳號即可，不需要金鑰。
+
+### OpenRouter 金鑰（不用 Claude 方案時）
 ```bash
+export NCTE_LLM_PROVIDER=openrouter        # 或寫進 .env；網頁「設定 → 連線方式」也能切換
 export OPENROUTER_API_KEY=sk-or-v1-...     # 或 cp .env.example .env 後填入
 ```
 `import`、`inspect`、`validate`、`report`、`status`、`--dry-run` 都不需要金鑰。
@@ -132,7 +154,7 @@ export OPENROUTER_API_KEY=sk-or-v1-...     # 或 cp .env.example .env 後填入
 
 ```yaml
 openrouter:
-  provider: fal  # 預設 openrouter；模型等其他設定沿用
+  provider: fal  # 預設 claude；模型等其他設定沿用
 ```
 
 將 `FAL_KEY=你的金鑰` 放進專案根目錄的 `.env`（不要提交或貼到對話中）。
@@ -155,15 +177,14 @@ fal 使用官方 OpenAI 相容入口 `https://fal.run/openrouter/router/openai/v
 ncte import  ./samples/book.epub
 ncte inspect ./samples/book.epub          # 結構、單元數、會保留原文的單元
 
-# 2. 確認模型存在與當下費率（公開 /models API，價格不寫死）
-ncte models --refresh
+# 2. 翻譯（Claude 方案：先讀再翻，不收費、不設預算）
+ncte translate ./samples/book.epub --mode context
+
+# 2'. 改用 OpenRouter：確認模型與當下費率（公開 /models API，價格不寫死）→ 試算 → 正式翻譯（預算上限，超過即停止，可續跑）
+export NCTE_LLM_PROVIDER=openrouter
 ncte models --refresh --filter gemini
-
-# 3. 無付費試算
-ncte translate ./samples/book.epub --mode baseline --dry-run
-
-# 4. 正式翻譯（預算上限，超過即停止，可續跑）
-ncte translate ./samples/book.epub --mode baseline --model google/gemini-3.8-flash --budget-usd 5
+ncte translate ./samples/book.epub --mode context --dry-run
+ncte translate ./samples/book.epub --mode context --model google/gemini-3.8-flash --budget-usd 12
 
 # 5. 進度、續譯（Ctrl+C 可安全中斷）
 ncte status ./samples/book.epub
@@ -237,7 +258,7 @@ ncte names proposals 書.epub --all --context   # 所有提案（含已套用的
 ```bash
 ncte gui            # 開啟 http://127.0.0.1:8780/ （只有這台電腦能開；Ctrl+C 結束）；或雙擊 NCTE.command
 ```
-上傳 EPUB、開始／暫停／繼續翻譯（各階段進度與花費）、匯出與下載、金鑰與餘額；對照審稿（點譯文直接修改、刪除譯註；每段可展開前後各 3 段；標出模型沒把握或證據核對不過的台詞與覆核結果）、定名（看例句選譯法；同一暱稱已定的譯法）、故事進度、角色檔案（性別與依據，可修改）、人物關係圖（拖動「讀到」滑桿防劇透）、名詞與稱呼。網頁開始的翻譯固定用預設模型，預算依估價自動設定（ADR-034）。
+上傳 EPUB、開始／暫停／繼續翻譯（各階段進度與花費）、匯出與下載、連線方式（Claude 方案或 OpenRouter 金鑰與餘額）；對照審稿（點譯文直接修改、刪除譯註；每段可展開前後各 3 段；標出模型沒把握或證據核對不過的台詞與覆核結果）、定名（看例句選譯法；同一暱稱已定的譯法）、故事進度、角色檔案（性別與依據，可修改）、人物關係圖（拖動「讀到」滑桿防劇透）、名詞與稱呼。網頁開始的翻譯固定用預設模型；OpenRouter 的預算依估價自動設定（ADR-034），Claude 方案不設預算（ADR-062）。
 
 ### 品質控制與人工校正
 ```bash
@@ -274,7 +295,8 @@ ncte eval run --experiments A,B,C,D --repeat 2 --budget-usd 0.5     # → worksp
 說明見 [`docs/evaluation.md`](docs/evaluation.md)。
 全域選項：`-w/--workspace DIR`、`-c/--config FILE`（預設自動讀 `./ncte.yaml`；範例見 `config.example.yaml`）。
 
-### 真實 smoke test（需要金鑰、會產生少量費用）
+### 真實 smoke test
+Claude 方案直接執行下面的指令即可（不收費，用少量額度）；OpenRouter 先 `export NCTE_LLM_PROVIDER=openrouter`（需要金鑰、會產生少量費用）。
 ```bash
 python scripts/make_sample_epub.py
 ncte translate tests/fixtures/basic.epub --dry-run                 # 先看估價（約 US$0.02–0.03）
@@ -294,7 +316,8 @@ ncte export tests/fixtures/basic.epub
 5. **重建**：只替換已驗證的文字節點；圖片、CSS、字型 byte-for-byte 保留；`mimetype` 置首不壓縮；匯出後自動驗證（內部檢查＋EPUBCheck）。
 
 ## 已知限制
-- 真實模型的 A/B 評測與人工標註的語義評測尚未執行；舊流程整本實測兩本，現行流程（ADR-059 之後）只有三本各 300 段的抽樣。其他出版社的 EPUB 格式可能遇到新的狀況。
+- 真實模型的 A/B 評測與人工標註的語義評測尚未執行；現行流程整本實測只有一本（四種模型組合），另有三本各 300 段的抽樣。其他出版社的 EPUB 格式可能遇到新的狀況。
+- Claude 方案比 OpenRouter 慢（一本約 6 小時），會用到訂閱的每週額度；5 小時額度用完時翻譯會停下來等，不會中斷。`--dry-run` 在這個方案下估出的金額是 0（不收費），不代表用量。
 - 內容審查：雲端模型可能誤擋正常段落（例如未成年角色加上可疑大人的情境）。翻譯被擋時先拿掉記憶資料、再切小重送；讀被擋時把場景對半切重讀。仍被擋的段落保留原文或只用程式分析，並列入報告。
 - Gemini 等推理模型的推理 token 以輸出價計費（翻譯的輸出約一半是推理），推理量難以事先知道。試算涵蓋每個步驟：有過去實際花費的步驟依最近的執行校正（一般值與最貴的一次再加餘裕），沒有的依抽樣中的占比估，標為未校正。
 - 更便宜的模型目前不建議：第二章比較中 claude-haiku-5.5 忽略角色卡的性別（你／妳錯 36 句），deepseek-v4-flash、qwen3.8-flash 會整批改寫成簡體（現在會被程式擋下重翻，但多花費用）。
@@ -311,9 +334,10 @@ ncte export tests/fixtures/basic.epub
 
 ## 專案結構
 ```
-src/ncte/  cli.py cli_memory.py config.py library.py workspace.py series.py lexicon.py exporter.py samples.py
+src/ncte/  cli.py cli_memory.py cli_agent.py config.py library.py workspace.py series.py lexicon.py exporter.py samples.py
   epub/        security parser units reassemble validate matter series_meta
-  llm/         base openrouter fal_openrouter fake schemas prompt_loader short_ids cost
+  llm/         base claude_cli openrouter fal_openrouter fake schemas prompt_loader short_ids cost
+  agent/       tasks client runner mcp_server（agent 逐題回答：`ncte agent …`、`ncte mcp`）
   translation/ orchestrator context_pipeline translator context_builder review rename edits cache dryrun
   analysis/    scene scene_windows split_read dialogue speaker narration reference_resolution memory_update verify
                relations impressions house_style naming proofread reader
@@ -326,6 +350,7 @@ prompts/<task>/v1.md   版本化 prompt（scenes / scene_windows / scene_analyze
                        naming / translate / confirm / review / fix_check / proofread / reader）；修改後下一次執行生效（`ncte gui` 要重開），
                        同一主版本內修改不會讓舊譯文失效
 NCTE.command           Finder 雙擊啟動網頁介面
+skills/ncte-translate/ Claude Code 的 skill（複製或連結到 ~/.claude/skills/）
 tests/                 unit / integration / eval（全部離線）
 scripts/make_sample_epub.py   產生自製測試 EPUB
 ```
@@ -341,4 +366,4 @@ scripts/make_sample_epub.py   產生自製測試 EPUB
 | M5 選擇性複查、人工校正、報告 | ✅ 離線測試通過 |
 | M6 A/B 評測（人工標註集、CSV/HTML 報告） | ✅ 流程可執行；真實模型的評測數據尚未產生 |
 
-之後新增：系列書（多集共用記憶、跨集防劇透）、實體卡（正式名稱／愛稱／通稱）、名詞索引、人物關係圖、敘述人稱、讀者檢查、全書對照校稿、全書體例、修正對照原文驗收與可驗收報告。
+之後新增：系列書（多集共用記憶、跨集防劇透）、實體卡（正式名稱／愛稱／通稱）、名詞索引、人物關係圖、敘述人稱、讀者檢查、全書對照校稿、全書體例、修正對照原文驗收與可驗收報告、Claude 方案（訂閱當模型）與 agent 逐題回答（MCP、skill）。

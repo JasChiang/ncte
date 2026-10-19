@@ -79,7 +79,8 @@ def make_client(cfg: Config, *, fake: bool = False, need_key: bool = True) -> An
     if fake:
         from .llm.fake import FakeLLM
 
-        models = list({cfg.openrouter.model, *(cfg.openrouter.fallback_models or [])})
+        o = cfg.openrouter  # every model the run may ask: its own, step models, review and fallbacks
+        models = list({o.model, *(o.fallback_models or []), *o.stage_models.values(), *([o.review_model] if o.review_model else [])})
         return FakeLLM(models=models)
     if cfg.openrouter.provider == "agent":
         raise NCTEError("this run is answered by an agent through tasks: continue it with `ncte agent resume -w …`")

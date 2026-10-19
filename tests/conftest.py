@@ -15,6 +15,9 @@ def _no_api_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # Offline tests must never see a real key nor a developer .env file.
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("NCTE_WORKSPACE", raising=False)
+    # the default source is the Claude plan; most tests are about the engine with a fake model and the API path
+    # (keys, budgets, prices), so they name the API source; the Claude tests set their own
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "openrouter")
     monkeypatch.chdir(tmp_path)
 
 
@@ -26,6 +29,7 @@ def fixtures(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
 @pytest.fixture
 def cfg(tmp_path: Path) -> Config:
     c = Config()
+    c.openrouter.provider = "openrouter"
     c.app.workspace = str(tmp_path / "ws")
     c.openrouter.max_concurrency = 2
     return c

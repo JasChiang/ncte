@@ -794,3 +794,4 @@ open workspace/eval/<timestamp>/report.html
 - 新增模型來源 `claude`（`llm/claude_cli.py`）：設定 `NCTE_LLM_PROVIDER=claude` 或網頁「設定 → 連線方式 → Claude 方案」。預設 Opus 翻譯、定名與檢查，Sonnet 讀書。網頁不顯示預算，改顯示照定價換算的金額（不另收費）；時間估計放寬（整本約 6 小時，等額度重置的時間另計）。
 - `ncte agent …`、`ncte mcp`、`skills/ncte-translate` 從 ncte-agent 搬入（`src/ncte/agent/`、`cli_agent.py`）；任務帶推理程度；引擎程序一啟動就結束時狀態顯示錯誤，不會停在「starting」；EPUB 不存在時 `start` 直接報錯。
 - 測試：`tests/unit/test_claude_cli.py`（送出的參數、推理程度、不收費、等額度、沒登入、預設模型、整本範例書）、`tests/integration/test_agent.py`（整本、背景程序、同時送出的請求、MCP 工具）、網頁的 Claude 方案設定與金額顯示。
+- 預設來源改為 Claude 方案（沒有設定時）：網頁設定頁把 Claude 方案放第一個並標為建議；README 改寫為兩種用法並列（Claude 方案為主），加上整本比較表（三種 Claude 組合與 Gemini）。離線測試固定用 OpenRouter 路徑（金鑰、預算、價格的測試），Claude 的測試各自設定；`--fake` 的模型清單包含各步驟的模型。
