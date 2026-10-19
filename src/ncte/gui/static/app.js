@@ -59,7 +59,9 @@ async function libraryView() {
   // first steps, shown until there is a key and a book: what to do, in order
   const step = (n, done, title, body) => `<div class="step ${done ? "done" : ""}"><span class="num">${done ? "✓" : n}</span><div><strong>${title}</strong><div class="small muted">${body}</div></div></div>`;
   const guide = k.set && hasBook ? "" : `<div class="card steps"><strong>開始使用</strong>
-      ${step(1, k.set, "設定 OpenRouter 金鑰", k.set ? "已設定。" : `NCTE 透過 OpenRouter 使用翻譯模型，費用從你的 OpenRouter 帳戶扣。<a href="#/settings">去設定</a>（一本輕小說約 US$8–11，依長度而定）。`)}
+      ${k.provider === "claude"
+        ? step(1, k.set, "找到 Claude Code", k.set ? "已找到：用你的 Claude 訂閱額度翻譯，NCTE 不另外收費。" : `NCTE 用這台電腦上已登入的 Claude Code 翻譯。請先安裝 <a href="https://docs.claude.com/en/docs/claude-code" target="_blank" rel="noopener">Claude Code</a>，並在終端機執行 <code>claude</code> 登入；或到<a href="#/settings">設定</a>改用 OpenRouter。`)
+        : step(1, k.set, "設定 OpenRouter 金鑰", k.set ? "已設定。" : `NCTE 透過 OpenRouter 使用翻譯模型，費用從你的 OpenRouter 帳戶扣。<a href="#/settings">去設定</a>（一本輕小說約 US$8–11，依長度而定）。`)}
       ${step(2, hasBook, "加入一本日文 EPUB", "把沒有 DRM 的日文 EPUB 拖到下面的框裡。檔案只存在這台電腦。")}
       ${step(3, false, "看估價，開始翻譯", "打開書以後會先估價（費用、時間），按「開始翻譯」就會自動讀完整本再翻，中途可以暫停。")}</div>`;
   const status = v => v.translatable == null ? chip("c-unk", "找不到資料夾") : v.translatable && v.translated >= v.translatable ? chip("c-ok", "翻譯完成")
@@ -111,7 +113,7 @@ async function settingsView() {
   const k = await api("settings");
   const fal = k.provider === "fal", claude = k.provider === "claude", label = fal ? "fal" : "OpenRouter";
   const claudeCard = `<div class="card"><strong>Claude 方案</strong>
-    <p>用這台電腦上已登入的 Claude Code（<code>claude</code> 指令）翻譯，使用你的 Claude 訂閱額度：不需要金鑰，NCTE 不另外收費。讀書的步驟用 Sonnet，翻譯與各種檢查用 Opus。</p>
+    <p>用這台電腦上已登入的 Claude Code（<code>claude</code> 指令）翻譯，使用你的 Claude 訂閱額度：不需要金鑰，NCTE 不另外收費。讀書的步驟（切場景、讀場景、記憶整理、覆核、人物關係、角色印象、體例）用 Sonnet，翻譯、定名、規則確認、審稿、對照校稿、讀者檢查與修正驗收用 Opus。</p>
     <p>${k.set ? `${chip("c-ok", "找到 Claude Code")} <span class="small muted">${esc(k.claude)}</span>` : `${chip("c-warn", "找不到 Claude Code")} 請先安裝 <a href="https://docs.claude.com/en/docs/claude-code" target="_blank" rel="noopener">Claude Code</a>，並在終端機執行 <code>claude</code> 登入；或在下方「連線方式」改用 OpenRouter。`}</p>
     <p class="small muted">額度用完時會自動等到重置再接著翻，不會中斷；一本書通常要好幾個小時。畫面上的金額是照定價換算的參考，不會向你收費。</p></div>`;
   view.innerHTML = `<h2>設定</h2>
@@ -124,7 +126,7 @@ async function settingsView() {
     <p><input type="password" id="key" size="48" placeholder="${fal ? "FAL_KEY" : "sk-or-…"}" autocomplete="off"> <button class="btn primary" id="saveKey">儲存</button></p>
     <p class="muted small">只存在這台電腦的 ${esc(k.file)}，不會顯示在畫面上，也不會寫進紀錄。</p>
     <div id="bal"></div></div>`}
-    <div class="card"><strong>翻譯設定</strong><p>模型與推理程度用預設（目前測試結果最好的組合），不需要選。預算上限會依每本書估價的「最多」金額自動設定，到了會先停下來問你。</p></div>
+    <div class="card"><strong>翻譯設定</strong><p>模型與推理程度用預設（目前測試結果最好的組合），不需要選。${claude ? "" : "預算上限會依每本書估價的「最多」金額自動設定，到了會先停下來問你。"}</p></div>
     <details class="card" ${claude ? "" : "open"}><summary><strong>連線方式</strong> <span class="muted small">有 Claude 訂閱用 Claude 方案；沒有的話用 OpenRouter 付費</span></summary>
     <p><select id="provider"><option value="claude" ${claude ? "selected" : ""}>Claude 方案（用 Claude 訂閱額度，不需金鑰；建議）</option>
     <option value="openrouter" ${!fal && !claude ? "selected" : ""}>OpenRouter（Gemini，需要金鑰並儲值）</option>

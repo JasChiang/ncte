@@ -215,3 +215,33 @@ def test_the_command_line_and_the_page_hear_the_waits(monkeypatch, tmp_path):
     client = runner.make_client(cfg)
     client.log("等待 30 秒：額度")
     assert list(runner.log)[-1] == "等待 30 秒：額度"
+
+
+READ_LABELS = {"scene_windows": "切場景", "scene_analyze": "讀場景", "memory_update": "記憶整理", "verify": "覆核",
+               "relations": "人物關係", "impressions": "角色印象", "house_style": "體例"}
+
+
+def test_the_page_and_the_readme_say_which_steps_run_on_sonnet():
+    """What the settings page and the README say about the Claude plan's models follows the configuration."""
+    from pathlib import Path
+
+    import ncte
+
+    root = Path(ncte.__file__).resolve().parents[2]
+    assert set(READ_LABELS) == set(CLAUDE_READ_STAGES)
+    for path in (root / "src/ncte/gui/static/app.js", root / "README.md"):
+        text = path.read_text(encoding="utf-8")
+        said = text[text.index("讀書的步驟"):]
+        said = said[:said.index("用 Sonnet")]
+        assert all(label in said for label in READ_LABELS.values()), (path.name, said)
+    js = (root / "src/ncte/gui/static/app.js").read_text(encoding="utf-8")
+    first = js[js.index("async function libraryView"):js.index("async function", js.index("async function libraryView") + 1)]
+    assert "找到 Claude Code" in first  # the first step on the Claude plan is not an OpenRouter key
+
+
+def test_agent_is_not_a_source_chosen_by_environment(monkeypatch):
+    from ncte.errors import ConfigError
+
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "agent")
+    with pytest.raises(ConfigError, match="ncte agent"):
+        load_config()

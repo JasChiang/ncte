@@ -35,6 +35,7 @@ class AppConfig(_Strict):
 class OpenRouterConfig(_Strict):
     # "claude": the user's Claude plan through Claude Code (`claude -p`), no key, nothing billed (ADR-062)
     # "agent": an agent in a conversation answers each request as a task (`ncte agent`, the MCP server)
+    # "agent" (a run answered task by task) is set by `ncte agent` itself, never chosen by NCTE_LLM_PROVIDER
     provider: Literal["openrouter", "fal", "claude", "agent"] = "claude"
     base_url: str = "https://openrouter.ai/api/v1"
     model: str = DEFAULT_MODEL
@@ -169,7 +170,8 @@ def load_config(path: str | Path | None = None, *, workspace: str | None = None)
     provider = os.environ.get("NCTE_LLM_PROVIDER") or _read_dotenv(Path(".env")).get("NCTE_LLM_PROVIDER")
     if provider:
         if provider not in ("openrouter", "fal", "claude"):
-            raise ConfigError("NCTE_LLM_PROVIDER must be openrouter, fal or claude")
+            raise ConfigError("NCTE_LLM_PROVIDER must be openrouter, fal or claude "
+                              "(agent is set by `ncte agent` itself for the runs it starts)")
         cfg.openrouter.provider = provider  # type: ignore[assignment]
     if cfg.openrouter.provider == "claude":
         use_claude_models(cfg)

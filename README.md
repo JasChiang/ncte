@@ -28,6 +28,7 @@ flowchart LR
 - **時間與費用**（一本輕小說約 11–14 萬字，2026-10-18～19 整本實測）：
   - Claude 方案：約 6 小時（額度用完時自動等重置，另計），不另收費；約用掉一週額度的 3–4 個百分點（依方案而定）。
   - OpenRouter（Gemini）：約 3 小時、US$9 左右。開始前會顯示「約多少、最多多少」，預算上限依「最多」的金額自動設定。
+  - Claude 方案的數字出自 ncte-agent 的 drive 實測：當時每步的推理程度沒有傳給 `claude -p`，對照校稿與修正驗收都不是 high（見 changelog 2026-10-19 節）。現行 `claude` 來源預設對修正驗收、對照校稿、人物關係、覆核用 high，還沒有整本實測，時間與額度可能更多。
 
 ## 畫面
 以下截圖都是青空文庫的公共領域作品（夏目漱石『坊っちゃん』前兩章）。
@@ -72,7 +73,7 @@ flowchart LR
 | Claude：全部 Sonnet | 約 6 小時 | 不另收費（照定價約 US$38） | 5 句 | 28 處（意思讀錯、口吻與敬語效果不見、性別稱呼） |
 | OpenRouter：Gemini（`gemini-3.8-flash`） | 約 3 小時 | US$9.10 | 4 句 | 未用同一方法測（逐段對照官方的結果見 changelog） |
 
-你／妳是同一段落和正式中文版逐句比對；其中幾句四個版本都一樣、只和官方不同（前後文本身有兩種讀法）。全部 Sonnet 雖然單價低，初稿錯得多、校稿後逐段重譯，花費反而和預設組合差不多。
+Claude 三列出自 ncte-agent 的 drive：每步的推理程度沒有傳給 `claude -p`，對照校稿與修正驗收不是 high（見 changelog 2026-10-19 節）；現行 `claude` 來源預設對修正驗收、對照校稿、人物關係、覆核用 high，尚未整本實測。你／妳是同一段落和正式中文版逐句比對；其中幾句四個版本都一樣、只和官方不同（前後文本身有兩種讀法）。全部 Sonnet 雖然單價低，初稿錯得多、校稿後逐段重譯，花費反而和預設組合差不多。
 
 **現行流程的抽樣**（2026-10-18，OpenRouter／Gemini，三本各前 300 段，與正式中文版逐段對照；細節見 [`docs/changelog.md`](docs/changelog.md)）
 
@@ -99,11 +100,11 @@ flowchart LR
 4. 翻完在概況頁按「匯出 EPUB」→「下載」。「對照審稿」可以逐段修改譯文。
 
 模型與推理程度不用選（推理一般 medium；做判斷的步驟——對照校稿、人物關係、覆核、修正驗收——用 high）：
-- Claude 方案：讀書的步驟用 Sonnet，翻譯、定名與各種檢查用 Opus（比較見上方〈整本比較〉）。
+- Claude 方案：讀書的步驟（切場景、讀場景、記憶整理、覆核、人物關係、角色印象、體例）用 Sonnet，翻譯、定名、規則確認、審稿、對照校稿、讀者檢查與修正驗收用 Opus（比較見上方〈整本比較〉）。
 - OpenRouter：`google/gemini-3.8-flash`。同一章節的比較裡，更便宜的模型會忽略角色性別（你／妳）、或整批改寫成簡體（[`docs/changelog.md`](docs/changelog.md)）。
 
 ### Claude 方案怎麼運作
-NCTE 的每個請求都是一次全新的 `claude -p`（Claude Code 的非互動模式）：步驟的提示詞取代 Claude Code 自己的系統提示，不帶工具、不讀你的 Claude Code 設定、不留對話紀錄。用你的訂閱額度，NCTE 不另外收費；畫面上的金額是照定價換算的參考，不會向你收費。額度用完會自動等到重置再接著翻；沒登入會立刻停下來告訴你。指令列在命令前加 `NCTE_LLM_PROVIDER=claude`（預設就是），改回 API 用 `NCTE_LLM_PROVIDER=openrouter`。
+NCTE 的每個請求都是一次全新的 `claude -p`（Claude Code 的非互動模式）：步驟的提示詞取代 Claude Code 自己的系統提示，不帶工具、不讀你的 Claude Code 設定、不留對話紀錄。用你的訂閱額度，NCTE 不另外收費；畫面上的金額是照定價換算的參考，不會向你收費。額度用完會自動等到重置再接著翻（每次等待前在畫面或指令列寫一行原因）；沒登入、或 Claude Code 不接受送去的指令（例如版本太舊）會立刻停下來告訴你。指令列在命令前加 `NCTE_LLM_PROVIDER=claude`（預設就是），改回 API 用 `NCTE_LLM_PROVIDER=openrouter`。
 
 ```mermaid
 flowchart LR
