@@ -1,6 +1,6 @@
 """ADR-033: a second look at the read pass's disputed judgments."""
 
-from ncte.llm.fake import FakeLLM
+from ncte.llm.fake import FakeLLM, default_translate
 
 from ..helpers import run_book
 from ..scripted import RESPONDERS, known, memory_update, scene_analyze, uid, utt
@@ -181,3 +181,52 @@ def test_an_identity_left_unknown_is_asked_again_when_new_cards_come():
     more = {**item, "candidates": {"c2": "高木", "c3": "高木の姉"}}
     assert fingerprint(item, with_candidates=True) != fingerprint(more, with_candidates=True)  # unknown: asked again
     assert fingerprint(item) == fingerprint(more)  # answered with someone: not asked again
+
+
+def test_the_read_pass_s_own_questions_are_answered_and_reach_translation_and_review(conn, cfg, fixtures):
+    """B5 (ADR-067): a question the model raised while reading a scene (`uncertainties`) goes to the second look with
+    the passage and the scene's people; the answer (a sentence, optionally who) is kept with the scene and given to
+    translation and review with the question; it is not asked again."""
+    from ncte.gui import data
+
+    def analyze(payload, req):
+        out = scene_analyze(payload, req)
+        if (u := uid(payload, "カイトは銀の鍵をミナに手渡した")):
+            out["uncertainties"] = [{"unit_ids": [u], "question": "鑰匙原本是誰的？"}]
+        return out
+
+    asked, translated, reviewed = [], [], []
+
+    def verify(payload, req):
+        out = []
+        for it in payload["items"]:
+            if it["kind"] == "question":
+                asked.append(it)
+                kaito = next(k for k, v in it["candidates"].items() if "海斗" in v or "カイト" in v)
+                out.append({"ref": it["ref"], "answer": "原文只寫海斗交出，原本屬誰沒說", "character_id": kaito,
+                            "reason": "「カイトは銀の鍵をミナに手渡した」"})
+        return {"items": out}
+
+    def translate(payload, req):
+        translated.append(payload)
+        return RESPONDERS.get("translate", default_translate)(payload, req)
+
+    cfg.review.automatic_review = "all"
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={
+        **RESPONDERS, "scene_analyze": analyze, "verify": verify, "translate": translate,
+        "review": lambda p, r: reviewed.append(p) or {"issues": []}}), mode="context")
+    assert len(asked) == 1
+    q = asked[0]
+    assert q["question"] == "鑰匙原本是誰的？" and any("▶" in x and "銀の鍵" in x for x in q["context"])
+    assert not any(k.startswith("_") for k in q)
+    state = conn.execute("SELECT state_json FROM scenes WHERE state_json LIKE '%鑰匙原本是誰的%'").fetchone()[0]
+    assert "原本屬誰沒說" in state
+    with_q = [p["scene"]["uncertainties"] for p in translated if p.get("scene", {}).get("uncertainties")]
+    assert with_q and with_q[0][0]["answer"] == "原文只寫海斗交出，原本屬誰沒說" and with_q[0][0]["answer_who"] == "海斗"
+    assert any(p.get("scene", {}).get("uncertainties", [{}])[0].get("answer") for p in reviewed)
+    shown = [s for s in data.story(conn, book)["scenes"] if s["questions"]]
+    assert shown and shown[0]["questions"][0]["answer"].startswith("原文只寫")
+    # answered: not asked again
+    from ncte.analysis import verify as vf
+
+    assert not [i for i in vf.collect(conn, book.id) if i["kind"] == "question"]

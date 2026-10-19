@@ -506,6 +506,7 @@ async function storyView(id) {
   const list = seen.map((s, i) => { const head = s.ch !== last ? `<h3>${esc(title(s.ch))}</h3>` : ""; last = s.ch;
     return head + `<div class="card" id="scene-${esc(s.id)}"><div class="muted small">場景 ${i + 1}・段 ${s.a}–${s.b}</div><div>${esc(s.summary) || '<span class="muted">（沒有摘要）</span>'}</div>
       <div class="muted small">出場：${s.who.map(c => esc(nm(c))).join("、") || "—"}</div>
+      ${(s.questions || []).map(q => `<div class="note small" title="讀這個場景時模型自己提出的疑問；回答是讀完全書後帶前後文覆核的">疑問：${esc(q.question)}<br>${q.answer ? "回答：" + esc(q.answer) : '<span class="muted">（還沒有回答）</span>'}</div>`).join("")}
       <details data-a="${s.a}" data-b="${s.b}"><summary class="small muted">看這個場景的原文與譯文</summary><div class="body muted small">載入中…</div></details></div>`; }).join("");
   view.innerHTML = `<div class="card scroll"><strong>誰在哪一章出場</strong> <span class="muted small">數字＝場景數；點名字看角色檔案</span>
     <div class="grid" style="grid-template-columns:110px repeat(${usedCh.length},minmax(30px,1fr));margin-top:8px">${grid}</div></div>

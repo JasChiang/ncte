@@ -324,8 +324,9 @@ class ReviewOutput(_M):
 # ------------------------------------------------------------------ second look (ADR-033)
 class VerifyItem(_M):
     ref: str
-    answer: str  # character id | unknown ; female | male | unknown ; same | different | unsure
+    answer: str  # character id | unknown ; female | male | unknown ; same | different | unsure ; a question: a sentence
     reason: str
+    character_id: str = ""  # a question's answer may name who it is about (ADR-067)
 
 
 class VerifyOutput(_M):

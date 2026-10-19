@@ -183,3 +183,14 @@ def test_proofreading_and_review_are_told_what_translator_notes_are():
         text = load_prompt(task).render(payload)
         line = next(x for x in text.split("\n") if "`translator_notes`" in x)
         assert "譯者留給審稿者的話" in line and "不是譯文" in line, task
+
+
+def test_the_read_pass_s_questions_are_explained_where_they_are_asked_and_used():
+    """B5 (ADR-067): the second look knows the question kind and its answer (a sentence, optionally who); the
+    translator and the reviewer are told what the answer is."""
+    vf = load_prompt("verify").render({"items": []})
+    assert "- `question`" in vf and "`character_id`" in vf
+    for task, payload in (("translate", {"units": []}), ("review", {"items": []})):
+        text = load_prompt(task).render(payload)
+        line = next(x for x in text.split("\n") if "`scene.uncertainties`" in x)
+        assert "`answer`" in line and "不是確定" in line, task

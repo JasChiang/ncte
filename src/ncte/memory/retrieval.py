@@ -157,7 +157,7 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
         "characters": present,
         "scene": {"scene_id": scene["id"], "pov": state.get("pov"), "location": state.get("location"),
                   "utterances": utts, "omitted_arguments": actions,
-                  "uncertainties": [x for x in state.get("uncertainties", [])
+                  "uncertainties": [_question(x, names) for x in state.get("uncertainties", [])
                                     if set(x.get("unit_ids", [])) & batch_ids]},
         "memory": mem,
     }
@@ -252,6 +252,17 @@ def story_so_far(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row) -> 
 def scene_chapter(conn: sqlite3.Connection, scene: sqlite3.Row) -> str:
     row = conn.execute("SELECT resource_href FROM units WHERE id=?", (scene["start_unit_id"],)).fetchone()
     return row[0] if row else ""
+
+
+def _question(x: dict[str, Any], names: dict[str, str]) -> dict[str, Any]:
+    """A question the read pass raised, with the second look's answer when there is one (ADR-067): who it names is
+    shown only if known by this point of the story."""
+    out = {"unit_ids": x.get("unit_ids", []), "question": x.get("question", "")}
+    if x.get("answer"):
+        out["answer"] = x["answer"]
+        if (who := names.get(x.get("answer_character_id") or "")):
+            out["answer_who"] = who
+    return out
 
 
 def unit_actions(conn: sqlite3.Connection, book_id: str,

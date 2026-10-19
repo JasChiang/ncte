@@ -189,7 +189,11 @@ def story(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
         href = rows[0]["resource_href"]
         forms, _ = name_forms(conn, book.id, s["end_ordinal"])  # only characters known by then (ADR-022 fix)
         named = {cid for r in rows for _, cid in find_forms(r["plain_text"], forms)}
-        scenes.append({"id": s["id"], "a": s["start_ordinal"], "b": s["end_ordinal"], "ch": ch_of.get(href),
+        state = json.loads(s["state_json"] or "{}")
+        # the model's own questions while reading, with the second look's answer (ADR-067)
+        questions = [{"question": x["question"], "answer": x.get("answer", ""), "unit_ids": x.get("unit_ids", [])}
+                     for x in state.get("uncertainties") or [] if x.get("question")]
+        scenes.append({"questions": questions, "id": s["id"], "a": s["start_ordinal"], "b": s["end_ordinal"], "ch": ch_of.get(href),
                        "story": matter.get(href) == "story", "summary": summ.get(s["id"], ""),
                        "speakers": sorted(spk[s["id"]]), "who": sorted(spk[s["id"]] | named)})
     return {"chapters": chs, "scenes": scenes}

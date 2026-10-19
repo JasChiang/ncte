@@ -90,6 +90,7 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
             (book_id, sc["id"])) if not r[0].lstrip(" 　").startswith(("「", "『"))][:12]
         items.append({"ref": f"n:{sc['id']}", "kind": "narration", "first_answer": narr["person"], "paragraphs": paras,
                       "_version": str(sc["version"])})  # a scene read again is asked again
+    items += question_items(conn, book_id)
     # an item answered before with the same content and the same version of its data is not asked again (asking until
     # the model agrees adds nothing); a gender written again, a scene read again, a changed card are asked again
     answered = {r[0]: r[1] for r in conn.execute("SELECT ref, fingerprint FROM verify_answers WHERE book_id=?", (book_id,))}
@@ -125,6 +126,8 @@ def answer_valid(item: dict[str, Any], answer: str) -> bool:
         return answer in ("same", "different", "unsure")
     if kind == "narration":
         return answer in ("first", "third", "unclear")
+    if kind == "question":
+        return bool(answer)
     if kind == "group":
         return (answer.startswith("same:") and answer[5:] in cands) or all(x.strip() in cands for x in answer.split(","))
     return answer in cands  # speaker, identity, narrator
@@ -176,6 +179,35 @@ def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
                 "SELECT member_id FROM group_members WHERE group_id=?", (c["id"],)) if g[0] in cards]
         out.append(item)
     return out  # every card is asked, a batch at a time (about US$0.001 each)
+
+
+def question_items(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
+    """The questions the model raised itself while reading a scene (its ``uncertainties``) that have no answer yet,
+    each with the passage around it and the scene's people (named as known at the end of the scene): asked once, with
+    more of the text around (ADR-067). The answer is kept with the question; it decides nothing."""
+    from ..memory.visibility import visible_names
+
+    out = []
+    for sc in conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq", (book_id,)):
+        state = json.loads(sc["state_json"] or "{}")
+        open_ = [(i, x) for i, x in enumerate(state.get("uncertainties") or [])
+                 if x.get("question") and not x.get("answer")]
+        if not open_:
+            continue
+        names = visible_names(conn, book_id, sc["end_ordinal"])
+        people = {p.get("character_id") for p in state.get("participants", [])}
+        people |= {r[0] for r in conn.execute("SELECT speaker_id_nullable FROM utterances WHERE book_id=? AND scene_id=? "
+                                              "AND speaker_id_nullable IS NOT NULL", (book_id, sc["id"]))}
+        cands = {c: names[c] for c in sorted(x for x in people if x) if c in names}
+        for i, x in open_:
+            at = [r[0] for r in conn.execute(
+                f"SELECT ordinal FROM units WHERE book_id=? AND id IN ({','.join('?' * len(x.get('unit_ids') or []))}) "
+                "ORDER BY ordinal", (book_id, *(x.get("unit_ids") or [])))] if x.get("unit_ids") else []
+            ordinal = at[0] if at else sc["start_ordinal"]
+            out.append({"ref": f"u:{sc['id']}:{i}", "kind": "question", "question": x["question"],
+                        "context": _window(conn, book_id, ordinal), "candidates": cands,
+                        "_ordinal": ordinal, "_version": str(sc["version"])})
+    return out
 
 
 def narrator_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]) -> list[dict[str, Any]]:
@@ -277,6 +309,21 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             conn.execute("UPDATE scenes SET state_json=? WHERE book_id=? AND id=?",
                          (json.dumps(state, ensure_ascii=False), book_id, key))
             stats["narration_checked"] = stats.get("narration_checked", 0) + 1
+        elif kind == "u":  # the read pass's own question: the answer is kept with it (ADR-067)
+            sid, _, idx = key.rpartition(":")
+            sc = conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND id=?", (book_id, sid)).fetchone()
+            state = json.loads(sc[0] or "{}") if sc is not None else {}
+            asked = state.get("uncertainties") or []
+            if not answer or not idx.isdigit() or int(idx) >= len(asked) or asked[int(idx)].get("question") != \
+                    item["question"]:
+                stats["ignored"] += 1
+                continue
+            asked[int(idx)].update({"answer": answer[:300], "answer_reason": a.reason[:200],
+                                    **({"answer_character_id": a.character_id}
+                                       if a.character_id in item["candidates"] else {})})
+            conn.execute("UPDATE scenes SET state_json=? WHERE book_id=? AND id=?",
+                         (json.dumps(state, ensure_ascii=False), book_id, sid))
+            stats["questions_answered"] = stats.get("questions_answered", 0) + 1
         elif kind == "i":
             if answer in item["candidates"] and answer != key:  # 「姉ちゃん」 in the sister's story is 高木
                 _narrator_is(conn, book_id, key, answer)
