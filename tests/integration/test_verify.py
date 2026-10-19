@@ -223,7 +223,8 @@ def test_the_read_pass_s_own_questions_are_answered_and_reach_translation_and_re
     assert "原本屬誰沒說" in state
     with_q = [p["scene"]["uncertainties"] for p in translated if p.get("scene", {}).get("uncertainties")]
     assert with_q and with_q[0][0]["answer"] == "原文只寫海斗交出，原本屬誰沒說" and with_q[0][0]["answer_who"] == "海斗"
-    assert any(p.get("scene", {}).get("uncertainties", [{}])[0].get("answer") for p in reviewed)
+    # review requests come in any order when chapters run side by side; one of them carries the answered question
+    assert any(u.get("answer") for p in reviewed for u in p.get("scene", {}).get("uncertainties", []))
     shown = [s for s in data.story(conn, book)["scenes"] if s["questions"]]
     assert shown and shown[0]["questions"][0]["answer"].startswith("原文只寫")
     # answered: not asked again
