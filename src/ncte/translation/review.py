@@ -512,10 +512,19 @@ SOURCE_CLAIMS = {"mistranslation", "omission", "addition", "speaker_error", "sub
 
 
 def _claim(x: dict[str, Any]) -> str:
+    """An issue as the fix check reads it: the kind only for a claim about the source; otherwise what the finder
+    said and suggested — without the instructions written for the translator (``proofread.FIX_NOTE``,
+    ``reader.FIX_NOTE``), which are not a suggestion."""
+    from ..analysis import proofread, reader
+
     kind = str(x.get("issue_type", ""))
     if kind in SOURCE_CLAIMS:
         return f"{kind}（只給類別；請自己對照原文判斷）"
-    return f"{kind}: {x.get('evidence', '')} → {x.get('suggestion', '')}"[:500]
+    suggestion = str(x.get("suggestion", ""))
+    for note in (proofread.FIX_NOTE, reader.FIX_NOTE):
+        suggestion = suggestion.replace(note, "")
+    suggestion = suggestion.strip()
+    return (f"{kind}: {x.get('evidence', '')}" + (f" → {suggestion}" if suggestion else ""))[:500]
 
 
 def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[str, Any]], list[Finding]]]
