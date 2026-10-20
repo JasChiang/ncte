@@ -214,7 +214,7 @@ async function overviewView(id) {
   const stat = (label, v, extra = "") => `<div class="card stat"><span class="muted small">${label}</span><b>${v}</b>${extra}</div>`;
   // before anything is translated the counts are all zero: only the start card
   view.innerHTML = `<div class="card" id="runcard"><p class="muted">讀取翻譯狀態…</p></div>${!o.translated && !o.runs.length ? "" : `<div class="row">
-    ${stat("已翻譯", `${o.translatable ? Math.round(100 * o.translated / o.translatable) : 0}%`, `<span class="small muted">${o.translated} / ${o.translatable} 段</span>`)}${stat("這本書總共花費", "US$" + o.spent_usd.toFixed(2), `<span class="small muted">所有執行加總${o.plan_usd ? `；另有 Claude 方案照定價約 US$${o.plan_usd.toFixed(2)}（不另收費）` : ""}</span>`)}
+    ${stat("已翻譯", `${o.translatable ? Math.round(100 * o.translated / o.translatable) : 0}%`, `<span class="small muted">${o.translated} / ${o.translatable} 段</span>`)}${stat("這本書總共花費", "US$" + o.spent_usd.toFixed(2), `<span class="small muted">所有執行加總${o.plan_usd ? `；另有 Claude 方案照定價約 US$${o.plan_usd.toFixed(2)}（不另收費）` : ""}</span>`)}${planStat(o.plan_usage)}
     ${stat("有疑點的段落", o.flagged_units, `<a class="small" href="#/b/${id}/review?f=flagged">去看</a>`)}
     ${stat("可再確認的譯法", o.pending_names, `<a class="small" href="#/b/${id}/names">去看看</a>`)}
     ${stat("說話者未定", o.unknown_speakers)}${stat("譯註", o.notes)}${stat("人工修改", o.human_edits)}</div>
@@ -958,3 +958,17 @@ async function glossaryView(id) {
 }
 
 route();
+
+// How much of the user's own plan this book used (each plan differs, so a share of the window, not an amount).
+const PLAN_NAMES = {claude: "Claude 方案", codex: "Codex（ChatGPT 方案）"};
+const WINDOW_NAMES = {weekly: "每週", "5h": "5 小時", daily: "每日"};
+function planStat(pu) {
+  const parts = Object.entries(pu || {}).map(([src, p]) => {
+    const ws = Object.entries(p.windows || {}).map(([w, v]) =>
+      `${WINDOW_NAMES[w] || w}額度 ${(v.used * 100).toFixed(1)}%${v.resets ? `（中途重置 ${v.resets} 次）` : ""}`);
+    const t = p.tokens || {};
+    return `<div><b>${PLAN_NAMES[src] || src}</b>：${ws.length ? ws.join("、") : "沒有讀到額度"}<br><span class="small muted">${p.requests} 個請求，輸入 ${(t.input || 0).toLocaleString()} token（其中快取 ${(t.cache_read || 0).toLocaleString()}），輸出 ${(t.output || 0).toLocaleString()} token</span></div>`;
+  });
+  if (!parts.length) return "";
+  return `<div class="card stat"><span class="muted small">這本書用掉的方案額度</span>${parts.join("")}<span class="small muted">是你自己方案的百分比；同一時段帳號的其他用量也會算進去。</span></div>`;
+}

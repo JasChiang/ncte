@@ -74,7 +74,8 @@ def cost_report(conn: sqlite3.Connection, *, run_id: str | None = None, book_id:
     for k in ("cost_reported_usd", "cost_estimated_usd", "cost_unknown_estimate_usd"):
         tot[k] = round(tot[k], 6)
     out: dict[str, Any] = {"totals": tot, "by_stage": by_stage, "by_model": by_model,
-                           "by_cost_status": by_cost_status, "structured_modes": structured}
+                           "by_cost_status": by_cost_status, "structured_modes": structured,
+                           "plan_usage": plan_usage(rows)}
     if run_id:
         run = conn.execute("SELECT * FROM runs WHERE id=?", (run_id,)).fetchone()
         if run:
@@ -93,4 +94,58 @@ def cost_report(conn: sqlite3.Connection, *, run_id: str | None = None, book_id:
                 "units_per_minute": round(units / minutes, 2) if minutes else None,
                 "retries_per_100_units": round(tot["requests_with_retries"] / units * 100, 2) if units else None,
             }
+    return out
+
+
+RESET_JITTER = 120  # seconds: one window's reset time as reported request to request moves by a second or so
+
+
+def plan_usage(rows: list[Any]) -> dict[str, Any]:
+    """How much of a subscription plan (Claude, ChatGPT through Codex) these requests used, per source: the token
+    counts, and per window the share of the window used between the first and the last request (``usage["plan"]``,
+    0–1). A window that reset in between counts from 0 again (its reset time moved on). The share is the whole
+    account's: other use of the plan in the same hours is counted too; the first request's own share is not (the
+    plan is read after each request). Plans differ, so this is a share of the user's own plan, not an amount."""
+    out: dict[str, Any] = {}
+    for r in rows:
+        u = json.loads(r["usage_json"] or "{}")
+        plan = u.get("plan")
+        source = (plan or {}).get("source") or (r["provider"] if r["provider"] in ("claude", "codex") else None)
+        if not source:
+            continue
+        s = out.setdefault(source, {"requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0,
+                                                             "cache_write": 0, "reasoning": 0, "failed_tries": 0},
+                                    "_samples": {}})
+        s["requests"] += 1
+        t = s["tokens"]
+        t["input"] += int(u.get("prompt_tokens") or 0)
+        t["output"] += int(u.get("completion_tokens") or 0)
+        t["cache_read"] += int(u.get("cache_read_tokens") or 0)
+        t["cache_write"] += int(u.get("cache_write_tokens") or 0)
+        t["reasoning"] += int(u.get("reasoning_tokens") or 0)
+        t["failed_tries"] += sum(int(v or 0) for v in (u.get("failed_tries") or {}).values())
+        for name, w in ((plan or {}).get("windows") or {}).items():
+            if isinstance(w, dict) and isinstance(w.get("used"), (int, float)):
+                s["_samples"].setdefault(name, []).append((r["finished_at"] or r["created_at"] or "",
+                                                           float(w["used"]), w.get("resets_at")))
+    for s in out.values():
+        windows: dict[str, Any] = {}
+        for name, samples in s.pop("_samples").items():
+            samples.sort(key=lambda x: x[0])
+            groups: list[list[tuple[str, float, Any]]] = []
+            for smp in samples:
+                prev = groups[-1][-1][2] if groups else None
+                same = (groups and isinstance(smp[2], (int, float)) and isinstance(prev, (int, float))
+                        and abs(smp[2] - prev) <= RESET_JITTER) or (groups and smp[2] is None and prev is None)
+                if same:
+                    groups[-1].append(smp)
+                else:
+                    groups.append([smp])
+            used = 0.0
+            for i, g in enumerate(groups):
+                vals = [x[1] for x in g]
+                used += max(vals) - (min(vals) if i == 0 else 0.0)
+            windows[name] = {"used": round(used, 4), "resets": len(groups) - 1, "first": samples[0][1],
+                             "last": samples[-1][1], "samples": len(samples)}
+        s["windows"] = windows
     return out

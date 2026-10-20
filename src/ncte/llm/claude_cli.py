@@ -5,6 +5,18 @@ kept), the request's JSON is the user message: as close to a plain model call as
 Claude login. Nothing is billed through NCTE: ``cost_usd`` is 0. What the CLI reports as the call's list-price cost
 is kept in ``usage["list_cost_usd"]`` (with the token counts) so a run can say what it used.
 
+How much of the plan is used: the call prints its events (``--output-format stream-json --verbose``), and one of them
+(``rate_limit_event``, seen 2026-10-20) gives the share used of each window (``unifiedWindows``: ``five_hour``,
+``seven_day``: ``utilization`` 0–1, ``resetsAt``). The last one goes to ``usage["plan"]`` in the same form as the
+ChatGPT plan's (``codex_cli``): ``{"windows": {"5h": {"used", "resets_at"}, "weekly": {…}}, "source": "claude"}``.
+The share is the whole account's (other use of Claude in the same hours counts too); without the event ``plan`` is
+left out and the answer stands.
+
+Each call runs in its own empty temporary directory: Claude Code reads the CLAUDE.md files of the directory it runs in
+and its parents even with ``--setting-sources ""`` (measured 2026-10-20: a call from inside a project carried about
+1,300 more input tokens and the model knew the project's name). ``--bare`` would skip them but takes only an API key,
+not the plan's login. The user's own ``~/.claude/CLAUDE.md`` is still read.
+
 A failed call is tried again later and the run says so before each wait (``log``). A usage limit lifts at a set time:
 it is asked again every quarter hour for up to eight hours, however many times that takes. Any other failure (the
 network, an overloaded service) goes down a ladder of growing waits that ends after about four hours. A call that can
@@ -16,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import tempfile
 import time
 from collections.abc import Callable
 from typing import Any
@@ -81,7 +94,7 @@ class ClaudeCLIClient:
     # ------------------------------------------------------------ requests
     def args(self, req: LLMRequest, system: str) -> list[str]:
         model = req.model[len(PREFIX):] if req.model.startswith(PREFIX) else req.model
-        out = [self.binary, "-p", "--model", model, "--output-format", "json", "--tools", "", "--system-prompt", system,
+        out = [self.binary, "-p", "--model", model, "--output-format", "stream-json", "--verbose", "--tools", "", "--system-prompt", system,
                "--no-session-persistence", "--strict-mcp-config", "--setting-sources", "",
                "--exclude-dynamic-system-prompt-sections"]
         if eff := effort_of(req):
@@ -131,8 +144,9 @@ class ClaudeCLIClient:
         while True:
             attempt += 1
             try:
-                proc = subprocess.run(self.args(req, system), input=user, capture_output=True, text=True,
-                                      timeout=self.timeout)
+                with tempfile.TemporaryDirectory(prefix="ncte-claude-") as work:  # no project's CLAUDE.md
+                    proc = subprocess.run(self.args(req, system), input=user, capture_output=True, text=True,
+                                          timeout=self.timeout, cwd=work)
             except subprocess.TimeoutExpired:
                 last = f"no answer within {self.timeout:.0f}s"
                 later(False)
@@ -143,10 +157,7 @@ class ClaudeCLIClient:
             if proc.returncode == USAGE_ERROR_EXIT or any(s in stderr.lower() for s in BAD_COMMAND):
                 raise FatalAPIError(f"Claude Code rejected the command (exit {proc.returncode}): {stderr[:200]}")
             text = (proc.stdout or "").strip()
-            try:
-                out = json.loads(text) if text else {}
-            except json.JSONDecodeError:
-                out = {}
+            out, plan = read_stream(text)
             failed = proc.returncode != 0 or not out or out.get("is_error") or out.get("subtype", "success") != "success"
             message = str(out.get("result") or stderr or text)[:500]
             if failed and any(s in message.lower() for s in NOT_LOGGED_IN):  # never in a successful answer
@@ -175,6 +186,46 @@ class ClaudeCLIClient:
             # the model ids the alias was really run on, as the result's per-model counts name them (when given)
             if isinstance(out.get("modelUsage"), dict) and out["modelUsage"]:
                 usage["models"] = [str(k) for k in out["modelUsage"]]
+            if plan:
+                usage["plan"] = plan
             return LLMResponse(content=result, model=req.model, provider="claude", generation_id=out.get("session_id"),
                                usage=usage, cost_usd=0.0, latency_ms=int((time.monotonic() - start) * 1000),
                                finish_reason="stop", attempts=attempt, structured_mode=req.structured_mode)
+
+
+WINDOW_NAMES = {"five_hour": "5h", "seven_day": "weekly"}  # the names the ChatGPT plan's windows get (codex_cli)
+
+
+def read_stream(text: str) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """(the ``result`` event, or one JSON object as ``--output-format json`` prints it; the plan's usage from the last
+    ``rate_limit_event``, or None)."""
+    result: dict[str, Any] = {}
+    plan: dict[str, Any] | None = None
+    for line in text.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        kind = ev.get("type")
+        if kind == "result" or (kind is None and not result):
+            result = ev
+        elif kind == "rate_limit_event":
+            plan = plan_of(ev.get("rate_limit_info")) or plan
+    if not result:
+        try:
+            whole = json.loads(text) if text else {}
+            result = whole if isinstance(whole, dict) else {}
+        except ValueError:
+            pass
+    return result, plan
+
+
+def plan_of(info: Any) -> dict[str, Any] | None:
+    windows: dict[str, Any] = {}
+    for key, w in ((info or {}).get("unifiedWindows") or {}).items() if isinstance(info, dict) else ():
+        if isinstance(w, dict) and isinstance(w.get("utilization"), (int, float)):
+            windows[WINDOW_NAMES.get(key, key)] = {"used": round(float(w["utilization"]), 6),
+                                                   "resets_at": w.get("resetsAt")}
+    return {"windows": windows, "source": "claude"} if windows else None

@@ -423,3 +423,47 @@ def _book(conn, cfg, fixtures):
     from ncte.library import import_book
 
     return (import_book(conn, cfg, fixtures["basic"])[0],)
+
+
+def test_the_plans_usage_comes_from_the_last_rate_limit_event(monkeypatch):
+    """`--output-format stream-json --verbose` prints events; ``rate_limit_event`` says how much of each window the
+    account has used (seen 2026-10-20). The last one goes to ``usage["plan"]`` as the ChatGPT plan's does."""
+    def ev(u5: float, u7: float) -> dict[str, Any]:
+        return {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed", "unifiedWindows": {
+            "five_hour": {"utilization": u5, "resetsAt": 1792485600},
+            "seven_day": {"utilization": u7, "resetsAt": 1792562400}}}}
+    result = {"type": "result", "subtype": "success", "is_error": False, "result": "",
+              "structured_output": {"translations": []}, "usage": {"input_tokens": 2, "output_tokens": 5},
+              "total_cost_usd": 0.01, "session_id": "s-1"}
+    lines = [{"type": "system", "subtype": "init"}, ev(0.28, 0.68), {"type": "assistant"}, ev(0.29, 0.69), result]
+    seen: list[list[str]] = []
+
+    def run(args: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        seen.append(args)
+        return subprocess.CompletedProcess(args, 0, "\n".join(json.dumps(x) for x in lines) + "\n", "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    r = ClaudeCLIClient().complete(_req())
+    a = seen[0]
+    assert a[a.index("--output-format") + 1] == "stream-json" and "--verbose" in a
+    assert r.content == '{"translations": []}' and r.generation_id == "s-1"
+    assert r.usage["plan"] == {"windows": {"5h": {"used": 0.29, "resets_at": 1792485600},
+                                           "weekly": {"used": 0.69, "resets_at": 1792562400}}, "source": "claude"}
+    lines[:] = [result]  # no event: no plan, the answer stands
+    assert "plan" not in ClaudeCLIClient().complete(_req()).usage
+
+
+def test_each_call_runs_in_an_empty_directory(monkeypatch):
+    """Claude Code reads the CLAUDE.md of the directory it runs in (measured: about 1,300 more tokens from inside a
+    project, and the model knew the project): each call runs in its own empty temporary directory."""
+    from pathlib import Path
+    cwds: list[str] = []
+
+    def run(args: list[str], *, cwd: str | None = None, **kw: Any) -> subprocess.CompletedProcess[str]:
+        assert cwd and Path(cwd).is_dir() and not any(Path(cwd).iterdir())
+        cwds.append(cwd)
+        return _ok()
+
+    monkeypatch.setattr(subprocess, "run", run)
+    ClaudeCLIClient().complete(_req())
+    assert cwds and not Path(cwds[0]).exists()

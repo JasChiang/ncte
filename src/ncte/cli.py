@@ -537,6 +537,12 @@ def report(run_id: Annotated[str | None, typer.Option("--run-id")] = None,
     typer.echo(f"report: {path}")
     typer.echo(f"  requests {t['requests']}, cost upper bound ${t['total_cost_upper_usd']:.6f} "
                f"(reported ${t['cost_reported_usd']:.6f}, unknown-billing est ${t['cost_unknown_estimate_usd']:.6f})")
+    for source, pu in cost["plan_usage"].items():
+        shares = ", ".join(f"{name} +{w['used'] * 100:.1f}%" + (f" ({w['resets']} reset)" if w["resets"] else "")
+                           for name, w in pu["windows"].items()) or "no plan reading"
+        tk = pu["tokens"]
+        typer.echo(f"  {source} plan: {shares}; {pu['requests']} requests, tokens in {tk['input']:,} "
+                   f"(cache read {tk['cache_read']:,}), out {tk['output']:,}")
     typer.echo(f"  QA findings {qa['findings_total']}, needs review {len(qa['needs_review'])}, "
                f"untranslated {len(qa['untranslated'])}")
 
