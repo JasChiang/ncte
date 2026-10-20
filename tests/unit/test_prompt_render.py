@@ -120,7 +120,8 @@ def test_review_knows_tone_voice_other_and_two_readings():
     rv = load_prompt("review").render({"items": []})
     pr = load_prompt("proofread").render({"paragraphs": []})
     for kind in ("tone", "voice"):
-        assert _bullet(rv, kind).split("：", 1)[1] == _bullet(pr, kind).split("：", 1)[1]
+        # the same rule; each names its own output field for the rewrite (review `suggestion`, proofread `fix`)
+        assert _bullet(rv, kind).split("：", 1)[1].replace("`suggestion`", "`fix`") == _bullet(pr, kind).split("：", 1)[1]
     assert "`other`" in rv
     assert "說不出原文為什麼不能是目前的讀法" in rv and "不要報成 `mistranslation`" in rv
     for kind in ("tone", "voice", "other"):
