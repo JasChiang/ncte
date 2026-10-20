@@ -13,6 +13,7 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from ..epub.units import source_form
 from ..errors import ContentBlockedError
 
 MIN_PART = 4  # units: a refused part this small is not split further
@@ -89,7 +90,7 @@ def merge_outputs[M: BaseModel](parts: list[M]) -> M:
     # the same person met again: the same words, and the same "another person" mark and time (「母親」 of a past life
     # is not the mother of the present; two people under one word in one time are beyond what the words can tell)
     def same_person(c: dict[str, Any]) -> tuple[str, bool, str]:
-        return c["name_ja"], bool(c.get("other_person")), str(c.get("period") or "").strip()
+        return source_form(c["name_ja"]), bool(c.get("other_person")), str(c.get("period") or "").strip()
 
     by_name: dict[tuple[str, bool, str], dict[str, Any]] = {}
     for i, d in enumerate(dumped):

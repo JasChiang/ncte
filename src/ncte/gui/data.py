@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 from typing import Any
 
 from ..epub.matter import book_matter, toc_labels
-from ..epub.units import RUBY_NOTATION, match_text
+from ..epub.units import RUBY_NOTATION, match_text, source_form
 from ..library import Book
 from ..memory.address import find_forms, name_forms
 from ..series import SERIES_SCOPE
@@ -268,7 +268,7 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
         paragraph than the one it starts at), else the paragraph at that position."""
         if at is None or at < 0:
             return None
-        key = RUBY.sub("", plain(quote or "")).strip("「」『』　 ")[:12]
+        key = source_form(quote or "").strip("「」『』　 ")[:12]
         if key:
             for o in sorted(range(at - 3, at + 80), key=lambda o: abs(o - at)):
                 t = texts.get(o)

@@ -13,7 +13,7 @@ import re
 import sqlite3
 from typing import Any
 
-from ..epub.units import RUBY_NOTATION
+from ..epub.units import RUBY_NOTATION, in_source, source_form
 
 FIRST_PERSON = re.compile(r"(私|俺|僕|わたし|あたし|ぼく|ボク|オレ|わたくし|あたい)(?!達|たち)")
 _QUOTED = re.compile(r"「[^」]*」|『[^』]*』|（[^）]*）|\([^)]*\)")
@@ -126,10 +126,10 @@ def settle_self_forms(forms: list[dict[str, str]], narrator: str | None, earlier
     before = {e["ja"]: e["zh"] for e in earlier if e["narrator_ref"] == narrator}
     out: dict[str, str] = {}
     for f in forms:
-        ja, zh = f["ja"].strip(), f["zh"].strip()
+        ja, zh = source_form(f["ja"]), f["zh"].strip()  # 吾輩《わがはい》 as shown is the text's 吾輩
         if zh in ("自己", "自身"):  # a reflexive (自分 → 自己), not the narrator's voice
             continue
-        if ja and zh and ja in text and ja not in out:
+        if zh and in_source(ja, text) and ja not in out:
             out[ja] = before.get(ja) or zh
     return [{"ja": ja, "zh": zh} for ja, zh in out.items()]
 

@@ -150,6 +150,23 @@ def match_text(text: str) -> str:
     return RUBY_NOTATION.sub("", PH_RE.sub("", text))
 
 
+_SPACING = re.compile(r"\s+")  # \s takes the ideographic space (U+3000) too
+
+
+def source_form(text: str) -> str:
+    """A string the model gives as the book's words (a name, an alias, a term, a quote) as the book has it: the
+    reading it may have been shown with dropped (婆《ばあ》 → 婆), placeholders dropped, the ends trimmed — the same
+    rule as ``match_text``, so the author's own 《亡雄の旅団》 stays. What is kept of such a string is this form."""
+    return match_text(text).strip()
+
+
+def in_source(quoted: str, source: str) -> bool:
+    """Whether a string the model gives as the book's words occurs in ``source`` (a unit's text, or several joined):
+    both compared as ``match_text`` has them, spacing ignored. An empty string is not found."""
+    q = _SPACING.sub("", match_text(quoted))
+    return bool(q) and q in _SPACING.sub("", match_text(source))
+
+
 def _has_block_descendant(el: Any) -> bool:
     for d in el.iterdescendants():
         if isinstance(d.tag, str) and local(d) in BLOCK_TAGS:

@@ -16,7 +16,7 @@ import sqlite3
 from collections import Counter
 from typing import Any
 
-from ..epub.units import match_text
+from ..epub.units import match_text, source_form
 from ..llm.schemas import HouseStyleOutput
 from ..memory.address import calls_by
 from ..memory.repository import character_basics
@@ -132,9 +132,10 @@ def apply(conn: sqlite3.Connection, book_id: str, parsed: HouseStyleOutput, refs
     voices: dict[str, str] = {}
     for h in parsed.habits:
         cid = refs.get(h.ref)
-        if not cid or not h.habit_ja.strip() or not h.render_zh.strip():
+        habit = source_form(h.habit_ja)  # the book's words, without a reading they were quoted with
+        if not cid or not habit or not h.render_zh.strip():
             continue
-        line = f"「{h.habit_ja.strip()}」譯作「{h.render_zh.strip()}」" + (f"（{h.note.strip()}）" if h.note.strip() else "")
+        line = f"「{habit}」譯作「{h.render_zh.strip()}」" + (f"（{h.note.strip()}）" if h.note.strip() else "")
         voices[names[cid]] = (voices.get(names[cid], "") + "；" + line).lstrip("；")
     new = SeriesStyle(honorifics=parsed.honorifics, honorifics_reason=parsed.honorifics_reason.strip()[:300], rules=[r.strip() for r in parsed.rules if r.strip()][:MAX_RULES],
                       voices=voices, notes=style.notes, auto=True)

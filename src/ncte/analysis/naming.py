@@ -13,7 +13,7 @@ import re
 import sqlite3
 from typing import Any
 
-from ..epub.units import match_text
+from ..epub.units import match_text, source_form
 from ..llm.schemas import NamingOutput
 from ..memory.db import utcnow
 from ..memory.repository import character_basics, pair_relations
@@ -226,7 +226,7 @@ def apply_naming(conn: sqlite3.Connection, book_id: str, payload: dict[str, Any]
             stats["rejected"] += 1
             continue
         form, other = src["name_ja"], src["overlaps_with"]
-        rename = {"action": "rename", "name_ja": ch.name_ja.strip()[:24] or form, "name_zh": _clean(ch.name_zh) or form,
+        rename = {"action": "rename", "name_ja": source_form(ch.name_ja)[:24] or form, "name_zh": _clean(ch.name_zh) or form,
                   "form": form, "other_id": src["_also_id"]}
         rename["zh"] = f"改名為「{rename['name_zh']}」，「{form}」設為與{other}共用的稱呼"
         merge = {"action": "merge", "other_id": src["_also_id"], "zh": f"與{other}是同一人（合併）"}

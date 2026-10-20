@@ -23,7 +23,7 @@ import re
 import sqlite3
 from typing import Any
 
-from ..epub.units import match_text
+from ..epub.units import match_text, source_form
 from ..llm.schemas import TermsOutput
 from ..memory.db import Transaction
 from ..memory.terms import human_terms, set_model_stages
@@ -122,7 +122,7 @@ def take_candidates(conn: sqlite3.Connection, book_id: str, parsed: Any, lookup:
     known = known_terms(conn, book_id)
     out: list[str] = []
     for c in parsed.candidates:
-        term = match_text(c.ja or "").strip(" 　「」『』")
+        term = source_form(c.ja or "").strip(" 　「」『』")
         cited = [x.strip() for x in c.evidence]
         if (len(term) < 2 or term in known or term in out or not cited or any(x not in lookup["_ev"] for x in cited)
                 or whole.count(term) < MIN_COUNT):

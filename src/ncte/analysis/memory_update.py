@@ -1,17 +1,17 @@
 """Validate and persist an LLM memory update (spec §5.5, §6.2).
 
 Facts are stored only when every evidence unit belongs to the scene and the ``evidence_quote`` is
-found verbatim (whitespace/ruby-insensitive) in those units. Rejections are logged in
+found verbatim (whitespace/ruby-insensitive, ``in_source``) in those units. Rejections are logged in
 ``memory_rejections``; nothing unverified becomes memory.
 """
 
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
 from typing import Any
 
+from ..epub.units import in_source, source_form
 from ..llm.schemas import MemoryUpdateOutput
 from ..memory import repository as repo
 from ..memory.db import utcnow
@@ -19,12 +19,6 @@ from ..memory.retrieval import index_memory
 from ..series import SERIES_SCOPE, unit_pos, volume_of
 from .dialogue import clean
 from .scene import PRONOUNS, scene_rows
-
-_WS = re.compile(r"[\s　]+")
-
-
-def _norm(t: str) -> str:
-    return _WS.sub("", clean(t))
 
 
 def build_memory_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row,
@@ -142,8 +136,8 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         if not ev or len(ev) != len(f.evidence_unit_ids):
             rej(f.model_dump(), "evidence_unit_ids missing or outside the current scene")
             continue
-        quote = _norm(f.evidence_quote)
-        if len(quote) < 2 or quote not in _norm("".join(text_of[u] for u in ev)):
+        quote = source_form(f.evidence_quote)
+        if len(quote) < 2 or not in_source(quote, "".join(text_of[u] for u in ev)):
             rej(f.model_dump(), "evidence_quote not found verbatim in evidence units")
             continue
         if f.subject_ref.startswith("c_") and f.subject_ref not in chars:
@@ -157,7 +151,7 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
             "evidence_unit_ids_json, evidence_quote, first_revealed_unit_id, first_revealed_ordinal, source_viewpoint, "
             "scene_id, run_id, created_at, object_ref, period) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (fid, book_id, f.subject_ref, f.predicate[:200], f.object[:400], f.fact_type, f.certainty,
-             json.dumps(f.model_dump(), ensure_ascii=False), json.dumps(ev), f.evidence_quote[:400], first,
+             json.dumps(f.model_dump(), ensure_ascii=False), json.dumps(ev), quote[:400], first,
              ordinal[first], f.source_viewpoint, sid, run_id, utcnow(), obj_ref, f.period.strip()[:20] or None))
         subj = chars[f.subject_ref]["canonical_name"] if f.subject_ref in chars else f.subject_ref
         index_memory(conn, book_id, "fact", fid, ordinal[first],
@@ -183,18 +177,19 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
 
     for g in parsed.glossary_candidates:
         ev = [u for u in g.evidence_unit_ids if u in text_of]
-        if not ev or not any(g.source_term in clean(text_of[u]) for u in ev):
+        term = source_form(g.source_term)  # a term quoted with its reading (婆《ばあ》) is the text's 婆
+        if not ev or not any(in_source(term, text_of[u]) for u in ev):
             rej(g.model_dump(), "glossary source_term not found verbatim in evidence units")
             continue
-        if len(g.source_term.strip()) < 2:  # which words need a fixed rendering is the model's reading
+        if len(term) < 2:  # which words need a fixed rendering is the model's reading
             rej(g.model_dump(), "generic or single-character term is not a glossary term")
             continue
-        first = min((u for u in ev if g.source_term in clean(text_of[u])), key=lambda u: ordinal[u])
-        if g.category == "character" and len(g.source_term) <= 24 and g.source_term not in PRONOUNS:
-            _, created = repo.upsert_character(conn, book_id, g.source_term, name_zh=g.target_term, aliases=[],
+        first = min((u for u in ev if in_source(term, text_of[u])), key=lambda u: ordinal[u])
+        if g.category == "character" and len(term) <= 24 and term not in PRONOUNS:
+            _, created = repo.upsert_character(conn, book_id, term, name_zh=g.target_term, aliases=[],
                                                unit_id=first, ordinal=ordinal[first], origin="memory_update")
             stats["characters"] += int(created)
-        if repo.ensure_glossary(conn, book_id, g.source_term, g.target_term, category=g.category,
+        if repo.ensure_glossary(conn, book_id, term, g.target_term, category=g.category,
                                 origin="memory_update", first_unit_id=first):
             stats["glossary"] += 1
 
@@ -202,29 +197,30 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
     from ..memory.entities import link
 
     stats["name_links"] = 0
-    scene_plain = "".join(clean(t) for t in text_of.values())
+    scene_plain = "".join(text_of.values())
     for nl in parsed.name_links:
         ev = [u for u in nl.evidence_unit_ids if u in text_of]
+        term, same_as = source_form(nl.term), source_form(nl.same_as)
         known_terms = {r[0] for r in conn.execute(f"SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND source_term IN "
-                                                  "(?,?)", (book_id, nl.term, nl.same_as))}
-        if not ev or _norm(nl.evidence_quote) not in _norm("".join(text_of[u] for u in ev)):
+                                                  "(?,?)", (book_id, term, same_as))}
+        if not ev or not in_source(nl.evidence_quote, "".join(text_of[u] for u in ev)):
             rej(nl.model_dump(), "name link evidence_quote not found verbatim")
             continue
-        if nl.term not in scene_plain or (nl.same_as not in scene_plain and nl.same_as not in known_terms):
+        if not in_source(term, scene_plain) or (not in_source(same_as, scene_plain) and same_as not in known_terms):
             rej(nl.model_dump(), "name link terms must occur verbatim in the scene (or be known forms)")
             continue
-        if nl.term == nl.same_as or len(nl.term.strip()) < 2:
+        if term == same_as or len(term) < 2:
             rej(nl.model_dump(), "invalid name link term")
             continue
         first = min(ev, key=lambda u: ordinal[u])
-        if nl.term not in known_terms and nl.term_zh.strip():
+        if term not in known_terms and nl.term_zh.strip():
             target_cat = conn.execute(f"SELECT category FROM glossary WHERE {SERIES_SCOPE} AND source_term=?",
-                                      (book_id, nl.same_as)).fetchone()
-            repo.ensure_glossary(conn, book_id, nl.term, nl.term_zh.strip()[:24],
+                                      (book_id, same_as)).fetchone()
+            repo.ensure_glossary(conn, book_id, term, nl.term_zh.strip()[:24],
                                  category=target_cat[0] if target_cat else "term", origin="memory_update",
                                  first_unit_id=first)
-        if link(conn, book_id, nl.term, nl.same_as, nl.form_type, origin="llm", unit_id=first,
-                quote=nl.evidence_quote, ordinal=ordinal[first], note=nl.note[:200] or None) == "accepted":
+        if link(conn, book_id, term, same_as, nl.form_type, origin="llm", unit_id=first,
+                quote=source_form(nl.evidence_quote), ordinal=ordinal[first], note=nl.note[:200] or None) == "accepted":
             stats["name_links"] += 1
 
     # who calls whom what, with the rendering the translation used (ADR-022): the model's reading, linked to the line
@@ -240,18 +236,18 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
                          "book_id=? AND scene_id=?", (book_id, sid)).fetchall()
     for at in parsed.address_terms:
         ev = [u for u in at.evidence_unit_ids if u in text_of]
-        quote = _norm(at.evidence_quote)
-        term = clean(at.term).strip()
+        quote = source_form(at.evidence_quote)
+        term = source_form(at.term)
         if at.speaker_ref not in chars or at.addressee_ref not in chars:
             rej(at.model_dump(), "address term: speaker/addressee must be known character ids")
             continue
-        if not ev or len(quote) < 2 or quote not in _norm("".join(text_of[u] for u in ev)) \
-                or _norm(at.term) not in quote or len(term) < 2:
+        if not ev or len(quote) < 2 or not in_source(quote, "".join(text_of[u] for u in ev)) \
+                or not in_source(term, quote) or len(term) < 2:
             rej(at.model_dump(), "address term: term/evidence_quote not found verbatim")
             continue
         # the line(s) the evidence is in: a use observed there (counted once per line)
-        said_in = [ln for ln in lines if ln["unit_id"] in ev and _norm(at.term) in _norm(ln["quote_text"])
-                   and (quote in _norm(ln["quote_text"]) or _norm(ln["quote_text"]) in quote)]
+        said_in = [ln for ln in lines if ln["unit_id"] in ev and in_source(term, ln["quote_text"])
+                   and (in_source(quote, ln["quote_text"]) or in_source(ln["quote_text"], quote))]
         # a pronoun (「あなた」「お前」) is kept per speaker → addressee, but its rendering (妳／你／您／老公 …)
         # depends on who is addressed: naming decides it, the memory model's guess is not kept
         pronoun = term in PRONOUNS | ADDRESS_PRONOUNS
@@ -262,7 +258,7 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
                                  ordinal=ordinal[ln["unit_id"] if ln else first], unit_id=ln["unit_id"] if ln else first,
                                  origin="llm", certainty="explicit" if stated else "inferred",
                                  form_zh=None if pronoun else (at.term_zh.strip()[:24] or None),
-                                 quote=at.evidence_quote, note=at.note[:200] or None,
+                                 quote=quote, note=at.note[:200] or None,
                                  utterance_id=ln["id"] if ln else None)
         row = conn.execute("SELECT * FROM address_terms WHERE id=?", (rid,)).fetchone()
         usage = "self" if at.speaker_ref == at.addressee_ref else at.usage
@@ -281,14 +277,14 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
     stats["wordplay"] = 0
     for w in parsed.wordplay:
         src = text_of.get(w.unit_id)
-        if src is None or not w.term.strip() or clean(w.term).strip() not in clean(src) \
-                or (w.evidence_quote and _norm(w.evidence_quote) not in _norm(src)):
+        wq = source_form(w.evidence_quote)
+        if src is None or not in_source(w.term, src) or (wq and not in_source(wq, src)):
             rej(w.model_dump(), "wordplay: term/quote not found verbatim in the unit")
             continue
         conn.execute("INSERT INTO reader_notes(book_id, unit_id, scene_id, term, explanation, note_zh, evidence_quote, "
                      "origin, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                     (book_id, w.unit_id, sid, clean(w.term).strip()[:60], w.explanation.strip()[:300],
-                      w.note_zh.strip()[:120] or None, w.evidence_quote[:300] or None, "llm", utcnow()))
+                     (book_id, w.unit_id, sid, source_form(w.term)[:60], w.explanation.strip()[:300],
+                      w.note_zh.strip()[:120] or None, wq[:300] or None, "llm", utcnow()))
         stats["wordplay"] += 1
 
     stats["genders"] = apply_genders(conn, book_id, sid, text_of, ordinal, parsed.genders, rej)
@@ -298,7 +294,8 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         if rel.a_ref not in chars or rel.b_ref not in chars or rel.a_ref == rel.b_ref or not rel.relation.strip():
             rej(rel.model_dump(), "relation between unknown characters")
             continue
-        if not ev or _norm(rel.evidence_quote) not in _norm("".join(text_of[u] for u in ev)) or len(_norm(rel.evidence_quote)) < 2:
+        rq = source_form(rel.evidence_quote)
+        if not ev or not in_source(rq, "".join(text_of[u] for u in ev)) or len(rq) < 2:
             rej(rel.model_dump(), "relation evidence_quote not found verbatim in evidence units")
             continue
         first = min(ev, key=lambda u: ordinal[u])
@@ -308,7 +305,7 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
                      "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                      (book_id, sid, rel.a_ref, rel.b_ref, repo.at_period(rel.relation.strip()[:20], when),
                       repo.at_period(rel.a_is.strip()[:12], when) or None, repo.at_period(rel.b_is.strip()[:12], when) or None,
-                      rel.kind, json.dumps(ev), rel.evidence_quote[:300], ordinal[first], run_id, utcnow(), when or None))
+                      rel.kind, json.dumps(ev), rq[:300], ordinal[first], run_id, utcnow(), when or None))
         stats["relation_notes"] += 1
 
     stats["group_members"] = 0
@@ -318,22 +315,24 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         if grp.group_ref not in chars or not members:
             rej(grp.model_dump(), "group or members not known characters")
             continue
-        if not ev or len(_norm(grp.evidence_quote)) < 2 or _norm(grp.evidence_quote) not in _norm("".join(text_of[u] for u in ev)):
+        gq = source_form(grp.evidence_quote)
+        if not ev or len(gq) < 2 or not in_source(gq, "".join(text_of[u] for u in ev)):
             rej(grp.model_dump(), "group evidence_quote not found verbatim in evidence units")
             continue
         for m in members:
             conn.execute("INSERT OR IGNORE INTO group_members(group_id, member_id, book_id, reason, created_at, scene_id, "
-                         "origin) VALUES (?,?,?,?,?,?,?)", (grp.group_ref, m, book_id, grp.evidence_quote[:200], utcnow(), sid, "read"))
+                         "origin) VALUES (?,?,?,?,?,?,?)", (grp.group_ref, m, book_id, gq[:200], utcnow(), sid, "read"))
             stats["group_members"] += 1
 
     for p in parsed.prop_states:
-        if clean(p.name_ja) not in "".join(clean(t) for t in text_of.values()):
+        prop = source_form(p.name_ja)  # the source's Japanese, without a reading it was quoted with
+        if not in_source(prop, scene_plain):
             rej(p.model_dump(), "prop not mentioned in scene")
             continue
         holder = p.holder_ref if p.holder_ref in chars else None
         conn.execute("INSERT INTO prop_states(book_id, name_ja, holder_character_id, evidence_unit_ids_json, "
                      "horizon_ordinal, scene_id, created_at, period) VALUES (?,?,?,?,?,?,?,?)",
-                     (book_id, p.name_ja, holder, json.dumps([u for u in p.evidence_unit_ids if u in text_of]),
+                     (book_id, prop, holder, json.dumps([u for u in p.evidence_unit_ids if u in text_of]),
                       scene["end_ordinal"], sid, utcnow(), p.period.strip()[:20] or None))
         stats["props"] += 1
 
@@ -356,8 +355,8 @@ def apply_genders(conn: sqlite3.Connection, book_id: str, sid: str, text_of: dic
     n = 0
     for gd in genders:
         ev = [u for u in gd.evidence_unit_ids if u in text_of]
-        quote = _norm(gd.evidence_quote)
-        if gd.character_ref not in chars or not ev or not quote or quote not in _norm("".join(text_of[u] for u in ev)):
+        quote = source_form(gd.evidence_quote)
+        if gd.character_ref not in chars or not ev or not in_source(quote, "".join(text_of[u] for u in ev)):
             if rej is not None:
                 rej(gd.model_dump(), "gender: unknown character or evidence_quote not found verbatim")
             else:
@@ -367,6 +366,6 @@ def apply_genders(conn: sqlite3.Connection, book_id: str, sid: str, text_of: dic
         # goes to the second look
         certainty = "explicit" if gd.certainty == "explicit" else "inferred"
         repo.set_gender(conn, book_id, gd.character_ref, gd.gender, ordinal=min(ordinal[u] for u in ev),
-                        quote=gd.evidence_quote, origin="llm", certainty=certainty)
+                        quote=quote, origin="llm", certainty=certainty)
         n += 1
     return n

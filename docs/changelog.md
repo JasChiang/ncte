@@ -1056,3 +1056,8 @@ open workspace/eval/<timestamp>/report.html
 - 讀場景、記憶整理的提示詞：物品名稱寫原文的日文、照原文用字、不譯成中文（模型寫成「學校指定泳裝」而被退回）。
 - 測試：`tests/integration/test_ruby_names.py`（新）。656 passed、4 skipped。
 
+## 模型的字串一律去掉讀音後比對原文（2026-10-21，分支 in-source-2026-10-21，自 2698cc3）
+- 背景：讀音處理過兩次（10/15 名字比對譯名表時去掉原文的讀音；ADR-052 讀音改用專用記號、模型看到「漢字《かな》」），但「模型回答的字串」和原文比對的地方沒有全部套用同一條規則：新人物名字、別名、其他稱呼、物品、事實與名字連結的引用、敘述者自稱等十幾處有的去讀音、有的沒有。10/21 一個連讀音照抄的名字被判成「原文沒有」，連帶退回四筆。
+- 改法：`epub/units.source_form`、`in_source`（同 `match_text` 的規則；作者自己的《》不當讀音）。`analysis/memory_update`、`scene`、`narration`、`split_read`、`terms`、`naming`、`house_style`、網頁找證據段落的地方全部改用它；存下的名字、詞、引用都是去掉讀音的形式。
+- 測試：`tests/integration/test_in_source.py`（16 種檢查 × 帶讀音照收／原文沒有照退；分段讀時同一人帶不帶讀音合成一張卡；作者的《》保留）。改前 34 個裡 12 個失敗。690 passed、4 skipped。
+

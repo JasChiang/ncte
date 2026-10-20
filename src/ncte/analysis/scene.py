@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Config
+from ..epub.units import in_source, match_text, source_form
 from ..llm.schemas import SceneAnalysisOutput
 from ..memory import repository as repo
 from ..memory import visibility as vis
@@ -390,7 +391,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     rows = scene_rows(conn, book_id, sid)
     texts = _unit_texts(rows)
     unit_text = {t.id: t.text for t in texts}
-    scene_text = "\n".join(unit_text.values())
+    scene_text = match_text("\n".join(unit_text.values()))  # what the model's words are looked for in
     stats = {"new_characters": 0, "rejected": 0, "explicit": 0, "inferred": 0, "unknown": 0, "examples": 0,
              "human_kept": 0}
     known = vis.visible_characters(conn, book_id, scene["start_ordinal"] - 1)
@@ -412,15 +413,15 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         existing_alias = repo.alias_map(repo.characters(conn, book_id))
         reveals: list[tuple[str, str, str, Any, list[str]]] = []
         for nc in parsed.new_characters:
-            name = clean(nc.name_ja).strip()  # a name quoted with its reading (婆《ばあ》) is the text's 婆
+            name = source_form(nc.name_ja)  # a name quoted with its reading (婆《ばあ》) is the text's 婆
             ev_ids = [u for u in nc.evidence_unit_ids if u in unit_text]
             if not name or len(name) > MAX_NAME_LEN or any(ch in name for ch in "「」『』") or name in PRONOUNS:
                 rej(nc.model_dump(), "invalid character name")
                 continue
-            if not any(name in unit_text[u] for u in ev_ids):
+            if not any(in_source(name, unit_text[u]) for u in ev_ids):
                 rej(nc.model_dump(), "name_ja not found verbatim in evidence units (possible hallucination)")
                 continue
-            first = next(t for t in texts if name in t.text)
+            first = next(t for t in texts if in_source(name, t.text))
             if name not in existing_alias:
                 from ..memory.entities import character_for_form
 
@@ -448,16 +449,18 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 continue
             # the model says what each alias is; a common noun (「少女」「兵士」) names anyone and is not kept
             # (the generic word list stays as a check for the model's omissions)
-            common = {k.ja.strip() for k in nc.alias_kinds if k.kind == "common"}
-            aliases = [a for a in nc.aliases_ja if a and a != name and len(a) <= MAX_NAME_LEN and a not in PRONOUNS
-                       and a not in common
-                       and _standalone(a, scene_text, [name, *existing_alias, *(x.name_ja for x in parsed.new_characters)])]
+            common = {source_form(k.ja) for k in nc.alias_kinds if k.kind == "common"}
+            aliases = [a for a in dict.fromkeys(source_form(x) for x in nc.aliases_ja)
+                       if a and a != name and len(a) <= MAX_NAME_LEN and a not in PRONOUNS and a not in common
+                       and _standalone(a, scene_text, [name, *existing_alias,
+                                                       *(source_form(x.name_ja) for x in parsed.new_characters)])]
             proposed_zh = nc.proposed_name_zh.strip()[:MAX_NAME_LEN] or None
             # described first and named in the same scene (「長い銀髪の美しい女性」 … 「エレナ」): the model marks the
             # words it was introduced by as a description and the name among the aliases; the person is known by the
             # name, the description stays an alias
-            real = next((k.ja.strip() for k in nc.alias_kinds if k.kind == "name" and k.ja.strip() in aliases), None)
-            described = any(k.ja.strip() == name and k.kind == "description" for k in nc.alias_kinds)
+            real = next((source_form(k.ja) for k in nc.alias_kinds if k.kind == "name" and source_form(k.ja) in aliases),
+                        None)
+            described = any(source_form(k.ja) == name and k.kind == "description" for k in nc.alias_kinds)
             if real and described and real not in existing_alias:
                 aliases = [name, *(a for a in aliases if a != real)]
                 name, proposed_zh = real, None
@@ -504,10 +507,10 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         # reading; the program checks the words are in the scene, standing alone, and not another person's name.
         # Known from here on (the link records where), so they are never shown before this scene.
         for of in parsed.other_forms:
-            form, who = of.ja.strip(), ref_map.get(of.ref)
+            form, who = source_form(of.ja), ref_map.get(of.ref)
             row = conn.execute("SELECT canonical_name, aliases_json FROM characters WHERE id=?", (who,)).fetchone() \
                 if who else None
-            ev = [u for u in of.evidence_unit_ids if u in unit_text and form in unit_text[u]]
+            ev = [u for u in of.evidence_unit_ids if u in unit_text and in_source(form, unit_text[u])]
             if row is None or of.kind == "common" or not 2 <= len(form) <= MAX_NAME_LEN or form in PRONOUNS \
                     or any(ch in form for ch in "「」『』"):
                 rej(of.model_dump(), "invalid form of a known character")
@@ -581,9 +584,9 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 near.append(told[last + 1])
 
         def ok(tag: str, cid: str) -> bool:  # the words are there, outside quotes, and name the speaker
-            words = _QUOTED.sub("", clean(tag)).strip(" 　。、")
+            words = _QUOTED.sub("", source_form(tag)).strip(" 　。、")
             # a name, not part of a longer known name (「ミナミが言った」 does not name ミナ)
-            return bool(words) and any(words in n for n in near) and any(
+            return bool(words) and any(in_source(words, n) for n in near) and any(
                 nm and _standalone(nm, words, all_names) for nm in names_for(cid))
         return ok
 
@@ -624,8 +627,8 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         for item, reason in bad:
             rej(item, reason)
         for pr in parsed.props:
-            name = re.sub(r"[（(].*?[）)]", "", pr.name_ja or "").strip()  # 「魔剣（魔法で生成された大剣）」: the name
-            if name and name in scene_text:
+            name = re.sub(r"[（(].*?[）)]", "", source_form(pr.name_ja or "")).strip()  # 「魔剣（魔法で…）」: the name
+            if in_source(name, scene_text):
                 holder = ref_map.get(pr.holder_ref) if pr.holder_ref else None
                 props.append({"name_ja": name, "holder": holder,
                               "evidence_unit_ids": [u for u in pr.evidence_unit_ids if u in unit_text]})
