@@ -2,21 +2,29 @@
 
 Built like the Claude plan's client (``claude_cli``). The step's fixed rules replace Codex's own base instructions
 (``-c model_instructions_file=…``); the batch's conditional rules, a retry's correction and the request's JSON come on
-stdin; the step's JSON schema goes as ``--output-schema`` and the answer is read from the last-message file (``-o``).
+stdin; the step's JSON schema is written out after the fixed rules (it is fixed per step too) and the answer is read
+from the last-message file (``-o``). ``--output-schema`` is not used: measured 2026-10-20 with gpt-6.1-sol and
+gpt-6-sol at medium and high, Codex's constrained output broke a one-paragraph answer in about half of the tries
+whenever a field followed the translation (stray characters at the end of the text such as "W取", or blank space
+written until the 128,000-token output limit, half an hour per try); the same request with the schema in the
+instructions came back clean every time. NCTE validates the answer against the schema as for every source.
 The user's Codex settings and rules are not read (``--ignore-user-config``,
 ``--ignore-rules``), the sandbox is read-only and each call runs in its own empty temporary directory.
 
 Codex sends its own tool descriptions with every request: measured 2026-10-20 (codex-cli 0.162.1), a one-sentence
 request carried about 23,000 input tokens. Replacing the base instructions and turning off (``--disable``) every
-feature ``codex features list`` shows as enabled brought it to about 10,400, and two calls in a row read nothing from
-a cache. The feature list is asked once per client; if that fails nothing is turned off (one line in the log).
+feature ``codex features list`` shows as enabled brought it to about 10,400; leaving out the skills' usage
+instructions (``-c skills.include_instructions=false``) saved about 3,200 more. Cache reads happen only sometimes. The
+feature list is asked once per client; if that fails nothing is turned off (one line in the log).
 
 Nothing is billed through NCTE: ``cost_usd`` is 0. Codex reports token counts but no price, so ``list_cost_usd`` is 0
 too (there is no list price to convert with); the token counts are kept in ``usage``. How much of the plan is used
 comes from the session file Codex writes for the call (``~/.codex/sessions/…/rollout-…-<thread id>.jsonl``, written
 because the call is not ``--ephemeral``): its last ``rate_limits`` goes to ``usage["plan"]`` (``{"windows": {name:
 {"used": 0–1, "resets_at": epoch}}, "source": "codex"}``) and the file is removed (only that thread's). A missing or
-unreadable file leaves ``plan`` out and the answer stands.
+unreadable file leaves ``plan`` out and the answer stands. Tokens of tries that failed (read from their session
+file, or from the events printed before a timeout) are added to the counts and also kept as ``failed_tries`` — the plan
+was spent on them too.
 
 Failures follow the Claude plan's waits (``claude_cli``): a usage limit is asked again at a fixed interval, anything
 else goes down the same ladder; no login, or a command line Codex rejects, stops at once. What a failure looks like
@@ -93,13 +101,18 @@ def plan_usage(limits: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _last_rate_limits(text: str) -> dict[str, Any] | None:
+    return _last_found(text, "rate_limits")
+
+
+def _last_found(text: str, key: str) -> dict[str, Any] | None:
+    """The last object under ``key`` anywhere in a JSONL text."""
     found: dict[str, Any] | None = None
 
     def walk(x: Any) -> None:
         nonlocal found
         if isinstance(x, dict):
-            if isinstance(x.get("rate_limits"), dict):
-                found = x["rate_limits"]
+            if isinstance(x.get(key), dict):
+                found = x[key]
             for v in x.values():
                 if isinstance(v, (dict, list)):
                     walk(v)
@@ -201,7 +214,7 @@ class CodexCLIClient:
                         self.log(f"Codex：讀不到 `codex features list`，不關閉任何功能（每個請求的固定負擔較大）：{exc}")
             return self._features
 
-    def args(self, req: LLMRequest, instructions: Path, schema: Path | None, last: Path) -> list[str]:
+    def args(self, req: LLMRequest, instructions: Path, last: Path) -> list[str]:
         model = req.model[len(PREFIX):] if req.model.startswith(PREFIX) else req.model
         out = [self.binary, "exec", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules",
                "-s", "read-only"]
@@ -209,11 +222,9 @@ class CodexCLIClient:
         takes = self._efforts().get(model)
         if eff and (takes is None or eff in takes):  # a level the model does not take is not sent
             out += ["-c", f"model_reasoning_effort={_toml(eff)}"]
-        out += ["-c", f"model_instructions_file={_toml(str(instructions))}"]
+        out += ["-c", f"model_instructions_file={_toml(str(instructions))}", "-c", "skills.include_instructions=false"]
         for feature in self.features():
             out += ["--disable", feature]
-        if schema is not None:
-            out += ["--output-schema", str(schema)]
         return out + ["--json", "-o", str(last), "-m", model, "-"]
 
     split = staticmethod(ClaudeCLIClient.split)  # fixed rules → instructions; the batch's own rules → stdin first
@@ -255,17 +266,20 @@ class CodexCLIClient:
         except OSError:
             return []
 
-    def take_plan(self, thread: str | None) -> dict[str, Any] | None:
-        """The plan's usage from this thread's session file (its last ``rate_limits``); the file is removed."""
-        plan = None
+    def take_session(self, thread: str | None) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """(the plan's usage: the last ``rate_limits``, the tokens the thread used: its last ``total_token_usage``) from
+        this thread's session file; the file is removed."""
+        plan = tokens = None
         for path in self.session_files(thread or ""):
             try:
-                limits = _last_rate_limits(path.read_text(encoding="utf-8", errors="replace"))
+                text = path.read_text(encoding="utf-8", errors="replace")
+                limits = _last_rate_limits(text)
                 plan = (plan_usage(limits) if limits else None) or plan
+                tokens = _last_found(text, "total_token_usage") or tokens
             except OSError:
                 pass
             path.unlink(missing_ok=True)
-        return plan
+        return plan, tokens
 
     def complete(self, req: LLMRequest) -> LLMResponse:
         system, user = self.split(req)
@@ -296,19 +310,28 @@ class CodexCLIClient:
             work = base / "work"  # where codex runs: empty
             work.mkdir()
             instructions = base / "instructions.md"
-            instructions.write_text(system, encoding="utf-8")
-            schema = None
-            if req.json_schema:
-                schema = base / "schema.json"
-                schema.write_text(json.dumps(to_openai_strict(req.json_schema), ensure_ascii=False), encoding="utf-8")
+            instructions.write_text(system + schema_rule(req.json_schema), encoding="utf-8")
+            failed_tries: dict[str, int] = {}
+
+            def count_failed(thread: str | None) -> None:
+                try:
+                    _, tokens = self.take_session(thread)
+                except Exception:  # noqa: BLE001 — counting never fails the request
+                    tokens = None
+                for k, v in (tokens or {}).items():
+                    if isinstance(v, int) and k != "total_tokens":
+                        failed_tries[k] = failed_tries.get(k, 0) + v
+
             answer = base / "last_message.txt"
             while True:
                 attempt += 1
                 answer.unlink(missing_ok=True)
                 try:
-                    proc = subprocess.run(self.args(req, instructions, schema, answer), input=user,
+                    proc = subprocess.run(self.args(req, instructions, answer), input=user,
                                           capture_output=True, text=True, timeout=self.timeout, cwd=str(work))
-                except subprocess.TimeoutExpired:
+                except subprocess.TimeoutExpired as exc:
+                    out = exc.stdout.decode("utf-8", "replace") if isinstance(exc.stdout, bytes) else exc.stdout or ""
+                    count_failed(self.read_events(out)[1])
                     last = f"no answer within {self.timeout:.0f}s"
                     later(False)
                     continue
@@ -316,16 +339,18 @@ class CodexCLIClient:
                     raise FatalAPIError(f"Codex (`{self.binary}`) is not installed or not on PATH") from exc
                 stderr = (proc.stderr or "").strip()
                 usage_in, thread, errors = self.read_events(proc.stdout or "")
-                try:
-                    plan = self.take_plan(thread)  # also for a failed try: its session file is not left behind
-                except Exception:  # noqa: BLE001 — never lets the request fail
-                    plan = None
                 failed = proc.returncode != 0 or usage_in is None or bool(errors)
+                if failed:
+                    count_failed(thread)  # its session file is not left behind either
+                    plan = None
+                else:
+                    try:
+                        plan = self.take_session(thread)[0]
+                    except Exception:  # noqa: BLE001 — never lets the request fail
+                        plan = None
                 if failed and (proc.returncode == USAGE_ERROR_EXIT or any(s in stderr.lower() for s in BAD_COMMAND)):
                     raise FatalAPIError(f"Codex rejected the command (exit {proc.returncode}): {stderr[:300]}")
                 said = "\n".join([*errors, stderr]).strip()
-                if failed and "invalid schema" in said.lower():  # the same on every try
-                    raise FatalAPIError(f"Codex refused the step's JSON schema: {said[:300]}")
                 if failed and any(s in said.lower() for s in NOT_LOGGED_IN):  # never in a successful answer
                     raise FatalAPIError(f"Codex is not logged in (run `codex login`): {said[:300]}")
                 if failed:
@@ -338,19 +363,20 @@ class CodexCLIClient:
                     result = ""
                 if not result.strip():
                     raise ModelOutputError("empty answer")
-                if req.json_schema:  # the nulls written only because the strict form made every field required
-                    try:
-                        result = json.dumps(from_openai_answer(json.loads(result), req.json_schema), ensure_ascii=False)
-                    except ValueError:
-                        pass  # not JSON: NCTE's own parsing reports it
                 u = usage_in or {}
+
+                def n(key: str, u: dict[str, Any] = u) -> int:
+                    return int(u.get(key) or 0) + failed_tries.get(key, 0)
+
                 usage: dict[str, Any] = {
-                    "prompt_tokens": int(u.get("input_tokens") or 0),
-                    "completion_tokens": int(u.get("output_tokens") or 0),
-                    "reasoning_tokens": int(u.get("reasoning_output_tokens") or 0),
-                    "cache_read_tokens": int(u.get("cached_input_tokens") or 0),
-                    "cache_write_tokens": int(u.get("cache_write_input_tokens") or 0),
+                    "prompt_tokens": n("input_tokens"),
+                    "completion_tokens": n("output_tokens"),
+                    "reasoning_tokens": n("reasoning_output_tokens"),
+                    "cache_read_tokens": n("cached_input_tokens"),
+                    "cache_write_tokens": n("cache_write_input_tokens"),
                     "list_cost_usd": 0, "effort": effort_of(req)}
+                if failed_tries:
+                    usage["failed_tries"] = dict(failed_tries)
                 if plan:
                     usage["plan"] = plan
                 return LLMResponse(content=result.strip(), model=req.model, provider="codex", generation_id=thread,
@@ -358,52 +384,12 @@ class CodexCLIClient:
                                    finish_reason="stop", attempts=attempt, structured_mode=req.structured_mode)
 
 
-def to_openai_strict(schema: dict[str, Any]) -> dict[str, Any]:
-    """The schema as OpenAI's strict structured output takes it: every property of an object is required (a real run
-    was refused otherwise). A property NCTE lets the model leave out becomes required but nullable; its null is dropped
-    again by ``from_openai_answer`` before NCTE validates the answer as strictly as ever."""
-    import copy
-
-    def nullable(node: dict[str, Any]) -> dict[str, Any]:
-        t = node.get("type")
-        if isinstance(t, str):
-            return {**node, "type": [t, "null"]} if t != "null" else node
-        if isinstance(t, list):
-            return node if "null" in t else {**node, "type": [*t, "null"]}
-        return {"anyOf": [node, {"type": "null"}]}
-
-    def fix(node: Any) -> Any:
-        if isinstance(node, dict):
-            out = {k: fix(v) for k, v in node.items()}
-            props = out.get("properties")
-            if out.get("type") == "object" and isinstance(props, dict):
-                given = set(node.get("required", []))
-                out["properties"] = {k: (v if k in given else nullable(v)) for k, v in props.items()}
-                out["required"] = list(props)
-            return out
-        if isinstance(node, list):
-            return [fix(x) for x in node]
-        return node
-
-    return fix(copy.deepcopy(schema))
-
-
-def from_openai_answer(data: Any, schema: dict[str, Any]) -> Any:
-    """Drop the nulls Codex wrote for properties NCTE's schema leaves optional (``to_openai_strict``); a property
-    that is required in NCTE's schema keeps its null (it may mean "nobody")."""
-    if isinstance(data, dict) and isinstance(schema, dict):
-        props = schema.get("properties") or {}
-        req = set(schema.get("required", []))
-        return {k: from_openai_answer(v, props.get(k, {})) for k, v in data.items()
-                if not (v is None and k in props and k not in req)}
-    if isinstance(data, list) and isinstance(schema, dict):
-        item = schema.get("items", {})
-        return [from_openai_answer(v, item) for v in data]
-    if isinstance(schema, dict) and "anyOf" in schema and isinstance(data, (dict, list)):
-        for alt in schema["anyOf"]:
-            if isinstance(alt, dict) and alt.get("type") in ("object", "array"):
-                return from_openai_answer(data, alt)
-    return data
+def schema_rule(schema: dict[str, Any] | None) -> str:
+    """The step's JSON schema as the last part of the fixed rules (instead of ``--output-schema``, see above)."""
+    if not schema:
+        return ""
+    return ("\n\n## 回答格式\n只輸出一個符合下列 JSON Schema 的 JSON 物件（不要說明文字、不要 code fence）：\n"
+            + json.dumps(schema, ensure_ascii=False, separators=(",", ":")) + "\n")
 
 
 def found() -> str | None:

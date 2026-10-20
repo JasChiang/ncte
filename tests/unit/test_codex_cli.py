@@ -12,7 +12,7 @@ import pytest
 
 from ncte.errors import FatalAPIError, RetryableAPIError
 from ncte.llm.base import LLMRequest
-from ncte.llm.codex_cli import CodexCLIClient, parse_features
+from ncte.llm.codex_cli import CodexCLIClient, parse_features, schema_rule
 from ncte.llm.fake import FakeLLM
 
 FEATURES = """\
@@ -100,7 +100,7 @@ def _config(args: list[str], key: str) -> str:
     """The value of ``-c key=<TOML string>``."""
     for i, a in enumerate(args):
         if a == "-c" and args[i + 1].startswith(key + "="):
-            return json.loads(args[i + 1].split("=", 1)[1])
+            return json.loads(args[i + 1].split("=", 1)[1])  # a TOML string or boolean reads as JSON
     raise KeyError(key)
 
 
@@ -124,7 +124,10 @@ def test_a_request_is_one_plain_codex_exec_with_the_steps_schema_model_and_effor
     assert _config(a, "model_reasoning_effort") == "high"
     disabled = [a[i + 1] for i, x in enumerate(a) if x == "--disable"]
     assert disabled == ["undo", "shell_tool", "unified_exec", "rmcp_client"]  # every enabled feature
-    assert json.loads(codex.files[0]["schema"]) == {"type": "object"}
+    assert "--output-schema" not in a  # Codex's constrained output broke answers (see codex_cli): the schema is written out
+    assert codex.files[0]["instructions"] == "SYS" + schema_rule({"type": "object"})
+    assert '{"type":"object"}' in codex.files[0]["instructions"]
+    assert _config(a, "skills.include_instructions") is False  # about 3,200 tokens of skill instructions left out
     assert r.content == '{"translations": []}' and r.generation_id == "t-1" and r.provider == "codex"
     assert r.cost_usd == 0.0 and r.usage["list_cost_usd"] == 0
     assert r.usage["prompt_tokens"] == 10400 and r.usage["completion_tokens"] == 80
@@ -160,17 +163,17 @@ def test_the_fixed_rules_are_the_instructions_and_the_batchs_own_rules_go_first_
     c.complete(req("\n## 本批資料的附加說明\nCOND B\n"))
     c.complete(req("\n## 本批資料的附加說明\nCOND A\n\n## 重要更正\n上一次的輸出未通過程式驗證：missing P3\n"))
     instructions = [f["instructions"] for f in codex.files]
-    assert instructions == [fixed] * 3  # the same on every request of a step: only the fixed rules
+    assert instructions == [fixed + schema_rule({"type": "object"})] * 3  # the same on every request of a step
     assert "COND A" in codex.inputs[0] and "COND B" in codex.inputs[1]
     assert "重要更正" in codex.inputs[2] and "missing P3" in codex.inputs[2]
     assert all(u.endswith('{"units": [1]}') for u in codex.inputs)  # the data comes last
 
 
-def test_without_a_schema_no_output_schema_is_sent(monkeypatch):
+def test_without_a_schema_the_instructions_are_the_rules_only(monkeypatch):
     codex = Codex(Answer('{"a": 1}'))
     monkeypatch.setattr(subprocess, "run", codex)
     r = CodexCLIClient().complete(_req(json_schema=None))
-    assert "--output-schema" not in codex.args[0] and r.content == '{"a": 1}'
+    assert codex.files[0]["instructions"] == "SYS" and r.content == '{"a": 1}'
 
 
 def test_when_features_list_fails_nothing_is_disabled_and_it_is_said(monkeypatch):
@@ -495,50 +498,40 @@ def test_an_unreadable_session_file_leaves_the_plan_out(monkeypatch, tmp_path):
     assert "plan" not in r.usage and r.content == '{"translations": []}'
 
 
-def test_schemas_are_sent_in_openai_strict_form_and_the_nulls_of_optional_fields_are_dropped():
-    """OpenAI's strict structured output wants every property required (real run, 2026-10-20: "'required' is required
-    to include every key in properties"). An optional field is sent as required-but-nullable, and a null the model
-    gives for it is dropped before NCTE's own validation, which stays as strict as before. A field that may itself be
-    null (a speaker nobody can name) keeps its null."""
-    from ncte.llm.codex_cli import from_openai_answer, to_openai_strict
-    from ncte.llm.schemas import SceneWindowsOutput, strict_json_schema
-
-    ours = strict_json_schema(SceneWindowsOutput)
-    sent = to_openai_strict(ours)
-
-    def check(node):
-        if isinstance(node, dict):
-            if node.get("type") == "object" and "properties" in node:
-                assert set(node["required"]) == set(node["properties"])
-            for v in node.values():
-                check(v)
-        elif isinstance(node, list):
-            for v in node:
-                check(v)
-    check(sent)
-    item = ours["properties"]["breaks"]["items"]
-    optional = [k for k in item["properties"] if k not in item["required"]]
-    assert optional  # the case that was rejected
-    answer = {"first_kind": "present", "breaks": [{**{k: None for k in optional},
-              **{k: ("x" if k == "unit_id" else "present" if k == "kind" else True) for k in item["required"]}}]}
-    back = from_openai_answer(answer, ours)
-    assert all(k not in back["breaks"][0] for k in optional)
-    SceneWindowsOutput.model_validate(back)
-    assert from_openai_answer({"a": None}, {"type": "object", "properties": {"a": {"type": ["string", "null"]}},
-                                            "required": ["a"]}) == {"a": None}
+def _tokens_rollout(sessions: Path, thread: str, total: dict[str, int]) -> None:
+    day = sessions / "2026" / "10" / "20"
+    day.mkdir(parents=True, exist_ok=True)
+    line = {"type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": total}}}
+    (day / f"rollout-2026-10-20T10-00-00-{thread}.jsonl").write_text(json.dumps(line) + "\n", encoding="utf-8")
 
 
-def test_a_schema_codex_rejects_stops_at_once(monkeypatch, tmp_path):
-    bad = {"type": "error", "error": {"message": "Invalid schema for response_format 'codex_output_schema': x"}}
-    calls = []
+def test_the_tokens_of_failed_tries_are_counted_too(monkeypatch, tmp_path):
+    """A try that ran into the output limit spent the plan as well (a real one wrote 128,000 tokens): its tokens come
+    from its session file and are added to the counts, and kept apart as ``failed_tries``. A try that timed out is
+    found by the thread id it printed before it was stopped."""
+    sessions = tmp_path / "sessions"
+    incomplete = ({"type": "thread.started", "thread_id": "t-bad"},
+                  {"type": "turn.failed", "error": {"message": "Incomplete response returned, reason: max_output_tokens"}})
+    codex = Codex(Answer(None, incomplete, code=1), Answer())
+    calls = {"n": 0}
 
-    def run(args, **kw):
-        if "features" in args:
-            return subprocess.CompletedProcess(args, 0, "", "")
-        calls.append(args)
-        return subprocess.CompletedProcess(args, 1, json.dumps(bad) + "\n", "")
+    def run(args: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        if args[1] == "exec":
+            calls["n"] += 1
+            if calls["n"] == 1:
+                _tokens_rollout(sessions, "t-slow", {"input_tokens": 16000, "output_tokens": 50000})
+                raise subprocess.TimeoutExpired(args, 5, output=b'{"type":"thread.started","thread_id":"t-slow"}\n')
+            if calls["n"] == 2:
+                _tokens_rollout(sessions, "t-bad", {"input_tokens": 16154, "cached_input_tokens": 0,
+                                                    "output_tokens": 128000, "reasoning_output_tokens": 0,
+                                                    "total_tokens": 144154})
+        return codex(args, **kw)
+
     monkeypatch.setattr(subprocess, "run", run)
-    c = CodexCLIClient(waits=(1, 1), sleep=lambda s: None, sessions=tmp_path)
-    with pytest.raises(FatalAPIError, match="schema"):
-        c.complete(_req())
-    assert len(calls) == 1
+    r = CodexCLIClient(waits=(1, 1), sleep=lambda s: None).complete(_req())
+    assert r.attempts == 3
+    assert r.usage["completion_tokens"] == 80 + 128000 + 50000
+    assert r.usage["prompt_tokens"] == 10400 + 16154 + 16000
+    assert r.usage["failed_tries"] == {"input_tokens": 32154, "cached_input_tokens": 0, "output_tokens": 178000,
+                                       "reasoning_output_tokens": 0}
+    assert not list(sessions.rglob("*.jsonl"))  # no session file is left behind
