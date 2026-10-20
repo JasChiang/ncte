@@ -1,5 +1,5 @@
-"""One client per model prefix: ``claude/…`` to the Claude plan, ``local/…`` to the local server, the rest to the run's
-source. Lets a run read on one source and translate on another (``stage_models``) without the steps knowing."""
+"""One client per model prefix: ``claude/…`` to the Claude plan, ``local/…`` to the local server, ``codex/…`` to the
+ChatGPT plan through Codex, the rest to the run's source. Lets a run read on one source and translate on another (``stage_models``) without the steps knowing."""
 
 from __future__ import annotations
 

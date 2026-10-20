@@ -154,7 +154,8 @@ def test_config_local_source_and_routing(monkeypatch, tmp_path):
     c2.openrouter.stage_models = {"scene_analyze": "local/qwen"}
     from ncte.config import use_claude_models
     use_claude_models(c2)
-    assert c2.openrouter.stage_models == {"scene_analyze": "local/qwen"}  # kept: it names its own source
+    assert c2.openrouter.stage_models["scene_analyze"] == "local/qwen"  # kept: it names its own source
+    assert c2.openrouter.stage_models["memory_update"] == "claude/sonnet"  # the other reading steps as by default
     routed2 = make_client(c2)
     assert routed2.name == "claude" and routed2.client_for("local/qwen").name == "local"
     c3 = Config()

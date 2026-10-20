@@ -173,6 +173,8 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
     if cfg.openrouter.provider == "claude":
         notes.append("Claude plan: nothing is billed; the dollar figures are what the requests would cost at list "
                      "price, from earlier Claude-plan runs (0 without them).")
+    if cfg.openrouter.provider == "codex":
+        notes.append("Codex (ChatGPT plan): nothing is billed and Codex reports no price, so there is no dollar figure.")
     if breaks:
         notes.append(f"includes {breaks} scene-cutting requests before reading")
     if old_revision:

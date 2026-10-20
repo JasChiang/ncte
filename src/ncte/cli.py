@@ -98,6 +98,14 @@ def _claude_client(cfg: Config, log: Callable[[str], None] | None = None) -> Any
                            log=log)
 
 
+def _codex_client(cfg: Config, log: Callable[[str], None] | None = None) -> Any:
+    from .llm.codex_cli import CodexCLIClient
+
+    o = cfg.openrouter
+    return CodexCLIClient(models=[o.model, *o.stage_models.values(), *([o.review_model] if o.review_model else [])],
+                          log=log)
+
+
 def _local_client(cfg: Config) -> Any:
     from .llm.local import LocalClient
 
@@ -111,6 +119,8 @@ def _primary_client(cfg: Config, *, need_key: bool, log: Callable[[str], None] |
         return _claude_client(cfg, log)
     if cfg.openrouter.provider == "local":
         return _local_client(cfg)
+    if cfg.openrouter.provider == "codex":
+        return _codex_client(cfg, log)
     from .llm.openrouter import OpenRouterClient
 
     key = get_api_key(cfg.openrouter.provider)
@@ -127,8 +137,8 @@ def _primary_client(cfg: Config, *, need_key: bool, log: Callable[[str], None] |
 
 
 def _with_routes(cfg: Config, primary: Any, log: Callable[[str], None] | None = None) -> Any:
-    """A step model on another source (``claude/…`` on a local run, ``local/…`` on a Claude run) gets its own client;
-    the run's source stays the primary."""
+    """A step model on another source (``claude/…`` on a local run, ``local/…`` or ``codex/…`` on a Claude run) gets
+    its own client; the run's source stays the primary."""
     from .llm.routing import RoutingClient
 
     o = cfg.openrouter
@@ -138,6 +148,8 @@ def _with_routes(cfg: Config, primary: Any, log: Callable[[str], None] | None = 
         routes["claude/"] = _claude_client(cfg, log)
     if any(m.startswith("local/") for m in wanted) and primary.name != "local":
         routes["local/"] = _local_client(cfg)
+    if any(m.startswith("codex/") for m in wanted) and primary.name != "codex":
+        routes["codex/"] = _codex_client(cfg, log)
     return RoutingClient(primary, routes) if routes else primary
 
 
@@ -345,7 +357,7 @@ def _run(book: Book, opts: Any, *, fake: bool, as_json: bool = False, run_id: st
     if fake:
         typer.echo("⚠ using FakeLLM: output is placeholder text, not a translation")
     rid = run_id or create_run(state.conn, cfg, book, opts)
-    via = "" if fake else f"  via={ {'fal': 'fal', 'claude': 'Claude Code (plan, not billed)', 'local': 'local server (not billed)'}.get(client.name, 'OpenRouter')}"  # NCTE_LLM_PROVIDER in .env applies here
+    via = "" if fake else f"  via={ {'fal': 'fal', 'claude': 'Claude Code (plan, not billed)', 'local': 'local server (not billed)', 'codex': 'Codex (ChatGPT plan, not billed)'}.get(client.name, 'OpenRouter')}"  # NCTE_LLM_PROVIDER in .env applies here
     typer.echo(f"run {rid}  book {book.id}  mode={opts.mode}  model={opts.model}{via}  budget=${opts.budget_usd}")
     orch = _orchestrator(cfg, client, book, rid, opts)
     summary = orch.run()

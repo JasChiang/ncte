@@ -325,3 +325,103 @@ class FakeBacked(CodexCLIClient):
         self.seen.append((req.stage.split(":")[0], args[args.index("-m") + 1], effort))
         Path(args[args.index("-o") + 1]).write_text(self.fake.complete(req).content, encoding="utf-8")
         return subprocess.CompletedProcess(args, 0, _events(*OK_EVENTS), "")
+
+
+def test_the_codex_provider_runs_on_codex_models_only(monkeypatch, tmp_path):
+    from ncte.cli import make_client
+    from ncte.config import load_config, proofread_passes
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "codex")
+    cfg = load_config()
+    o = cfg.openrouter
+    assert o.provider == "codex" and o.model == "codex/gpt-6.1-sol" and o.temperature is None
+    assert o.reasoning_effort == "medium" and o.stage_models == {} and o.review_model is None
+    assert proofread_passes(cfg) == 2  # a pass costs quota, not money (as on the Claude plan)
+    said: list[str] = []
+    client = make_client(cfg, log=said.append)
+    assert isinstance(client, CodexCLIClient) and client.log == said.append
+    (tmp_path / "ncte.yaml").write_text(
+        "openrouter:\n  model: codex/gpt-6-luna\n  review_model: google/x\n  fallback_models: [google/y, codex/gpt-6-sol]\n"
+        "  stage_models: {proofread: codex/gpt-6-sol, reader: google/y, scene_analyze: claude/sonnet}\n",
+        encoding="utf-8")
+    o = load_config(tmp_path / "ncte.yaml").openrouter  # a chosen Codex model is kept; others are dropped
+    assert o.model == "codex/gpt-6-luna" and o.stage_models == {"proofread": "codex/gpt-6-sol"}
+    assert o.review_model is None and o.fallback_models == ["codex/gpt-6-sol"]
+
+
+def test_a_claude_run_can_give_one_step_to_codex_and_the_claude_defaults_stay(monkeypatch, tmp_path):
+    from ncte.cli import make_client
+    from ncte.config import CLAUDE_READ_STAGES, load_config
+    from ncte.llm.claude_cli import ClaudeCLIClient
+    from ncte.llm.routing import RoutingClient
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "claude")
+    plain = load_config().openrouter
+    assert plain.stage_models == dict.fromkeys(CLAUDE_READ_STAGES, "claude/sonnet")  # Codex only when chosen
+    assert not any(m.startswith("codex/") for m in plain.stage_models.values())
+    (tmp_path / "only.yaml").write_text("openrouter:\n  stage_models: {proofread: codex/gpt-6.1-sol}\n", encoding="utf-8")
+    one = load_config(tmp_path / "only.yaml").openrouter  # one step on Codex: the reading steps stay on Sonnet
+    assert one.model == "claude/opus"
+    assert one.stage_models == {**dict.fromkeys(CLAUDE_READ_STAGES, "claude/sonnet"), "proofread": "codex/gpt-6.1-sol"}
+    (tmp_path / "ncte.yaml").write_text("openrouter:\n  model: claude/opus\n"
+                                        "  stage_models: {proofread: codex/gpt-6.1-sol}\n", encoding="utf-8")
+    cfg = load_config(tmp_path / "ncte.yaml")
+    assert cfg.openrouter.stage_models == {"proofread": "codex/gpt-6.1-sol"}  # kept: it names its own source
+    client = make_client(cfg)
+    assert isinstance(client, RoutingClient) and client.name == "claude"
+    assert isinstance(client.client_for("codex/gpt-6.1-sol"), CodexCLIClient)
+    assert isinstance(client.client_for("claude/opus"), ClaudeCLIClient)
+    assert "codex/gpt-6.1-sol" in [m["id"] for m in client.list_models()]
+
+
+def test_a_whole_book_runs_on_the_codex_provider(monkeypatch, tmp_path, fixtures):
+    from ncte.config import load_config
+    from ncte.memory.db import connect, migrate
+
+    from ..helpers import run_book
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "codex")
+    cfg = load_config(workspace=str(tmp_path / "ws"))
+    client = FakeBacked(["codex/gpt-6.1-sol"])
+    monkeypatch.setattr(subprocess, "run", client.run)
+    conn = connect(tmp_path / "t.db")
+    migrate(conn)
+    book, rid, summary = run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    assert summary.status == "completed", summary
+    by_stage = {st: (m, e) for st, m, e in client.seen}
+    assert by_stage["translate"] == ("gpt-6.1-sol", "medium") and by_stage["scene_analyze"][0] == "gpt-6.1-sol"
+    assert by_stage["proofread"] == ("gpt-6.1-sol", "high")  # a judging step thinks at high
+    assert sum(1 for st, _, _ in client.seen if st == "proofread") >= 2  # two passes
+    rows = conn.execute("SELECT cost_usd, usage_json, model FROM llm_requests WHERE run_id=?", (rid,)).fetchall()
+    assert rows and all(r[0] == 0 for r in rows)  # nothing billed
+    assert all(json.loads(r[1])["list_cost_usd"] == 0 and json.loads(r[1])["prompt_tokens"] == 10400 for r in rows)
+
+
+def test_a_claude_run_proofreads_on_codex_when_set(monkeypatch, tmp_path, fixtures):
+    from ncte.config import load_config
+    from ncte.llm.routing import RoutingClient
+    from ncte.memory.db import connect, migrate
+
+    from ..helpers import run_book
+    from .test_claude_cli import FakeBacked as ClaudeBacked
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "claude")
+    (tmp_path / "ncte.yaml").write_text("openrouter:\n  stage_models: {proofread: codex/gpt-6.1-sol}\n", encoding="utf-8")
+    cfg = load_config(tmp_path / "ncte.yaml", workspace=str(tmp_path / "ws"))
+    claude, codex = ClaudeBacked(), FakeBacked(["codex/gpt-6.1-sol"])
+
+    def run(args: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        return (codex.run if args[0] == "codex" else claude.run)(args, **kw)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    conn = connect(tmp_path / "t.db")
+    migrate(conn)
+    book, rid, summary = run_book(conn, cfg, fixtures["basic"], RoutingClient(claude, {"codex/": codex}), mode="context")
+    assert summary.status == "completed", summary
+    assert {st for st, _, _ in codex.seen} == {"proofread"}
+    assert {e for st, _, e in codex.seen} == {"high"}
+    assert "proofread" not in {st for st, _, _ in claude.seen} and "translate" in {st for st, _, _ in claude.seen}

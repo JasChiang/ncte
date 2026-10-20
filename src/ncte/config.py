@@ -37,7 +37,8 @@ class OpenRouterConfig(_Strict):
     # "agent": an agent in a conversation answers each request as a task (`ncte agent`, the MCP server)
     # "agent" (a run answered task by task) is set by `ncte agent` itself, never chosen by NCTE_LLM_PROVIDER
     # "local": a model served on this computer (LM Studio, llama-server, mlx_lm.server), nothing leaves the machine
-    provider: Literal["openrouter", "fal", "claude", "agent", "local"] = "claude"
+    # "codex": the user's ChatGPT plan through the Codex CLI (`codex exec`), no key, nothing billed (ADR-071)
+    provider: Literal["openrouter", "fal", "claude", "agent", "local", "codex"] = "claude"
     base_url: str = "https://openrouter.ai/api/v1"
     model: str = DEFAULT_MODEL
     review_model: str | None = None
@@ -161,6 +162,9 @@ class Config(_Strict):
         return "sha256:" + hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
+PROVIDERS = ("openrouter", "fal", "claude", "codex", "local")  # what NCTE_LLM_PROVIDER and the settings page choose
+
+
 def load_config(path: str | Path | None = None, *, workspace: str | None = None) -> Config:
     candidates: list[Path] = []
     if path:
@@ -190,14 +194,16 @@ def load_config(path: str | Path | None = None, *, workspace: str | None = None)
         cfg.app.workspace = env_ws
     provider = os.environ.get("NCTE_LLM_PROVIDER") or _read_dotenv(Path(".env")).get("NCTE_LLM_PROVIDER")
     if provider:
-        if provider not in ("openrouter", "fal", "claude", "local"):
-            raise ConfigError("NCTE_LLM_PROVIDER must be openrouter, fal, claude or local "
+        if provider not in PROVIDERS:
+            raise ConfigError("NCTE_LLM_PROVIDER must be openrouter, fal, claude, codex or local "
                               "(agent is set by `ncte agent` itself for the runs it starts)")
         cfg.openrouter.provider = provider  # type: ignore[assignment]
     if cfg.openrouter.provider == "claude":
         use_claude_models(cfg)
     elif cfg.openrouter.provider == "local":
         use_local_models(cfg)
+    elif cfg.openrouter.provider == "codex":
+        use_codex_models(cfg)
     return cfg
 
 
@@ -213,7 +219,7 @@ CLAUDE_READ_STAGES = ("scene_windows", "scene_analyze", "memory_update", "impres
 
 # A model id with one of these prefixes names its own source, whatever the run's source is: a step may run on the
 # Claude plan while the rest runs locally, or the other way round (the client routes by prefix)
-ROUTED_PREFIXES = ("claude/", "local/")
+ROUTED_PREFIXES = ("claude/", "local/", "codex/")
 LOCAL_MODEL = "local/default"  # the model the local server has loaded (else the first it lists)
 
 
@@ -227,13 +233,36 @@ def use_claude_models(cfg: Config) -> None:
     o = cfg.openrouter
     if not o.model.startswith("claude/"):
         o.model = CLAUDE_MODEL
-        if not any(_routed(m) for m in o.stage_models.values()):
-            o.stage_models = dict.fromkeys(CLAUDE_READ_STAGES, CLAUDE_READ_MODEL)
+        # the reading steps read on Sonnet unless set otherwise: one step given to another source (proofreading on
+        # Codex, reading on the local server) leaves the other steps as they are by default
+        for stage in CLAUDE_READ_STAGES:
+            if not _routed(o.stage_models.get(stage)):
+                o.stage_models[stage] = CLAUDE_READ_MODEL
     o.stage_models = {k: v for k, v in o.stage_models.items() if _routed(v)}
     o.review_model = o.review_model if _routed(o.review_model) else None
     o.fallback_models = [m for m in o.fallback_models if _routed(m)]
     o.temperature = None  # Claude Code takes no temperature
     o.reasoning_effort = o.reasoning_effort or "medium"  # as NCTE runs by default (ncte.yaml), wherever it is run
+
+
+CODEX_MODEL = "codex/gpt-6.1-sol"
+
+
+def use_codex_models(cfg: Config) -> None:
+    """Models for the Codex provider (ADR-071): a configured ``codex/…`` model is kept; any other model id (an API
+    model, another source's) is replaced or dropped. Codex takes no temperature; every step says its level."""
+    o = cfg.openrouter
+
+    def codex(m: str | None) -> bool:
+        return bool(m) and str(m).startswith("codex/")
+
+    if not codex(o.model):
+        o.model = CODEX_MODEL
+    o.stage_models = {k: v for k, v in o.stage_models.items() if codex(v)}
+    o.review_model = o.review_model if codex(o.review_model) else None
+    o.fallback_models = [m for m in o.fallback_models if codex(m)]
+    o.temperature = None
+    o.reasoning_effort = o.reasoning_effort or "medium"
 
 
 def use_local_models(cfg: Config) -> None:
@@ -280,7 +309,7 @@ def redact(text: str, key: str | None = None) -> str:
     return re.sub(r"sk-or-[A-Za-z0-9_\-]{8,}", "sk-or-***", text)
 
 
-# On the Claude plan proofreading does two passes unless the configuration says otherwise (ADR-066, 2026-10-20): in
+# On the Claude plan (and the ChatGPT plan through Codex) proofreading does two passes unless the configuration says otherwise (ADR-066, 2026-10-20): in
 # the whole-book test three passes over the same translation overlapped in 5 places, and a second pass found 6–8 more
 # each time; there a pass costs quota, not money. Elsewhere (OpenRouter, fal: a pass is paid for) it stays one. If the
 # next check finds the second pass adds only one or two, this goes back to one.
@@ -293,7 +322,7 @@ def proofread_passes(cfg: Config) -> int:
     n = cfg.context.proofread_passes
     if n is not None:
         return n
-    return CLAUDE_PROOFREAD_PASSES if cfg.openrouter.provider == "claude" else 1
+    return CLAUDE_PROOFREAD_PASSES if cfg.openrouter.provider in ("claude", "codex") else 1
 
 
 def reasoning_setting(cfg: Config, stage: str) -> str | None:
