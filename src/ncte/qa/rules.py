@@ -129,8 +129,10 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
         elif ratio > 2.5:
             add("too_long", "medium", f"length ratio {ratio:.2f} (possible addition)")
 
-    # quotes: Taiwan writing changes the kinds (『』 → 「」, a title in 《》) and may add pairs (「諾爾登」), which is style;
-    # what may drop a line is a translation with unpaired quotes, or with fewer quotes than the source
+    # quotes follow the source (「」 for 「」, 『』 for 『』, none added; prompts/_shared/punctuation.md): a kind changed
+    # (『』 → 「」, a title in 《》) or a pair added (「諾爾登」) keeps the line whole, a slip shown for proofreading to
+    # judge with the source (low); what may drop a line is a translation with unpaired quotes, or with fewer quotes
+    # than the source
     pairs = (("「", "」"), ("『", "』"), ("《", "》"), ("〈", "〉"))
     src_q = sum(source_text.count(o) for o, _ in pairs[:2])
     out_q = sum(text.count(o) for o, _ in pairs)

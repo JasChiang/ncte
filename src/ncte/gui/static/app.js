@@ -215,7 +215,7 @@ async function overviewView(id) {
   // before anything is translated the counts are all zero: only the start card
   view.innerHTML = `<div class="card" id="runcard"><p class="muted">讀取翻譯狀態…</p></div>${!o.translated && !o.runs.length ? "" : `<div class="row">
     ${stat("已翻譯", `${o.translatable ? Math.round(100 * o.translated / o.translatable) : 0}%`, `<span class="small muted">${o.translated} / ${o.translatable} 段</span>`)}${stat("這本書總共花費", "US$" + o.spent_usd.toFixed(2), `<span class="small muted">所有執行加總${o.plan_usd ? `；另有 Claude 方案照定價約 US$${o.plan_usd.toFixed(2)}（不另收費）` : ""}</span>`)}${planStat(o.plan_usage)}
-    ${stat("有疑點的段落", o.flagged_units, `<a class="small" href="#/b/${id}/review?f=flagged">去看</a>`)}
+    ${stat("有疑點的段落", o.flagged_units, `<a class="small" href="#/b/${id}/review?f=flagged">去看</a>`)}${o.conflict_units ? stat("規則互相牽制", o.conflict_units, `<span class="small muted">退回後譯文沒改，不算錯誤</span>`) : ""}
     ${stat("可再確認的譯法", o.pending_names, `<a class="small" href="#/b/${id}/names">去看看</a>`)}
     ${stat("說話者未定", o.unknown_speakers)}${stat("譯註", o.notes)}${stat("人工修改", o.human_edits)}</div>
     <details class="card"><summary><strong>執行紀錄</strong></summary><div class="scroll"><table><tr><th>run</th><th>模式</th><th>模型</th><th>狀態</th><th>待處理</th><th>費用</th></tr>
@@ -355,7 +355,8 @@ function rowHtml(u) {
       ${u.findings.map(findingLine).join("")}
       ${(u.translator_flags || []).length ? `<div class="note" title="譯者自己在這段標的記號">譯者標記：${u.translator_flags.map(f => esc(TFLAG[f] || f)).join("、")}</div>` : ""}
       ${(u.translator_notes || []).map(n => `<div class="note muted" title="譯者留給審稿者的話，不在書裡">譯者說明：${esc(n)}</div>`).join("")}
-      ${(u.readings || []).map(r => `<div class="note" title="對照校稿認為原文容得下兩種讀法，不算錯，沒有重譯">兩種讀法：${esc(r)}</div>`).join("")}</div>
+      ${(u.readings || []).map(r => `<div class="note" title="對照校稿認為原文容得下兩種讀法，不算錯，沒有重譯">兩種讀法：${esc(r)}</div>`).join("")}
+      ${(u.conflicts || []).map(r => `<div class="note" title="退回重譯後譯文沒有改：檢查的要求和翻譯的規則互相牽制，這次執行不再退回，請人看一下">規則互相牽制：${esc(r)}</div>`).join("")}</div>
     <div>${u.quotes.map(q => { const [c, l] = STATUS[q.status] || ["c-unk", q.status];
       return `<div>${esc(q.speaker || "？")} ${chip(c, l)}${q.disputed ? chip("c-warn", "有爭議") : ""}${q.second ? `<div class="muted small" title="讀完後再確認一次的結果">再確認：${esc(q.second)}</div>` : ""}</div>`; }).join("") || `<span class="muted small">敘述</span>`}</div></div>`;
 }

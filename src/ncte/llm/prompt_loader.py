@@ -2,6 +2,11 @@
 
 The effective prompt version string is ``<task>/v<N>#<sha8>`` so that editing a prompt file
 invalidates cached translations even if the author forgets to bump the version number.
+
+A rule several steps share is written once, in ``prompts/_shared/<name>.md`` (no front matter), and put in with
+``<!-- include: <name> -->`` (a line of its own, or inside a sentence): the translator and the steps that check it read
+the same words. Includes are expanded before the sha8 is taken, so editing a partial changes the version of every
+prompt that includes it.
 """
 
 from __future__ import annotations
@@ -91,7 +96,31 @@ def _applies(conditions: str, blob: str) -> bool:
 
 
 _FM = re.compile(r"^---\n(.*?)\n---\n", re.S)
+_INCLUDE = re.compile(r"<!-- include: *([A-Za-z0-9_-]+) *-->")
+SHARED = "_shared"  # the partials' folder: not a task
 _BLOCK = re.compile(r"<!-- if: *([^>]*?) *-->\n?(.*?)<!-- endif -->\n?", re.S)
+
+
+def expand_includes(text: str, shared: Path) -> str:
+    """``text`` with each ``<!-- include: name -->`` replaced by ``shared/name.md`` (its last newline dropped, so the
+    directive's own line or sentence goes on as written). Partials do not include other partials."""
+
+    def put(m: re.Match[str]) -> str:
+        p = shared / f"{m.group(1)}.md"
+        if not p.is_file():
+            raise ConfigError(f"prompt include '{m.group(1)}' not found in {shared}")
+        return p.read_text(encoding="utf-8").rstrip("\n")
+
+    return _INCLUDE.sub(put, text)
+
+
+def includes(task: str) -> set[str]:
+    """The partials a task's prompt file includes (by name)."""
+    for d in prompts_dirs():
+        files = sorted((d / task).glob("v*.md"), key=lambda p: int(p.stem[1:]) if p.stem[1:].isdigit() else -1)
+        if files:
+            return set(_INCLUDE.findall(files[-1].read_text(encoding="utf-8")))
+    raise ConfigError(f"prompt file for task '{task}' not found in {[str(d) for d in prompts_dirs()]}")
 
 
 @lru_cache(maxsize=32)
@@ -108,7 +137,7 @@ def load_prompt(task: str, version: int | None = None) -> Prompt:
         if not files:
             continue
         f = files[-1]
-        raw = f.read_text(encoding="utf-8")
+        raw = expand_includes(f.read_text(encoding="utf-8"), d / SHARED)
         m = _FM.match(raw)
         body = raw[m.end():] if m else raw
         ver = int(f.stem[1:])

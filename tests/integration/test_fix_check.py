@@ -12,6 +12,7 @@ from ..helpers import run_book
 
 LINES = ["　彼女は来なかった。", "　雨は朝から降り続いていた。", "　禁書庫の扉は固く閉ざされていた。"]
 WRONG, RIGHT = "　她來了。", "　她沒有來。"  # the source paragraph is indented, so the stored text is too
+AGAIN = "　她來了啊。"  # a retranslation that changes the words and keeps the error (the same text is a rule conflict)
 
 
 def small_book(tmp_path: Path, lines: list[str] = LINES) -> Path:
@@ -34,6 +35,11 @@ def translator(fixed_text: str | None, seen: list | None = None):
                 t["translated_text"] = fixed_text if fixed_text and "review_feedback" in payload else WRONG
         return out
     return respond
+
+
+def undecided(payload, req):
+    return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "undecided", "new_error": "", "reason": "r"}
+                       for i in payload["items"]]}
 
 
 def negation_review(payload, req):
@@ -59,17 +65,17 @@ def test_a_retranslation_that_repeats_the_error_is_not_fixed(conn, cfg, tmp_path
         return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "still_wrong", "new_error": "",
                             "reason": "原文「来なかった」是否定，譯文仍是「來了」"} for i in payload["items"]]}
 
-    book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=None, fix_check=still_wrong, seen=seen)
+    book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=AGAIN, fix_check=still_wrong, seen=seen)
     uid = unit_of(conn, book, "来なかった")
     # the translator was given the text to correct, not only the source and the suggestion
     assert seen and seen[0][0]["current_translation"] == WRONG
     # the checker saw the source, both texts and what kind of issue it was — not the finder's reasoning about the
     # source, so a misreading is not handed on to the check that judges it
     item = checks[0]["items"][0]
-    assert item["source"].strip() == "彼女は来なかった。" and item["before"] == WRONG and item["after"] == WRONG
+    assert item["source"].strip() == "彼女は来なかった。" and item["before"] == WRONG and item["after"] == AGAIN
     assert any("mistranslation" in x for x in item["issues"]) and not any("否定" in x for x in item["issues"])
     best = latest_texts(conn, book.id)[uid]
-    assert best["text"] == WRONG and best["status"] == "needs_review"  # not passed off as succeeded
+    assert best["text"] == AGAIN and best["status"] == "needs_review"  # not passed off as succeeded
     issue = conn.execute("SELECT status FROM qa_findings WHERE unit_id=? AND type='review:mistranslation'", (uid,)).fetchone()
     assert issue["status"] == "open"  # not resolved
     assert conn.execute("SELECT 1 FROM qa_findings WHERE unit_id=? AND type='fix_still_wrong' AND status='open'",
@@ -77,8 +83,8 @@ def test_a_retranslation_that_repeats_the_error_is_not_fixed(conn, cfg, tmp_path
 
 
 def test_an_unchecked_fix_stays_open(conn, cfg, tmp_path):
-    """No answer from the check (here the default fake cannot settle an unchanged text): the issue stays open."""
-    book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=None)
+    """No settled answer from the check (undecided): the issue stays open."""
+    book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=AGAIN, fix_check=undecided)
     uid = unit_of(conn, book, "来なかった")
     assert latest_texts(conn, book.id)[uid]["status"] == "needs_review"
     assert conn.execute("SELECT status FROM qa_findings WHERE unit_id=? AND type='review:mistranslation'",
@@ -124,7 +130,7 @@ def test_the_checker_can_say_the_issue_was_not_an_error(conn, cfg, tmp_path):
         return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "issue_invalid", "new_error": "", "reason": "原文就是這樣"}
                            for i in payload["items"]]}
 
-    book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=None, fix_check=invalid)
+    book, rid, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=AGAIN, fix_check=invalid)
     uid = unit_of(conn, book, "来なかった")
     assert latest_texts(conn, book.id)[uid]["status"] == "succeeded"
     assert conn.execute("SELECT status FROM qa_findings WHERE unit_id=? AND type='review:mistranslation'",
@@ -186,7 +192,7 @@ def test_proofreading_counts_only_what_it_checked_and_checks_its_fixes(conn, cfg
 
     cfg.context.reader_pass = False
     lines = LINES[:2] + [f"　{n}番目の駅を過ぎた。" for n in range(1, 9)] + LINES[2:]  # long enough to be halved
-    fake = FakeLLM(responders={"translate": translator(None), "proofread": proofread, "fix_check": check})
+    fake = FakeLLM(responders={"translate": translator(AGAIN), "proofread": proofread, "fix_check": check})
     book, rid, _ = run_book(conn, cfg, small_book(tmp_path, lines), fake, mode="context")
     uid = unit_of(conn, book, "来なかった")
     assert checks and checks[0]["items"][0]["unit_id"] == uid
@@ -209,7 +215,7 @@ def test_an_exportable_book_is_not_called_done_while_a_fix_is_unsettled(conn, cf
         "ch1", "Text/ch1.xhtml", "第一章", _section("第一章", LINES[1:], None, "c1"))]), tmp_path / "clean.epub")
     other, _, _ = run_book(conn, cfg, clean, FakeLLM())  # baseline, nothing flagged
     assert acceptance(conn, other.id, proofread=False, reader=False)["acceptable"]
-    book, _, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=None)  # the fix is undecided
+    book, _, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=AGAIN, fix_check=undecided)
     out = export_book(conn, cfg, book, run_epubcheck=False)
     assert out.validation.ok  # the export works …
     acc = out.acceptance
@@ -225,10 +231,10 @@ def test_an_exportable_book_is_not_called_done_while_a_fix_is_unsettled(conn, cf
 def test_rechecking_the_rules_does_not_settle_an_unsettled_fix(conn, cfg, tmp_path):
     from ncte.qa.recheck import recheck_book
 
-    book, _, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=None)
+    book, _, _ = review_once(conn, cfg, small_book(tmp_path), fixed_text=AGAIN, fix_check=undecided)
     uid = unit_of(conn, book, "来なかった")
     assert latest_texts(conn, book.id)[uid]["status"] == "needs_review"
-    recheck_book(conn, book.id)  # the program's rules find nothing wrong with 「她來了。」
+    recheck_book(conn, book.id)  # the program's rules find nothing wrong with 「她來了啊。」
     assert latest_texts(conn, book.id)[uid]["status"] == "needs_review"
 
 
@@ -366,7 +372,7 @@ def test_the_check_sees_as_far_around_as_review_with_texts_and_speakers(conn, cf
         return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "still_wrong", "new_error": "",
                             "reason": "r"} for i in payload["items"]]}
 
-    review_once(conn, cfg, small_book(tmp_path, lines), fixed_text=None, fix_check=still_wrong)
+    review_once(conn, cfg, small_book(tmp_path, lines), fixed_text=AGAIN, fix_check=still_wrong)
     around = checks[0]["items"][0]["around"]
     assert all(isinstance(a, dict) and "source" in a and "translation" in a and a["at"] in ("before", "after")
                for a in around)

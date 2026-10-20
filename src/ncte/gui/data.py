@@ -54,8 +54,7 @@ def overview(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
 
     st = book_status(conn, book.id)
     best = latest_texts(conn, book.id)
-    flagged = conn.execute("SELECT COUNT(DISTINCT unit_id) FROM qa_findings WHERE book_id=? AND status='open' AND "
-                           "severity!='low' AND unit_id IS NOT NULL", (book.id,)).fetchone()[0]
+    flagged, conflicts = _flagged(conn, book.id, best)
     unknown = conn.execute("SELECT COUNT(*) FROM utterances WHERE book_id=? AND status='unknown'", (book.id,)).fetchone()[0]
     from ..translation.orchestrator import run_plan_usd
 
@@ -65,9 +64,29 @@ def overview(conn: sqlite3.Connection, book: Book) -> dict[str, Any]:
     quota = plan_usage(conn.execute("SELECT * FROM llm_requests WHERE book_id=? ORDER BY id", (book.id,)).fetchall())
     return {"book_id": book.id, "title": book.title, **st, "spent_usd": round(sum(r["cost_usd"] or 0 for r in st["runs"]), 4),
             "plan_usd": round(plan, 2), "plan_usage": quota,
-            "flagged_units": flagged, "unknown_speakers": unknown, "pending_names": len(pending(conn, book.id)),
+            "flagged_units": len(flagged), "conflict_units": len(conflicts), "unknown_speakers": unknown, "pending_names": len(pending(conn, book.id)),
             "notes": sum(1 for t in best.values() if t["translator_note"] and t["status"] != "human"),
             "human_edits": sum(1 for t in best.values() if t["status"] == "human")}
+
+
+def _open_findings(conn: sqlite3.Connection, book_id: str, best: dict[str, sqlite3.Row]) -> list[sqlite3.Row]:
+    """Open findings about the units' texts as they are now, as acceptance counts them (a finding about an older
+    version is history)."""
+    from ..reports.acceptance import is_current
+
+    return [f for f in conn.execute("SELECT unit_id, type, severity, evidence, translation_id FROM qa_findings WHERE "
+                                    "book_id=? AND status='open' AND unit_id IS NOT NULL", (book_id,))
+            if is_current(f, best)]
+
+
+def _flagged(conn: sqlite3.Connection, book_id: str, best: dict[str, sqlite3.Row]) -> tuple[set[str], set[str]]:
+    """(units with an open finding that is not minor, units with a rule conflict): a conflict is listed on its own, not
+    counted as an error (``reports.acceptance``)."""
+    from ..reports.acceptance import CONFLICT
+
+    rows = _open_findings(conn, book_id, best)
+    return ({f["unit_id"] for f in rows if f["severity"] != "low" and f["type"] != CONFLICT},
+            {f["unit_id"] for f in rows if f["type"] == CONFLICT})
 
 
 def _read_range(conn: sqlite3.Connection, book_id: str) -> dict[str, Any]:
@@ -122,9 +141,15 @@ def units(conn: sqlite3.Connection, book: Book, *, start: int | None = None, end
         params += [start, end]
     rows = conn.execute(q + " ORDER BY ordinal", params).fetchall()
     findings: dict[str, list[dict[str, str]]] = defaultdict(list)
-    for f in conn.execute("SELECT unit_id, type, severity, evidence FROM qa_findings WHERE book_id=? AND status='open' "
-                          "AND unit_id IS NOT NULL", (book.id,)):
-        findings[f["unit_id"]].append({"type": f["type"], "severity": f["severity"], "evidence": (f["evidence"] or "")[:300]})
+    conflicts: dict[str, list[str]] = defaultdict(list)
+    from ..reports.acceptance import CONFLICT
+
+    for row in _open_findings(conn, book.id, best):
+        if row["type"] == CONFLICT:  # the finder's rule and the translator's pulled apart: listed, not an error
+            conflicts[row["unit_id"]].append((row["evidence"] or "")[:300])
+            continue
+        findings[row["unit_id"]].append({"type": row["type"], "severity": row["severity"],
+                                         "evidence": (row["evidence"] or "")[:300]})
     quotes: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for u in conn.execute("SELECT id, unit_id, quote_text, speaker_id_nullable sp, status, notes_json FROM utterances "
                           "WHERE book_id=? ORDER BY unit_id, quote_index", (book.id,)):
@@ -144,7 +169,7 @@ def units(conn: sqlite3.Connection, book: Book, *, start: int | None = None, end
         tr = best.get(r["id"])
         f = findings.get(r["id"], [])
         serious = [x for x in f if x["severity"] != "low"]
-        if filt == "flagged" and not serious:
+        if filt == "flagged" and not serious and not conflicts.get(r["id"]):  # a conflict is for a person to see too
             continue
         if filt == "unknown" and not any(q["status"] == "unknown" for q in quotes.get(r["id"], [])):
             continue
@@ -160,6 +185,7 @@ def units(conn: sqlite3.Connection, book: Book, *, start: int | None = None, end
                     "quotes": quotes.get(r["id"], []), "findings": serious, "minor": len(f) - len(serious),
                     # two readings proofreading found the source allows (ADR-063): not an error, for a person to see
                     "readings": [x["evidence"] for x in f if x["type"] == "review:proofread_ambiguity"],
+                    "conflicts": conflicts.get(r["id"], []),
                     "wordplay": found.get(r["id"], []),
                     # what the translator marked on its own text (ADR-067); the program's own marker stays home
                     "translator_flags": [x for x in json.loads(tr["flags_json"] or "[]") if x != "review_retranslation"]

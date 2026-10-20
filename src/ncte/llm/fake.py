@@ -41,12 +41,18 @@ def fake_translate_text(src: str, glossary: list[dict[str, Any]]) -> str:
     return KANA.sub("文", out)
 
 
+FIXED_MARK = "（改）"
+
+
 def default_translate(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:
+    """A stand-in translator; a unit sent back with feedback comes back changed (``FIXED_MARK`` after it), as a fix
+    does — an unchanged text is a conflict between rules, not a fix (``review._record_conflicts``)."""
     gl = payload.get("glossary", [])
     ask: dict[str, Any] = {"read_through": []} if payload.get("read_through") is True else {}  # ADR-064: nothing to list
+    asked = {f["unit_id"] for f in payload.get("review_feedback", [])}
     return {**ask, "translations": [
-        {"unit_id": u["unit_id"], "translated_text": fake_translate_text(u["source"], gl), "flags": [], "notes": [],
-         "translator_note": ""}
+        {"unit_id": u["unit_id"], "translated_text": fake_translate_text(u["source"], gl) +
+         (FIXED_MARK if u["unit_id"] in asked else ""), "flags": [], "notes": [], "translator_note": ""}
         for u in payload.get("units", [])]}
 
 

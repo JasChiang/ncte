@@ -58,12 +58,12 @@ def test_every_task_has_a_prompt_and_every_prompt_a_task():
     """A1 (ADR-067): the old long-paragraph scene prompt (ADR-036, removed by ADR-059) is gone with its task."""
     from pathlib import Path
 
-    from ncte.llm.prompt_loader import TASKS
+    from ncte.llm.prompt_loader import SHARED, TASKS
     from ncte.llm.schemas import SCHEMAS
 
     root = Path(__file__).resolve().parents[2] / "prompts"
     assert "scenes" not in TASKS and "scenes" not in SCHEMAS
-    assert {d.name for d in root.iterdir() if d.is_dir()} == set(TASKS)
+    assert {d.name for d in root.iterdir() if d.is_dir() and d.name != SHARED} == set(TASKS)  # partials are no task
     for t in TASKS:
         assert "<!--" not in load_prompt(t).render()
 
@@ -106,10 +106,90 @@ def _order(text: str) -> str:
 def test_the_order_of_judgement_is_shared_by_the_steps_that_judge():
     """A4 (ADR-067): review and the fix check judge with the same order as translation, proofreading, naming and
     house style."""
-    same = {t: _order(load_prompt(t).render()) for t in
-            ("translate", "proofread", "naming", "house_style", "review", "fix_check")}
+    from ncte.llm.prompt_loader import includes
+
+    same = {t: _order(load_prompt(t).render()) for t in JUDGING}
     assert len(set(same.values())) == 1
     assert "1. **意思正確**" in same["review"] and "6. **最少介入**" in same["fix_check"]
+    assert all("judgement_order" in includes(t) for t in JUDGING)  # written once (prompts/_shared)
+
+
+JUDGING = ("translate", "proofread", "naming", "house_style", "review", "fix_check")
+CHECKING = ("proofread", "review", "fix_check")
+# a shared rule only the checking steps need, with the reason the translator does not: none so far
+CHECKING_ONLY: dict[str, str] = {}
+
+
+def test_checking_steps_share_the_translators_rules():
+    """A checking step reports only what the translator was told to do: every rule a checking prompt shares
+    (``prompts/_shared``) is in the translation prompt too, unless it is listed here as checking-only with a reason.
+    Proofreading asked for 「」 outside 『』 inside while the translator kept the source's marks: 33 fixes came back
+    unchanged and the book ended inconsistent."""
+    from ncte.llm.prompt_loader import includes
+
+    translate = includes("translate")
+    for task in CHECKING:
+        for name in includes(task):
+            assert name in translate or name in CHECKING_ONLY, (task, name)
+    assert {"punctuation", "addition", "judgement_order"} <= translate
+    assert "punctuation" in includes("proofread")
+    assert all("judgement_order" in includes(t) for t in JUDGING)
+
+
+def test_quotes_follow_the_source_for_the_translator_and_the_proofreader():
+    """The source's marks are kept (「」 as 「」, 『』 as 『』, none added); proofreading reports a quote only when it
+    does not correspond to the source, never the Taiwan convention of 「」 outside 『』 inside."""
+    rule = "原文的「」譯成「」、『』譯成『』，不因臺灣出版慣例改成另一種；原文沒有的引號不要加"
+    static, _ = load_prompt("translate").render_parts({"units": []})
+    assert rule in _rules(static)["2"] and "對話引號「」『』" not in static
+    pr = load_prompt("proofread").render({"paragraphs": []})
+    style = pr[pr.index("- `style`：體例錯誤"):].split("\n", 1)[0]
+    assert rule in style and "和原文不對應" in style and "不是原文本身造成的" in style
+    assert "外層「」內層『』" not in pr
+    assert "要不要加引號" not in load_prompt("house_style").text
+
+
+def _prompts(tmp_path, body: str, partial: str | None) -> None:
+    (tmp_path / "translate").mkdir()
+    (tmp_path / "translate" / "v1.md").write_text(f"---\ntask: translate\nversion: 1\n---\n{body}", encoding="utf-8")
+    if partial is not None:
+        (tmp_path / "_shared").mkdir(exist_ok=True)
+        (tmp_path / "_shared" / "rule.md").write_text(partial, encoding="utf-8")
+
+
+def test_an_include_is_expanded_and_its_text_is_part_of_the_version(tmp_path, monkeypatch):
+    """``<!-- include: name -->`` puts ``_shared/name.md`` in, on a line of its own or inside a sentence, before the
+    version hash is taken: editing the partial changes the version of every prompt that includes it."""
+    from ncte.llm.prompt_loader import load_prompt as load
+
+    monkeypatch.setenv("NCTE_PROMPTS_DIR", str(tmp_path))
+    _prompts(tmp_path, "## 規則\n<!-- include: rule -->\n- 例：「<!-- include: rule -->」\n", "照原文。\n")
+    load.cache_clear()
+    try:
+        first = load("translate")
+        assert first.text == "## 規則\n照原文。\n- 例：「照原文。」\n"
+        (tmp_path / "_shared" / "rule.md").write_text("照原文對應。\n", encoding="utf-8")
+        load.cache_clear()
+        second = load("translate")
+        assert "照原文對應。" in second.text and second.sha8 != first.sha8
+    finally:
+        load.cache_clear()
+
+
+def test_an_unknown_include_is_a_configuration_error(tmp_path, monkeypatch):
+    import pytest
+
+    from ncte.errors import ConfigError
+    from ncte.llm.prompt_loader import load_prompt as load
+
+    monkeypatch.setenv("NCTE_PROMPTS_DIR", str(tmp_path))
+    _prompts(tmp_path, "<!-- include: nowhere -->\n", None)
+    load.cache_clear()
+    try:
+        with pytest.raises(ConfigError, match="nowhere"):
+            load("translate")
+    finally:
+        load.cache_clear()
 
 
 def test_review_knows_tone_voice_other_and_two_readings():

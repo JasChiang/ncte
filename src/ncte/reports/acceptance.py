@@ -10,6 +10,10 @@ translation is good — it says the pipeline did everything it promised and noth
   is not checked — and no review job was blocked or failed on the text that is now current;
 * every person's edit is still the text that will be exported (its source unchanged);
 * the exported EPUB passed validation (when an export result is given).
+
+A finding a later look outlived (``superseded``: the paragraph was checked again as it is now and the issue was not
+found) is closed. A rule conflict (a retranslation that came back unchanged: the finding is ``conflict``, a
+``rule_conflict`` beside it) is not an open error either: it is listed under ``conflicts`` for a person to look at.
 """
 
 from __future__ import annotations
@@ -21,12 +25,20 @@ from ..translation.cache import latest_texts
 
 FIX_OPEN = ("fix_still_wrong", "fix_regressed", "fix_undecided", "fix_unchecked", "fix_unverified")
 NOT_SEEN = ("review_blocked", "proofread_blocked", "reader_blocked")
+CONFLICT = "rule_conflict"
 SAMPLE = 20
 
 
 def _check(units: list[str] | set[str], *, detail: str = "") -> dict[str, Any]:
     ids = sorted(units)
     return {"ok": not ids, "count": len(ids), "units": ids[:SAMPLE], **({"detail": detail} if detail else {})}
+
+
+def is_current(finding: sqlite3.Row, best: dict[str, sqlite3.Row]) -> bool:
+    """A finding about the unit's text as it is now (or about no version in particular): a finding about a version that
+    is no longer the book's text (and is not a person's) is history, not a problem."""
+    t = best.get(finding["unit_id"])
+    return finding["translation_id"] is None or (t is not None and t["id"] == finding["translation_id"])
 
 
 def acceptance(conn: sqlite3.Connection, book_id: str, *, proofread: bool = True, reader: bool = True,
@@ -38,9 +50,7 @@ def acceptance(conn: sqlite3.Connection, book_id: str, *, proofread: bool = True
     checks["no_needs_review"] = _check({u for u, t in best.items() if t["status"] == "needs_review"})
     open_rows = conn.execute("SELECT unit_id, type, severity, translation_id FROM qa_findings WHERE book_id=? AND "
                              "status='open' AND unit_id IS NOT NULL", (book_id,)).fetchall()
-    # a finding about a version that is no longer the book's text (and is not a person's) is history, not a problem
-    current = {f for f in open_rows if f["translation_id"] is None or (best.get(f["unit_id"]) is not None
-                                                                         and best[f["unit_id"]]["id"] == f["translation_id"])}
+    current = {f for f in open_rows if f["type"] != CONFLICT and is_current(f, best)}
     checks["no_open_serious_findings"] = _check({f["unit_id"] for f in current if f["severity"] in ("high", "error")
                                                  and f["type"] not in FIX_OPEN + NOT_SEEN})
     checks["fixes_checked"] = _check({f["unit_id"] for f in current if f["type"] in FIX_OPEN})
@@ -64,14 +74,18 @@ def acceptance(conn: sqlite3.Connection, book_id: str, *, proofread: bool = True
     checks["human_edits_kept"] = _check(lost, detail="a person's edit whose source paragraph has changed since")
     if validation_ok is not None:
         checks["epub_valid"] = {"ok": validation_ok, "count": 0 if validation_ok else 1, "units": []}
+    conflicts = {f["unit_id"] for f in open_rows if f["type"] == CONFLICT and is_current(f, best)}
     return {"acceptable": all(c["ok"] for c in checks.values()), "checks": checks,
+            "conflicts": {"count": len(conflicts), "units": sorted(conflicts)[:SAMPLE]},
             "note": "Acceptable means the pipeline finished every step and nothing failed silently; it is not a "
                     "judgement of translation quality."}
 
 
 def summary(rep: dict[str, Any]) -> str:
     """One line: 「acceptable」 or what is missing."""
+    n = rep.get("conflicts", {}).get("count", 0)
+    listed = f"; {n} rule conflict(s) listed" if n else ""
     if rep["acceptable"]:
-        return "acceptance: OK (pipeline complete; not a quality judgement)"
+        return f"acceptance: OK (pipeline complete; not a quality judgement){listed}"
     bad = [f"{k}={c.get('detail') or c['count']}" for k, c in rep["checks"].items() if not c["ok"]]
-    return "acceptance: NOT YET — " + ", ".join(bad)
+    return "acceptance: NOT YET — " + ", ".join(bad) + listed

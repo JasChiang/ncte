@@ -772,7 +772,7 @@ class ContextOrchestrator(Orchestrator):
                      before: list[dict[str, Any]] | None = None) -> None:
         from ..analysis import reader
         from ..llm.schemas import ReaderOutput
-        from .review import _retranslate_with_feedback
+        from .review import _retranslate_with_feedback, in_conflict
 
         blocked: list[str] = []
         with self.lock:
@@ -799,9 +799,14 @@ class ContextOrchestrator(Orchestrator):
         assert isinstance(parsed, ReaderOutput)
         valid = {p["unit_id"] for p in part} - set(blocked)  # what the reader really read
         stats["read"] += len(valid)
+        _outlived(self, stats, {u: tids[u] for u in valid}, parsed.issues, "reader", ("review:reader_%",))
+        conflicts = in_conflict(self, valid)
         feedback: dict[str, list[dict[str, Any]]] = {}
         for it in parsed.issues:
             if it.unit_id not in valid or it.severity == "low" or not it.problem.strip():
+                continue
+            if (it.unit_id, f"review:reader_{it.kind}") in conflicts:  # came back unchanged earlier in this run
+                stats["conflict_skipped"] = stats.get("conflict_skipped", 0) + 1
                 continue
             stats["issues"] += 1
             fid = self._finding(it.unit_id, f"review:reader_{it.kind}", it.severity, it.problem[:400],
@@ -898,7 +903,7 @@ class ContextOrchestrator(Orchestrator):
                         stats: dict[str, int]) -> None:
         from ..analysis import proofread
         from ..llm.schemas import ProofreadOutput
-        from .review import _retranslate_with_feedback
+        from .review import _retranslate_with_feedback, in_conflict
 
         with self.lock:
             cast = proofread.cast(self.conn, self.book.id, part)
@@ -928,8 +933,13 @@ class ContextOrchestrator(Orchestrator):
         assert isinstance(parsed, ProofreadOutput)
         valid = {p["unit_id"] for p in part} - set(blocked)  # what was really checked against the source
         stats["checked"] += len(valid)
+        looked = valid
         if self.cfg.context.proofread_verdicts:  # paragraphs the model gave no verdict for were not looked at
-            stats["no_verdict"] = stats.get("no_verdict", 0) + len(valid - {c.unit_id for c in parsed.checked})
+            looked = valid & {c.unit_id for c in parsed.checked}
+            stats["no_verdict"] = stats.get("no_verdict", 0) + len(valid - looked)
+        _outlived(self, stats, {u: tids[u] for u in looked}, parsed.issues, "proofread",
+                  ("review:proofread_%", "fix_still_wrong", "fix_undecided", "fix_regressed"))
+        conflicts = in_conflict(self, valid)
         feedback: dict[str, list[dict[str, Any]]] = {}
         polished: set[str] = set()
         if asked := sorted({it.unit_id for it in parsed.issues if it.kind == "expression" and it.unit_id in valid}):
@@ -951,6 +961,10 @@ class ContextOrchestrator(Orchestrator):
                 continue
             if it.unit_id not in valid or it.severity == "low" or not it.problem.strip():
                 continue  # a small slip is not worth a retranslation
+            if (it.unit_id, f"review:proofread_{it.kind}") in conflicts:
+                # came back unchanged earlier in this run: the rules pull apart, asking again gives the same text
+                stats["conflict_skipped"] = stats.get("conflict_skipped", 0) + 1
+                continue
             if it.kind == "expression" and it.unit_id in polished:
                 # not polished twice: a later pass rewording a reworded sentence only drifts (a meaning issue still
                 # goes back)
@@ -1472,6 +1486,19 @@ def with_cards(value: Any, refs: dict[str, str]) -> Any:
         else:
             out[k] = with_cards(v, refs)
     return out
+
+
+def _outlived(orch: Any, stats: dict[str, Any], checked: dict[str, int], issues: list[Any], stage: str,
+              kinds: tuple[str, ...]) -> None:
+    """After a stretch of proofreading or the reader's look: what it really looked at (``checked``) and did not find
+    again closes the findings about older texts of those paragraphs (``review.supersede``)."""
+    from .review import supersede
+
+    reported: dict[str, set[str]] = {}
+    for it in issues:
+        reported.setdefault(it.unit_id, set()).add(f"review:{stage}_{it.kind}")
+    if n := supersede(orch, checked, reported, kinds):
+        stats["superseded"] = stats.get("superseded", 0) + n
 
 
 def _one_pass(stats: dict[str, Any]) -> dict[str, Any]:

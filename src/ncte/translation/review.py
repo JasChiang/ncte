@@ -10,6 +10,11 @@ fix (here, after proofreading and after the reader's look) is checked once again
 meant to fix (``fix_check``): fixed, the issue was not an error, still wrong, or undecided. Only the first two settle
 the issue (when it was not an error, the old text stays and the new one is not used); the others leave it open with the new text marked ``needs_review``. A unit the content filter refused, or
 whose request failed, was not reviewed: it is counted as blocked / failed and nothing found on it is cleared.
+
+A retranslation that comes back as the text it was meant to change is not a fix to check: the translator's rules and
+the finder's pull apart (a proofreader asking for 「」 where the source and the translator keep 『』). The text stays,
+the finding becomes ``conflict`` with a ``rule_conflict`` beside it, and the same kind of issue on that unit is not
+sent back again in the run.
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from ..llm.prompt_loader import load_prompt
 from ..llm.schemas import FixCheck, FixCheckOutput, ReviewOutput
 from ..memory.db import Transaction, utcnow
 from ..qa.rules import CONFIRM_RULES, CONFIRMED, Finding, worst
+from ..qa.typeset import typeset
 from .cache import glossary_hash, latest_translation, relevant_glossary, settle_translation
 from .translator import BatchResult, UnitInput, call_structured
 
@@ -444,6 +450,14 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
     if not res.ok and not res.failed:
         return
     by_id = {r["id"]: r for r in todo}
+    # the translator kept the text it was asked to change (the same once typeset): nothing to check
+    kept = {u: t["id"] for u, t in current.items() if t is not None and u in res.ok and typeset(
+        before[u], by_id[u]["source_text"]) == typeset(exported_text(res.ok[u].text, res.ok[u].translator_note,
+                                                                     "needs_review"), by_id[u]["source_text"])}
+    if kept:
+        _record_conflicts(orch, kept, {u: feedback[u] for u in kept}, stats)
+        for u in kept:
+            del res.ok[u]
     new_tid: dict[str, int] = {}
     mark: dict[str, int | None] = {}
     with orch.lock, Transaction(orch.conn):
@@ -523,6 +537,67 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
                     fid = orch._finding(uid, f"after_review:{f.type}", f.severity, f.evidence, translation_id=tid)
                     if outcome == "fixed" and f in judged:  # the check saw it with the source and found no error
                         orch.conn.execute("UPDATE qa_findings SET status='dismissed_by_check' WHERE id=?", (fid,))
+
+
+def _record_conflicts(orch: Any, tids: dict[str, int], feedback: dict[str, list[dict[str, Any]]],
+                      stats: dict[str, int]) -> None:
+    """Units whose retranslation came back unchanged (``tids``: the text that stays). What a model found on them
+    (``review:*``) is a conflict between its rule and the translator's: the finding becomes ``conflict`` and a
+    ``rule_conflict`` (the issue's kind and the finder's evidence) is recorded on the unit, both kept out of the open
+    errors; a program rule's find stays open, since the text it was found in is still the book's, and so does a
+    serious claim about the source (``SOURCE_CLAIMS``, high): a meaning error the translator would not change is for a
+    person to decide, not a disagreement between rules."""
+    fids = [i["finding_id"] for items in feedback.values() for i in items if i.get("finding_id")]
+    with orch.lock, Transaction(orch.conn):
+        rows = {r["id"]: r for r in orch.conn.execute(
+            f"SELECT id, type, severity FROM qa_findings WHERE id IN ({','.join('?' * len(fids))})", fids)} if fids else {}
+        kinds = {k: r["type"] for k, r in rows.items()}
+        for uid, items in feedback.items():
+            left = False
+            for i in items:
+                fid = i.get("finding_id")
+                serious = fid in rows and rows[fid]["severity"] == "high" and i["issue_type"] in SOURCE_CLAIMS
+                if not fid or not kinds.get(fid, "").startswith("review:") or serious:
+                    left = True
+                    continue
+                orch._finding(uid, "rule_conflict", "medium", f"{i['issue_type']}: {i.get('evidence', '')}"[:600],
+                              translation_id=tids[uid])
+                orch.conn.execute("UPDATE qa_findings SET status='conflict' WHERE id=? AND status='open'", (fid,))
+                stats["conflict"] = stats.get("conflict", 0) + 1
+            if left:
+                stats["still_flagged"] += 1
+                stats["pending"] += 1
+
+
+def in_conflict(orch: Any, unit_ids: list[str] | set[str]) -> set[tuple[str, str]]:
+    """(unit, finding type) pairs that came back unchanged earlier in this run: not sent to the translator again."""
+    if not unit_ids:
+        return set()
+    with orch.lock:
+        return {(r[0], r[1]) for r in orch.conn.execute(
+            f"SELECT unit_id, type FROM qa_findings WHERE run_id=? AND status='conflict' AND unit_id IN "
+            f"({','.join('?' * len(unit_ids))})", (orch.run_id, *unit_ids))}
+
+
+def supersede(orch: Any, checked: dict[str, int], reported: dict[str, set[str]], kinds: tuple[str, ...]) -> int:
+    """Open findings a pass has outlived: on each unit it really checked (``checked[unit]``: the text it checked),
+    a finding of ``kinds`` (``LIKE`` patterns) about an older text of the unit that this pass did not report again
+    (``reported[unit]``: the finding types it reported there; a fix's outcome counts as reported when the pass reported
+    anything there) is ``superseded`` — the paragraph was checked as it is now and the issue was not found. A finding
+    about the text that was checked stays open: two looks at the same words that disagree are not settled here."""
+    n = 0
+    like = " OR ".join("type LIKE ?" for _ in kinds)
+    with orch.lock, Transaction(orch.conn):
+        for uid, tid in checked.items():
+            for r in orch.conn.execute(f"SELECT id, type FROM qa_findings WHERE book_id=? AND unit_id=? AND "
+                                       f"status='open' AND translation_id<? AND ({like})",
+                                       (orch.book.id, uid, tid, *kinds)).fetchall():
+                again = reported.get(uid, set())
+                if r["type"] in again or (r["type"].startswith("fix_") and again):
+                    continue
+                orch.conn.execute("UPDATE qa_findings SET status='superseded' WHERE id=?", (r["id"],))
+                n += 1
+    return n
 
 
 def fix_outcome(check: FixCheck | None, *, program_high: bool, checked: bool = True) -> str:

@@ -1033,3 +1033,9 @@ open workspace/eval/<timestamp>/report.html
 - 抽查：看不到定義的段落 829 → 569；62 筆階段裡 1 筆提前透露（數字見 ADR-075）。
 - 測試：`tests/integration/test_terms.py`（分階段存取、各位置拿到的那一筆、單筆退回、上限、人寫的取代）、`tests/unit/test_db.py`（migration）。632 passed、4 skipped。
 
+## 共用規則、標點照原文、衝突偵測、舊意見取代（2026-10-20，分支 shared-rules-2026-10-20，自 c468569；ADR-076）
+- `llm/prompt_loader`：`<!-- include: … -->` 展開 `prompts/_shared/*.md`（`judgement_order`、`addition`、`punctuation`）。
+- 提示詞：翻譯規則 2 與校稿 `style` 引用 `punctuation`；校稿不再要求外層「」；體例不寫引號規則。
+- `translation/review`：交回不變的修正記為衝突（`_record_conflicts`、`in_conflict`），嚴重的意思問題除外；`supersede`。`context_pipeline` 校稿與讀者檢查略過已衝突的（`conflict_skipped`）、取代舊意見（`superseded`）。`reports/acceptance` 另列 `conflicts`、只算目前版本；網頁 `flagged_units` 同一算法，另有 `conflict_units`。測試替身的譯者收到修正意見時在文字後加「（改）」。
+- 測試：`tests/integration/test_rule_conflicts.py`（新）、`test_fix_check.py`、`tests/unit/test_prompt_render.py`。640 passed、4 skipped。
+
