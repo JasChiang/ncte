@@ -1043,3 +1043,7 @@ open workspace/eval/<timestamp>/report.html
 - `translation.fix_scope`（`window`／`scene`）、`translation.fix_context_chars`、`context.fix_fact_quota`；`Batch.fix`；`memory.retrieval.memory_context(window_rows=…, fix_facts=…)`；`context_builder._scene_window` 的預算與最少段數；`DbRecorder` 記 `usage.payload_chars`。
 - 抽查數字見 ADR-077。測試：`tests/integration/test_fix_scope.py`（新）。643 passed、4 skipped。
 
+## 同一場的修正一起送（2026-10-21，分支 batch-fixes-2026-10-21，自 7b2d97c；ADR-078）
+- `translation.fix_batch_units`、`fix_batch_chars`；`review.fix_groups` 依場景分組、`_fix_parts` 平均切；`context_builder.fix_windows`、`shown_context`；`review_feedback[].around`；翻譯提示詞一句說明。
+- 抽查數字見 ADR-078。測試：`tests/integration/test_fix_scope.py`、`test_fix_context.py`。648 passed、4 skipped。
+

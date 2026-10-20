@@ -34,7 +34,7 @@ from ..memory.db import Transaction, utcnow
 from ..memory.retrieval import memory_context
 from ..qa.rules import CONFIRM_RULES, CONFIRMED
 from .cache import settle_translation
-from .context_builder import BODY_KINDS
+from .context_builder import BODY_KINDS, shown_context
 from .orchestrator import CONFIRM_MODEL_FLAGS, Batch, Orchestrator, make_batches, scene_batches
 from .translator import call_structured
 
@@ -1409,8 +1409,8 @@ class ContextOrchestrator(Orchestrator):
         with self.lock:
             scene = get_scene(self.conn, self.book.id, batch.scene_id)
             window = None
-            if batch.fix:  # a fix: the memory of the paragraphs it is shown, not of the whole scene
-                ids = [c["unit_id"] for c in ctx.get("context_before", []) + ctx.get("context_after", [])]
+            if batch.fix:  # a fix: the memory of the paragraphs it is shown (each fix's window), not of the whole scene
+                ids = [c["unit_id"] for c in shown_context(ctx)]
                 window = self.conn.execute(f"SELECT * FROM units WHERE id IN ({','.join('?' * len(ids))})",
                                            ids).fetchall() if ids else []
             mem = memory_context(self.conn, self.book.id, scene=scene, batch_rows=batch.rows,
@@ -1420,8 +1420,7 @@ class ContextOrchestrator(Orchestrator):
         if self.cfg.context.term_definitions:  # what the book's terms mean, once their evidence is reached (ADR-069)
             from ..memory.terms import definitions_for
 
-            text = " ".join([r["plain_text"] for r in batch.rows] + [c["source"] for c in ctx.get("context_before", [])
-                                                                     + ctx.get("context_after", [])])
+            text = " ".join([r["plain_text"] for r in batch.rows] + [c["source"] for c in shown_context(ctx)])
             with self.lock:
                 if defs := definitions_for(self.conn, self.book.id, text, batch.rows[-1]["ordinal"]):
                     ctx["term_definitions"] = defs

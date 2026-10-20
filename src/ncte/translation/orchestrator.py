@@ -35,7 +35,14 @@ from ..memory.db import Transaction, utcnow
 from ..memory.style import load_style, style_payload
 from ..qa.rules import Finding, worst
 from .cache import glossary_entries, glossary_hash, is_cached, latest_translation, relevant_glossary
-from .context_builder import BODY_KINDS, META_KINDS, glossary_payload, heading_hints, neighbor_context
+from .context_builder import (
+    BODY_KINDS,
+    META_KINDS,
+    glossary_payload,
+    heading_hints,
+    neighbor_context,
+    shown_context,
+)
 from .translator import Translator, UnitInput
 
 MAX_UNITS_PER_BATCH = 60
@@ -553,7 +560,7 @@ class Orchestrator:
             else:
                 ctx = neighbor_context(self.conn, self.cfg, self.book.id, batch.rows, scene_id=batch.scene_id,
                                        whole_scene=bool(self.opts.unit_ids) or batch.whole_scene, fix=batch.fix)
-                text += " " + " ".join(c["source"] for c in ctx["context_before"] + ctx["context_after"])
+                text += " " + " ".join(c["source"] for c in shown_context(ctx))
             ctx["glossary"] = glossary_payload(self.glossary, text, upto=(self.volume, batch.rows[-1]["ordinal"]),
                                                revealed=self.link_revealed)
             if not batch.meta:

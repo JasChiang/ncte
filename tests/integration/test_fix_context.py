@@ -29,19 +29,24 @@ def scene_units(conn, book):
     return out
 
 
-def test_a_fix_sees_its_scene_and_fixes_far_apart_are_sent_apart(conn, cfg, tmp_path):
+def test_a_scene_s_fixes_go_together_each_seeing_its_scene(conn, cfg, tmp_path):
     cfg.review.automatic_review = "all"
     epub = write_book(story_spec(), tmp_path / "story.epub")
     client = FakeLLM(responders={"review": flag(lambda items: [items[0], items[-1]] if len(items) > 4 else [])})
     book, _rid, _ = run_book(conn, cfg, epub, client, mode="context")
     scenes = scene_units(conn, book)
+    unit_of = {r["source_text"]: r["id"] for r in conn.execute("SELECT id, source_text FROM units WHERE book_id=?",
+                                                               (book.id,))}
     sent = fixes(client)
-    assert sent
+    assert sent and any(len(p["units"]) > 1 for p in sent)  # first and last of a scene: one request, not two
     for p in sent:
-        (uid,) = [u["unit_id"] for u in p["units"]]  # first and last of a scene: two requests, not one
-        scene = next(ids for ids in scenes.values() if uid in ids)
-        shown = {c["unit_id"] for c in p["context_before"] + p["context_after"]}
-        assert shown == set(scene) - {uid}  # the rest of the (short) scene, within the window, not two paragraphs and one
+        ids = [u["unit_id"] for u in p["units"]]
+        scene = next(s for s in scenes.values() if ids[0] in s)
+        assert set(ids) <= set(scene)
+        assert "context_before" not in p and "context_after" not in p  # each fix has its own window instead
+        for fb in p["review_feedback"]:
+            shown = {unit_of[c["source"]] for side in fb["around"].values() for c in side}
+            assert shown == set(scene) - set(ids)  # the rest of the (short) scene, within the window
         assert "scene" in p  # the scene's memory
 
 

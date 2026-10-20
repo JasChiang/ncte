@@ -34,6 +34,8 @@ translation:
   targeted_scene_context_chars: 2500   # retranslating chosen units: rest of the scene as context, per side
   fix_scope: "window"                  # a fix after review/proofreading: "window" = the paragraphs around it and their memory only; "scene" = the whole scene's (earlier behaviour)
   fix_context_chars: 1200              # "window": Japanese characters per side (at least two paragraphs a side)
+  fix_batch_units: 12                  # "window": a scene's fixes in one request (each with its own window), split past this many paragraphs
+  fix_batch_chars: 8000                # ... or past this many characters of the paragraphs and their windows
   preserve_ambiguity: true
   skip_already_translated: true
   read_through: false       # ADR-064: list where later paragraphs constrain an earlier line before translating (kept for review; off until checked)

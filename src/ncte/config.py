@@ -87,6 +87,10 @@ class TranslationConfig(_Strict):
     # units sees, and the people of the whole scene (the earlier behaviour, kept to compare)
     fix_scope: Literal["window", "scene"] = "window"
     fix_context_chars: int = Field(1200, ge=0, le=20000)
+    # "window": a scene's fixes go in one request, each with its own window; split into even parts past this many
+    # paragraphs, or past this many Japanese characters of the paragraphs and their windows
+    fix_batch_units: int = Field(12, ge=1, le=200)
+    fix_batch_chars: int = Field(8000, ge=1, le=100000)
     preserve_ambiguity: bool = True
     skip_already_translated: bool = True
     # ADR-064: before its translations the model lists where later paragraphs of the batch constrain how an earlier

@@ -24,6 +24,7 @@ import sqlite3
 from typing import Any
 
 from ..analysis.split_read import call_in_parts
+from ..config import Config
 from ..errors import FatalAPIError, LLMError, ModelOutputError
 from ..llm.prompt_loader import load_prompt
 from ..llm.schemas import FixCheck, FixCheckOutput, ReviewOutput
@@ -370,19 +371,27 @@ def scene_groups(rows: list[sqlite3.Row]) -> list[list[sqlite3.Row]]:
     return out
 
 
-def fix_groups(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row]) -> list[list[sqlite3.Row]]:
-    """Units to retranslate, one group per scene and run of adjacent paragraphs: the context window sits around a
-    group, so two fixes far apart in a scene are sent apart (together, the paragraphs between them were neither
-    translated nor shown)."""
+def fix_groups(conn: sqlite3.Connection, cfg: Config, book_id: str, rows: list[sqlite3.Row]) -> list[list[sqlite3.Row]]:
+    """Units to retranslate, in story order. "window" scope (``translation.fix_scope``): one group per scene, each fix
+    with its own window (``fix_windows``) — every request repeats the translation rules, and a request per run of
+    paragraphs made 52 requests of 55 fixes; a scene past ``fix_batch_units`` paragraphs or ``fix_batch_chars``
+    characters (the paragraphs and their windows) goes in even parts. "scene" scope, or no scene: one group per scene
+    and run of adjacent paragraphs (the context window sits around a group, so two fixes far apart in a scene are sent
+    apart: together, the paragraphs between them were neither translated nor shown)."""
     rows = sorted(rows, key=lambda r: r["ordinal"])
     if not rows:
         return []
+    tc = cfg.translation
+    batched = tc.fix_scope == "window" and tc.fix_context_chars > 0
     ords = [o for (o,) in conn.execute(
         "SELECT ordinal FROM units WHERE book_id=? AND translatable=1 AND kind IN ('text','heading') AND ordinal "
         "BETWEEN ? AND ? ORDER BY ordinal", (book_id, rows[0]["ordinal"], rows[-1]["ordinal"]))]
     pos = {o: i for i, o in enumerate(ords)}
     out: list[list[sqlite3.Row]] = []
     for group in scene_groups(rows):
+        if batched and group[0]["scene_id"] is not None:
+            out += _fix_parts(conn, cfg, book_id, group)
+            continue
         run = [group[0]]
         for r in group[1:]:
             at = pos.get(r["ordinal"])
@@ -393,6 +402,25 @@ def fix_groups(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row]) 
                 run = [r]
         out.append(run)
     return out
+
+
+def _fix_parts(conn: sqlite3.Connection, cfg: Config, book_id: str,
+               group: list[sqlite3.Row]) -> list[list[sqlite3.Row]]:
+    """A scene's fixes in as few even parts as keep each within ``fix_batch_units`` paragraphs and ``fix_batch_chars``
+    characters: the paragraphs, and each one's window as it is sent (windows that overlap count twice)."""
+    from .context_builder import fix_window_rows
+
+    def chars(part: list[sqlite3.Row]) -> int:
+        ids = {r["id"] for r in part}
+        return sum(len(r["plain_text"]) + sum(len(x["plain_text"]) for side in fix_window_rows(
+            conn, cfg, book_id, r, ids - {r["id"]}) for x in side) for r in part)
+
+    n = -(-len(group) // cfg.translation.fix_batch_units)
+    while True:
+        parts = [group[len(group) * k // n:len(group) * (k + 1) // n] for k in range(n)]
+        if n >= len(group) or all(chars(p) <= cfg.translation.fix_batch_chars for p in parts):
+            return parts
+        n += 1
 
 
 def _close_jobs(orch: Any, unit_ids: list[str], status: str) -> None:
@@ -427,17 +455,26 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
               for u, t in current.items()}
     stats["retranslated"] += len(todo)
     res = BatchResult()
-    # "window" (translation.fix_scope): the paragraphs around the fix (fix_context_chars a side, at least two) and
+    # "window" (translation.fix_scope): the paragraphs around each fix (fix_context_chars a side, at least two) and
     # what they need of the memory — the people in them, their lines, terms and facts; a fix request carrying the
-    # whole scene's data cost more than the first translation of the book. "scene": as much of the scene as a
-    # retranslation of chosen units sees (targeted_scene_context_chars a side) and the people of the whole scene
+    # whole scene's data cost more than the first translation of the book. A scene's fixes go in one request, each
+    # with its own window (``around``: the request has no context before or after of its own). "scene": as much of
+    # the scene as a retranslation of chosen units sees (targeted_scene_context_chars a side) and the people of the
+    # whole scene, a request per run of paragraphs
     whole = orch.cfg.translation.fix_scope == "scene"
-    for group in fix_groups(conn, orch.book.id, todo):
+    with orch.lock:
+        groups = fix_groups(conn, orch.cfg, orch.book.id, todo)
+    for group in groups:
         ctx = orch.batch_context(_fake_batch(orch, group, whole_scene=whole, fix=not whole))
+        around = ctx.pop("around", {})
         ctx["review_feedback"] = [
             {"unit_id": r["id"], **({"current_translation": before[r["id"]]} if before[r["id"]] else {}),
              "issues": [{k: v for k, v in i.items() if k in ("issue_type", "evidence", "suggestion")}
-                        for i in feedback[r["id"]]]}
+                        for i in feedback[r["id"]]],
+             # the text around, without ids: the model refers to none of it (ids would also number the request's
+             # paragraphs out of story order)
+             **({"around": {side: [{k: v for k, v in c.items() if k != "unit_id"} for c in around[r["id"]][side]]
+                            for side in ("before", "after")}} if r["id"] in around else {})}
             for r in group]
         try:
             part = orch.translator.translate([UnitInput.from_row(r) for r in group], ctx, qa_glossary=orch.qa_glossary())

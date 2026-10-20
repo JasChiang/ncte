@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 import sqlite3
+from collections.abc import Set as AbstractSet
 from typing import Any
 
 from ..config import Config
@@ -24,12 +25,11 @@ def neighbor_context(conn: sqlite3.Connection, cfg: Config, book_id: str, rows: 
                      *, scene_id: str | None = None, whole_scene: bool = False, fix: bool = False) -> dict[str, Any]:
     """Previous / next units as context. ``whole_scene`` (retranslating chosen units): the rest of the scene on
     both sides, nearest first, up to ``targeted_scene_context_chars`` Japanese characters per side. ``fix`` (a fix in
-    the "window" scope): the same within ``fix_context_chars`` a side, at least two paragraphs a side when the scene
-    has them."""
+    the "window" scope): ``around`` each fixed unit its own window instead (``fix_windows``) — the fixes of one request
+    may be far apart in their scene."""
     first, last = rows[0]["ordinal"], rows[-1]["ordinal"]
     if fix and (scene_id or rows[-1]["scene_id"]) and cfg.translation.fix_context_chars:
-        return _scene_window(conn, book_id, rows, scene_id or rows[-1]["scene_id"],
-                             budget=cfg.translation.fix_context_chars, least=FIX_LEAST_UNITS)
+        return {"around": fix_windows(conn, cfg, book_id, rows)}
     if whole_scene and (scene_id or rows[-1]["scene_id"]) and cfg.translation.targeted_scene_context_chars:
         return _scene_window(conn, book_id, rows, scene_id or rows[-1]["scene_id"],
                              budget=cfg.translation.targeted_scene_context_chars)
@@ -62,8 +62,42 @@ def neighbor_context(conn: sqlite3.Connection, cfg: Config, book_id: str, rows: 
             "context_after": [{"unit_id": r["id"], "source": r["source_text"]} for r in nxt]}
 
 
-def _scene_window(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row],
-                  scene_id: str, *, budget: int, least: int = 1) -> dict[str, Any]:
+def fix_window_rows(conn: sqlite3.Connection, cfg: Config, book_id: str, row: sqlite3.Row,
+                    skip: AbstractSet[str] = frozenset()) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
+    """The paragraphs before and after one fixed unit (ADR-077): within ``fix_context_chars`` a side, at least two a
+    side when its scene has them, never past the scene. ``skip``: the other units fixed in the same request — they are
+    in it already, and do not count against the window."""
+    return _window_rows(conn, book_id, [row], row["scene_id"], budget=cfg.translation.fix_context_chars,
+                        least=FIX_LEAST_UNITS, skip=skip)
+
+
+def fix_windows(conn: sqlite3.Connection, cfg: Config, book_id: str,
+                rows: list[sqlite3.Row]) -> dict[str, dict[str, list[dict[str, Any]]]]:
+    """Each fixed unit's own window: ``before`` with the current translation, ``after`` the source only."""
+    fixed = {r["id"] for r in rows}
+    out = {}
+    for r in rows:
+        prev, nxt = fix_window_rows(conn, cfg, book_id, r, fixed - {r["id"]})
+        out[r["id"]] = {"before": _with_translation(conn, prev),
+                        "after": [{"unit_id": x["id"], "source": x["source_text"]} for x in nxt]}
+    return out
+
+
+def shown_context(ctx: dict[str, Any]) -> list[dict[str, Any]]:
+    """The paragraphs a request shows as context (before and after its units, or around each fixed one), each once."""
+    items = [*ctx.get("context_before", []), *ctx.get("context_after", [])]
+    for w in ctx.get("around", {}).values():
+        items += [*w["before"], *w["after"]]
+    out, seen = [], set()
+    for c in items:
+        if c["unit_id"] not in seen:
+            seen.add(c["unit_id"])
+            out.append(c)
+    return out
+
+
+def _window_rows(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row], scene_id: str, *, budget: int,
+                 least: int = 1, skip: AbstractSet[str] = frozenset()) -> tuple[list[sqlite3.Row], list[sqlite3.Row]]:
     first, last = rows[0]["ordinal"], rows[-1]["ordinal"]
     q = ("SELECT * FROM units WHERE book_id=? AND scene_id=? AND translatable=1 AND kind IN ('text','heading') "
          "AND spine_index IS NOT NULL AND ordinal {} ? ORDER BY ordinal {}")
@@ -72,6 +106,8 @@ def _scene_window(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row
         out: list[sqlite3.Row] = []
         used = 0
         for r in cands:
+            if r["id"] in skip:
+                continue
             used += len(r["plain_text"])
             if len(out) >= least and used > budget:
                 break
@@ -80,14 +116,24 @@ def _scene_window(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row
 
     prev = take(conn.execute(q.format("<", "DESC"), (book_id, scene_id, first)).fetchall())[::-1]
     nxt = take(conn.execute(q.format(">", "ASC"), (book_id, scene_id, last)).fetchall())
-    before = []
-    for r in prev:
+    return prev, nxt
+
+
+def _with_translation(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    out = []
+    for r in rows:
         item = {"unit_id": r["id"], "source": r["source_text"]}
         tr = latest_translation(conn, r["id"], r["source_hash"])
         if tr is not None:
             item["translation"] = tr["text"]
-        before.append(item)
-    return {"context_before": before,
+        out.append(item)
+    return out
+
+
+def _scene_window(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row],
+                  scene_id: str, *, budget: int, least: int = 1) -> dict[str, Any]:
+    prev, nxt = _window_rows(conn, book_id, rows, scene_id, budget=budget, least=least)
+    return {"context_before": _with_translation(conn, prev),
             "context_after": [{"unit_id": r["id"], "source": r["source_text"]} for r in nxt]}
 
 

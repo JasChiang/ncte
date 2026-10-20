@@ -4,6 +4,8 @@ cards with her gender (her 妳 was once changed to 你 when she was missing). ``
 
 import json
 
+import pytest
+
 from ncte.llm.fake import FakeLLM, default_memory_update, default_scene_analyze
 from ncte.samples import BookSpec, Doc, _section, write_book
 
@@ -74,29 +76,45 @@ def memory(payload, req):
     return out
 
 
-def review(payload, req):
-    return {"issues": [{"unit_id": i["unit_id"], "issue_type": "mistranslation", "severity": "high",
-                        "evidence": "原文是疑問", "suggestion": "改成疑問句", "needs_retranslation": True}
-                       for i in payload["items"] if FIXED in i["source"]]}
+def flag(*needles):
+    """A reviewer finding a serious error in each paragraph holding one of ``needles``."""
+    def review(payload, req):
+        return {"issues": [{"unit_id": i["unit_id"], "issue_type": "mistranslation", "severity": "high",
+                            "evidence": "原文是疑問", "suggestion": "改成疑問句", "needs_retranslation": True}
+                           for i in payload["items"] if any(n in i["source"] for n in needles)]}
+    return review
+
+
+def fix_requests(conn, cfg, tmp_path, scope, *needles):
+    cfg.review.automatic_review = "all"
+    cfg.translation.fix_scope = scope
+    client = FakeLLM(responders={"scene_analyze": analyze, "memory_update": memory, "review": flag(*needles)})
+    epub = write_book(spec(len(scope)), tmp_path / f"{scope}.epub")
+    book, rid, _ = run_book(conn, cfg, epub, client, mode="context")
+    return book, rid, [p for p in client.payloads if p.get("task") == "translate" and "review_feedback" in p]
 
 
 def fix_run(conn, cfg, tmp_path, scope):
-    cfg.review.automatic_review = "all"
-    cfg.translation.fix_scope = scope
-    client = FakeLLM(responders={"scene_analyze": analyze, "memory_update": memory, "review": review})
-    book, rid, _ = run_book(conn, cfg, write_book(spec(len(scope)), tmp_path / f"{scope}.epub"), client, mode="context")
-    (fix,) = [p for p in client.payloads if p.get("task") == "translate" and "review_feedback" in p]
+    book, rid, (fix,) = fix_requests(conn, cfg, tmp_path, scope, FIXED)
     return book, rid, fix
+
+
+def by_source(conn, book):
+    return {r["source_text"]: r for r in conn.execute("SELECT * FROM units WHERE book_id=?", (book.id,))}
 
 
 def test_a_fix_in_the_window_scope_carries_the_window_and_its_people(conn, cfg, tmp_path):
     book, _rid, p = fix_run(conn, cfg, tmp_path, "window")
     plain = {r["id"]: r["plain_text"] for r in conn.execute("SELECT id, plain_text FROM units WHERE book_id=?",
                                                             (book.id,))}
+    unit = by_source(conn, book)
     assert [FIXED in plain[u["unit_id"]] for u in p["units"]] == [True]
-    for side in (p["context_before"], p["context_after"]):  # nearest paragraphs, within the window
-        assert len(side) >= 2 and sum(len(plain[c["unit_id"]]) for c in side) <= cfg.translation.fix_context_chars
-    shown = " ".join(plain[c["unit_id"]] for c in p["context_before"] + p["context_after"])
+    assert "context_before" not in p and "context_after" not in p
+    (fb,) = p["review_feedback"]
+    for side in (fb["around"]["before"], fb["around"]["after"]):  # nearest paragraphs, within the window
+        assert len(side) >= 2 and sum(len(unit[c["source"]]["plain_text"]) for c in side) \
+            <= cfg.translation.fix_context_chars
+    shown = " ".join(unit[c["source"]]["plain_text"] for side in fb["around"].values() for c in side)
     assert "花子が戸口に" in shown and "次郎は遠くで" not in shown and "三郎は最後に" not in shown
     cards = {c["name_ja"]: c for c in p["characters"]}
     assert set(cards) == {"太郎", "花子"}  # not the scene's others (次郎, 三郎: named only far from the fix)
@@ -106,7 +124,7 @@ def test_a_fix_in_the_window_scope_carries_the_window_and_its_people(conn, cfg, 
     mem = p["memory"]
     assert 0 < len(mem["facts"]) <= cfg.context.fix_fact_quota
     assert "previous_chapter_summary" not in mem and len(mem["this_chapter_so_far"]) <= 1
-    window = {c["unit_id"] for c in p["context_before"] + p["context_after"]} | {p["units"][0]["unit_id"]}
+    window = {unit[c["source"]]["id"] for side in fb["around"].values() for c in side} | {p["units"][0]["unit_id"]}
     assert p["scene"]["utterances"] and all(u["unit_id"] in window for u in p["scene"]["utterances"])
 
 
@@ -137,3 +155,76 @@ def test_each_request_records_its_payload_size(conn, cfg, tmp_path):
         sizes[scope] = json.loads(fix[-1]["usage_json"])["payload_chars"]  # the fix, after the first translation
         assert json.loads(fix[-1]["usage_json"])["prompt_tokens"] > 0  # the usage the source reported is kept
     assert sizes["window"] < sizes["scene"]
+
+
+FAR = ("次郎、待ってくれ", FIXED, "三郎は最後に")  # the second paragraph of the scene, the middle, the last
+
+
+@pytest.fixture(autouse=True)
+def one_review_request(monkeypatch):
+    """The scene reviewed in one request (its fixes come back together; a scene reviewed in parts is fixed a part at a
+    time)."""
+    from ncte.translation import review as rv
+
+    monkeypatch.setattr(rv, "REVIEW_BATCH", 100)
+
+
+def test_a_scene_s_fixes_far_apart_go_in_one_request_each_with_its_own_window(conn, cfg, tmp_path):
+    book, rid, (p,) = fix_requests(conn, cfg, tmp_path, "window", *FAR)
+    unit = by_source(conn, book)
+    ids = [u["unit_id"] for u in p["units"]]
+    assert [next(n for n in FAR if n in unit_src) for unit_src in (u["source"] for u in p["units"])] == list(FAR)
+    assert [f["unit_id"] for f in p["review_feedback"]] == ids  # in story order
+    assert "context_before" not in p and "context_after" not in p
+    for fb in p["review_feedback"]:
+        me = next(u for u in unit.values() if u["id"] == fb["unit_id"])
+        before, after = fb["around"]["before"], fb["around"]["after"]
+        assert all(set(c) == {"source", "translation"} for c in before)  # the current translation with the source
+        assert all(set(c) == {"source"} for c in after)
+        assert all(unit[c["source"]]["ordinal"] < me["ordinal"] for c in before)
+        assert all(unit[c["source"]]["ordinal"] > me["ordinal"] and unit[c["source"]]["scene_id"] == me["scene_id"]
+                   for c in after)
+        assert not {unit[c["source"]]["id"] for c in before + after} & set(ids)
+    first = p["review_feedback"][0]["around"]
+    assert "次郎は遠くで" in first["before"][-1]["source"] and len(first["after"]) >= 2  # the scene begins just before
+    assert p["review_feedback"][-1]["around"]["after"] == []  # the scene's last paragraph
+    shown = " ".join(c["source"] for fb in p["review_feedback"] for side in fb["around"].values() for c in side)
+    assert "花子が戸口に" in shown
+    assert {"太郎", "次郎", "花子", "三郎"} <= {c["name_ja"] for c in p["characters"]}  # the union of the windows
+    (row,) = [r for r in conn.execute("SELECT unit_ids_json, usage_json FROM llm_requests WHERE run_id=? AND "
+                                      "stage='translate'", (rid,)) if json.loads(r["unit_ids_json"]) == ids]
+    assert json.loads(row["usage_json"])["payload_chars"] > 0
+    fixed = conn.execute("SELECT COUNT(DISTINCT unit_id) FROM translations WHERE run_id=? AND flags_json LIKE "
+                         "'%review_retranslation%'", (rid,)).fetchone()[0]
+    assert fixed == 3
+
+
+def test_the_scene_scope_still_sends_a_request_per_run(conn, cfg, tmp_path):
+    _book, _rid, sent = fix_requests(conn, cfg, tmp_path, "scene", *FAR)
+    assert [len(p["units"]) for p in sent] == [1, 1, 1]
+    assert all("context_before" in p and "around" not in p["review_feedback"][0] for p in sent)
+
+
+def test_a_scene_s_fixes_are_split_into_even_parts_past_the_paragraph_cap(conn, cfg, tmp_path):
+    cfg.translation.fix_batch_units = 2
+    _book, _rid, sent = fix_requests(conn, cfg, tmp_path, "window", *FAR)
+    assert [[next(n for n in FAR if n in u["source"]) for u in p["units"]] for p in sent] == [[FAR[0]], list(FAR[1:])]
+
+
+def test_a_scene_s_fixes_are_split_past_the_character_cap(conn, cfg, tmp_path):
+    cfg.translation.fix_batch_chars = 1  # each paragraph with its window is past it: one request each
+    _book, _rid, sent = fix_requests(conn, cfg, tmp_path, "window", *FAR)
+    assert [len(p["units"]) for p in sent] == [1, 1, 1]
+
+
+def test_a_fix_next_to_another_fix_is_not_shown_as_its_context(conn, cfg, tmp_path):
+    _book, rid, (p,) = fix_requests(conn, cfg, tmp_path, "window", FIXED, "道は20番目")
+    srcs = [u["source"] for u in p["units"]]
+    assert len(srcs) == 2 and FIXED in srcs[0] and srcs[1].startswith("　道は20番目")
+    first, second = p["review_feedback"]
+    assert srcs[1] not in [c["source"] for c in first["around"]["after"]]
+    assert srcs[0] not in [c["source"] for c in second["around"]["before"]]
+    assert any("花子が戸口に" in c["source"] for c in first["around"]["after"])  # the window goes on past it
+    assert len(first["around"]["after"]) >= 2 and len(second["around"]["before"]) >= 2
+    assert conn.execute("SELECT COUNT(DISTINCT unit_id) FROM translations WHERE run_id=? AND flags_json LIKE "
+                        "'%review_retranslation%'", (rid,)).fetchone()[0] == 2
