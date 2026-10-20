@@ -1061,3 +1061,8 @@ open workspace/eval/<timestamp>/report.html
 - 改法：`epub/units.source_form`、`in_source`（同 `match_text` 的規則；作者自己的《》不當讀音）。`analysis/memory_update`、`scene`、`narration`、`split_read`、`terms`、`naming`、`house_style`、網頁找證據段落的地方全部改用它；存下的名字、詞、引用都是去掉讀音的形式。
 - 測試：`tests/integration/test_in_source.py`（16 種檢查 × 帶讀音照收／原文沒有照退；分段讀時同一人帶不帶讀音合成一張卡；作者的《》保留）。改前 34 個裡 12 個失敗。690 passed、4 skipped。
 
+## 稱呼規則寫明指誰、名字的讀音（2026-10-21，分支 address-and-readings-2026-10-21，自 9dcf6ba；ADR-080）
+- 提示詞：體例的稱呼規則寫明指誰；翻譯的稱呼規則只適用於它寫明的人、與稱呼表衝突以稱呼表為準、開玩笑或刻意客氣時依原文調整。
+- 讀音：`epub/units.term_readings`、`shown_excerpt`；`repository.refresh_readings`、`readings_of`；migration 33 `glossary.readings_json`；定名例句帶讀音、定名與翻譯的譯名、人物卡、校稿人物卡附 `readings`；網頁顯示。
+- 測試：`tests/integration/test_readings.py`（新）、`tests/unit/test_prompt_render.py`。696 passed、4 skipped。
+

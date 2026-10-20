@@ -130,7 +130,9 @@ def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> 
     start = min((p["_at"] for p in part if "_at" in p), default=None)
     habits = load_style(conn, book_id).voices  # the house style's speech habits (ADR-053), by Japanese name
     out = []
-    from ..memory.repository import impression_at
+    from ..memory.repository import impression_at, readings_of
+
+    said = readings_of(conn, book_id)
 
     for c in conn.execute("SELECT c.*, g.gender FROM characters c LEFT JOIN character_gender g ON g.character_id=c.id "
                           "WHERE c.book_id=?", (book_id,)):
@@ -146,6 +148,8 @@ def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> 
         # gender and narrator as known there too (a gender revealed later must not judge an earlier 你)
         basics = view if view is not None else character_basics(
             conn, c["id"], pos(conn, book_id, max(p["_at"] for p in part)) if start is not None else None)
+        if said.get(item["ja"]):
+            item["readings"] = said[item["ja"]]
         item.update({k: basics[k] for k in ("gender", "narrator") if k in basics})
         if imp := impression_at(conn, c["id"], start):  # the way of speaking in force where the stretch begins
             item["voice"] = imp["voice"]

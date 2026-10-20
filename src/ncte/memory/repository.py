@@ -76,7 +76,37 @@ def ensure_glossary(conn: sqlite3.Connection, book_id: str, source: str, target:
     from .entities import ensure_entity
 
     ensure_entity(conn, book_id, source)
+    refresh_readings(conn, book_id, [source])
     return True
+
+
+def refresh_readings(conn: sqlite3.Connection, book_id: str, terms: list[str] | None = None) -> int:
+    """Record on glossary entries (all of the series, or ``terms``) the readings the source annotates on them
+    (``term_readings``: every reading on an occurrence of exactly the term, first appearance first), from the
+    paragraphs of every volume of the series. A string match on the stored annotations; nothing is judged."""
+    from ..epub.units import RUBY_OPEN, term_readings
+    from ..series import scope_clause
+
+    where, ids = scope_clause(conn, book_id, "u.book_id")
+    texts = [r[0] for r in conn.execute(
+        f"SELECT u.plain_text FROM units u JOIN books b ON b.id=u.book_id WHERE {where} AND u.kind IN ('text','heading') "
+        "AND instr(u.plain_text, ?) > 0 ORDER BY b.volume_index, u.ordinal", (*ids, RUBY_OPEN))]
+    rows = conn.execute(f"SELECT id, source_term, readings_json FROM glossary WHERE {SERIES_SCOPE}", (book_id,)).fetchall()
+    n = 0
+    for r in rows:
+        if terms is not None and r["source_term"] not in terms:
+            continue
+        found = json.dumps(term_readings(texts, r["source_term"]), ensure_ascii=False)
+        if found != r["readings_json"]:
+            conn.execute("UPDATE glossary SET readings_json=? WHERE id=?", (found, r["id"]))
+            n += 1
+    return n
+
+
+def readings_of(conn: sqlite3.Connection, book_id: str) -> dict[str, list[str]]:
+    """Glossary term → the readings the source annotates on it (only terms that have some)."""
+    return {r[0]: json.loads(r[1]) for r in conn.execute(
+        f"SELECT source_term, readings_json FROM glossary WHERE {SERIES_SCOPE} AND readings_json!='[]'", (book_id,))}
 
 
 def set_glossary(conn: sqlite3.Connection, book_id: str, source: str, target: str, *, category: str = "term",
@@ -88,12 +118,14 @@ def set_glossary(conn: sqlite3.Connection, book_id: str, source: str, target: st
         if row["category"] == "character" or category == "character":
             conn.execute(f"UPDATE characters SET display_name_zh=?, updated_at=? WHERE {SERIES_SCOPE} AND canonical_name=?",
                          (target, utcnow(), book_id, source))
+        refresh_readings(conn, book_id, [source])
         return {"previous": row["target_term"], "version": row["version"] + 1}
     conn.execute("INSERT INTO glossary(book_id, source_term, target_term, category, verified, origin, note, updated_at) "
                  "VALUES (?,?,?,?,?,?,?,?)", (book_id, source, target, category, int(verified), "user", note, utcnow()))
     from .entities import ensure_entity
 
     ensure_entity(conn, book_id, source)
+    refresh_readings(conn, book_id, [source])
     return {"previous": None, "version": 1}
 
 

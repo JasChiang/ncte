@@ -451,7 +451,7 @@ async function namesView(id) {
     ${pend.length ? `<button class="btn" id="acceptAll" title="每一項都選標有「建議」的那個譯法">全部採用建議</button>` : ""}
     <label class="small muted"><input type="checkbox" id="showAll" ${namesAll ? "checked" : ""}> 也顯示已套用、已決定的</label></div>
     ${rows.map(r => `<div class="card" data-pid="${r.id}">
-      <div class="row" style="align-items:baseline;gap:10px"><strong>${esc(r.label)}</strong>
+      <div class="row" style="align-items:baseline;gap:10px"><strong>${esc(r.label)}</strong>${readingsTag(r.readings)}
         ${chip(r.status === "pending" ? "c-warn" : r.status === "decided" ? "c-ok" : "c-unk", {pending: "待決定", decided: "已決定", applied: "已套用"}[r.status] || r.status)}
         <span class="muted small">出現 ${r.importance} 次　目前：${esc(r.decided_zh || r.chosen_zh)}</span></div>
       ${r.reason && r.options.length && r.reason !== r.options[0].reason ? `<div class="issue">${esc(r.reason)}</div>` : ""}
@@ -569,9 +569,9 @@ async function peopleView(id) {
     const co = {}; seen.forEach(s => { if (s.who.includes(pid)) s.who.forEach(o => { if (o !== pid) co[o] = (co[o] || 0) + 1; }); });
     const F = p.facts.filter(f => f.at <= upto), EX = p.examples.filter(e => e.at <= upto);
     const ftype = {objective: "客觀", character_belief: "角色認為", narrator_claim: "敘述者說"};
-    card = `<div class="row" style="align-items:baseline;gap:10px"><h2 style="margin:0">${esc(p.zh)}</h2><span class="ja">${esc(p.ja)}</span>
+    card = `<div class="row" style="align-items:baseline;gap:10px"><h2 style="margin:0">${esc(p.zh)}</h2><span class="ja">${esc(p.ja)}</span>${readingsTag(p.readings)}
       <span class="muted small">初登場 §${p.from}・出場 ${p.scenes} 場景・台詞 ${p.lines} 句</span></div>
-      ${p.aka.length ? `<div class="muted small">其他稱呼：${p.aka.map(a => `<span class="ja">${esc(a.ja)}</span>${a.zh && a.zh !== a.ja ? `（${esc(a.zh)}）` : ""}`).join("・")}</div>` : ""}
+      ${p.aka.length ? `<div class="muted small">其他稱呼：${p.aka.map(a => `<span class="ja">${esc(a.ja)}</span>${readingsTag(a.readings)}${a.zh && a.zh !== a.ja ? `（${esc(a.zh)}）` : ""}`).join("・")}</div>` : ""}
       ${(p.first_person || []).length ? `<div class="small" style="margin-top:4px">自稱：${p.first_person.map(([w, n]) => `<span class="form-tag"><span class="ja">${esc(w)}</span><span class="n">×${n}</span></span>`).join(" ")}</div>` : ""}
       ${genderLine(p, upto)}
       ${groupLine(p, d, nm)}
@@ -603,6 +603,8 @@ async function peopleView(id) {
 }
 // relations of one person as known at the slider position (begun, not yet replaced), each with its source quote
 // a source line with the translation of its paragraph under it (both languages, for comparison)
+// the readings the source annotates on a name (彩葉《いろは》): small, next to the name
+function readingsTag(r) { return (r || []).length ? ` <span class="muted small" title="原文標註的讀音">《${r.map(esc).join("、")}》</span>` : ""; }
 function bi(ja, zh, cls = "") {
   return `<span class="bi ${cls}"><span class="ja">${esc(ja || "")}</span>${zh ? `<span class="zh">${esc(zh)}</span>` : ""}</span>`;
 }
@@ -958,7 +960,7 @@ async function glossaryView(id) {
   const ORIGIN = {user: "你設定的", human: "你設定的", naming: "定名", memory_update: "讀的時候記下", scene_analysis: "讀的時候記下",
     scene_analyze: "讀的時候記下", glossary: "名詞表", series: "前一集"};
   const draw = q => { $("#gt").innerHTML = `<tr><th>日文</th><th>譯名</th><th>類別</th><th>來源</th></tr>` + g.filter(x => !q || x.ja.includes(q) || x.zh.includes(q))
-    .map(x => `<tr><td class="ja">${esc(x.ja)}</td><td>${esc(x.zh)}</td><td class="muted small">${esc(CAT[x.category] || x.category)}</td>
+    .map(x => `<tr><td class="ja">${esc(x.ja)}${readingsTag(x.readings)}</td><td>${esc(x.zh)}</td><td class="muted small">${esc(CAT[x.category] || x.category)}</td>
       <td>${x.verified ? chip("c-ok", "已確認") : chip("c-unk", ORIGIN[x.origin] || x.origin)}</td></tr>`).join(""); };
   draw(""); $("#gq").oninput = e => draw(e.target.value.trim());
 }

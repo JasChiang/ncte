@@ -706,6 +706,9 @@ INSERT INTO term_definitions_by_stage(id, book_id, source_term, definition, cont
 DROP TABLE term_definitions;
 ALTER TABLE term_definitions_by_stage RENAME TO term_definitions;
 """),
+    (33, "the readings the source annotates on a glossary term (強敵《とも》), collected by the program", """
+ALTER TABLE glossary ADD COLUMN readings_json TEXT NOT NULL DEFAULT '[]';
+"""),
 ]
 
 

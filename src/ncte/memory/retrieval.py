@@ -118,6 +118,9 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
              if (v := vis.character_view(conn, book_id, c, upto, forms_at)) is not None}
     chars = [c for c in vis.visible_characters(conn, book_id, upto) if c["id"] in views]
     names = {cid: (v["name_zh"] or v["name_ja"]) for cid, v in views.items()}
+    from .repository import readings_of
+
+    said = readings_of(conn, book_id)  # how the source annotates a name's reading (彩葉《いろは》)
     present = []
     for c in chars:
         v = views[c["id"]]
@@ -136,6 +139,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             examples.append(item)
         card = {"character_id": c["id"], "name_ja": v["name_ja"], "name_zh": v["name_zh"],
                 "aliases_ja": v["aliases_ja"], "speech_profile": prof, "verified_examples": examples}
+        if said.get(v["name_ja"]):
+            card["readings"] = said[v["name_ja"]]
         if v.get("gender"):
             card["gender"] = v["gender"]
         if v.get("narrator"):

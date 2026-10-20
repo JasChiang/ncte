@@ -371,3 +371,14 @@ def test_reading_in_one_request_carries_the_same_rules_as_the_two_steps():
     assert ("\n- 每個 `quotes`" + analyze.split("\n- 每個 `quotes`", 1)[1].rstrip()
             == "\n- 每個 `quotes`" + _between(read, "\n- 每個 `quotes`", "\n## 第二部分").rstrip())
     assert _between(memory, "## 規則\n", "\n## 輸出") == _between(read, "### 規則\n", "\n### 第二部分的格式")
+
+
+def test_a_house_rule_about_a_form_of_address_says_whom_it_is_about():
+    """「安達さん」 is said to Adachi's mother and, jokingly, to Adachi: an unscoped rule turned the classmate's line into
+    「安達女士」. The editor names whom such a rule is about and leaves a form used for different people to the
+    translator; the translator applies a rule only to its person, and who calls whom what wins over it."""
+    rules = load_prompt("house_style").text.split("- `rules`：")[1]
+    assert "寫明它指的是誰" in rules and "同一個寫法在書中用來稱呼不同的人時" in rules
+    assert rules.count("由譯者逐句") == 2  # the per-sentence judgement stays one principle, extended, not repeated
+    style = load_prompt("translate").render({"style": {"rules": ["…"]}}).split("- `style`：")[1].split("\n")[0]
+    assert "只適用於規則寫明的那個人" in style and "以 `address_terms` 為準" in style and "依這句台詞" in style

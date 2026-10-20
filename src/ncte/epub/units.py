@@ -167,6 +167,93 @@ def in_source(quoted: str, source: str) -> bool:
     return bool(q) and q in _SPACING.sub("", match_text(source))
 
 
+@dataclass
+class _Shown:
+    """A text as matching reads it (``plain``: ``match_text``) and as the model reads it (``shown``: placeholders
+    dropped, readings as 蒼《あお》), with, for each character of ``plain``, where it is in ``shown`` and the ruby
+    group it is the base of (an index into ``readings``; None outside any)."""
+    plain: str
+    shown: str
+    at: list[int]
+    group: list[int | None]
+    readings: list[str]
+
+
+def _shown(text: str) -> _Shown:
+    t = PH_RE.sub("", text)
+    plain: list[str] = []
+    shown: list[str] = []
+    at: list[int] = []
+    group: list[int | None] = []
+    readings: list[str] = []
+    cur: int | None = None
+    n = 0
+
+    def keep(seg: str) -> None:
+        nonlocal n
+        for ch in seg:
+            plain.append(ch)
+            at.append(n)
+            group.append(cur)
+            shown.append(ch)
+            n += 1
+
+    last = 0
+    for m in RUBY_NOTATION.finditer(t):
+        keep(t[last:m.start()])
+        tok = m.group(0)
+        if tok == RUBY_OPEN:
+            cur = len(readings)
+            readings.append("")
+        else:
+            if tok.startswith(RUBY_SEP):
+                if cur is not None:
+                    readings[cur] = tok[1:-1]
+                tok = f"《{tok[1:-1]}》"
+                cur = None
+            shown.append(tok)  # an author's own kana 《…》 after a character: dropped by match_text, kept for the model
+            n += len(tok)
+        last = m.end()
+    keep(t[last:])
+    return _Shown("".join(plain), "".join(shown), at, group, readings)
+
+
+def shown_excerpt(text: str, term: str, width: int = 36) -> str:
+    """The stretch around the first ``term`` (found in the reading-free text) as the model reads it: a name with a
+    special reading keeps it (強敵《とも》と呼べる相手)."""
+    s = _shown(text)
+    i = s.plain.find(term)
+    a, b = max(0, i - width // 2), max(0, i + len(term) + width // 2)
+    start = s.at[a] if a < len(s.at) else len(s.shown)
+    end = s.at[b] if b < len(s.at) else len(s.shown)
+    return s.shown[start:end].strip()
+
+
+def term_readings(texts: list[str], term: str) -> list[str]:
+    """Every reading the source annotates on an occurrence of exactly ``term`` (its characters are the bases of whole
+    ruby groups and nothing else: 強敵《とも》 → とも, 魔《ま》法《ほう》 → まほう), in order of first appearance, each once.
+    A string match on the stored annotations only."""
+    out: list[str] = []
+    if not term:
+        return out
+    for text in texts:
+        if RUBY_OPEN not in text or term[0] not in text:
+            continue
+        s = _shown(text)
+        i = s.plain.find(term)
+        while i >= 0:
+            j = i + len(term)
+            gs = s.group[i:j]
+            whole = (None not in gs and (i == 0 or s.group[i - 1] != gs[0])
+                     and (j == len(s.group) or s.group[j] != gs[-1]))
+            if whole:
+                reading = "".join(s.readings[g] for g in dict.fromkeys(g for g in gs if g is not None))
+                if reading and reading not in out:
+                    out.append(reading)
+            i = s.plain.find(term, i + 1)
+    return out
+
+
 def _has_block_descendant(el: Any) -> bool:
     for d in el.iterdescendants():
         if isinstance(d.tag, str) and local(d) in BLOCK_TAGS:

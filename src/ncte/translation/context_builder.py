@@ -138,10 +138,12 @@ def _scene_window(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row
 
 
 def glossary_payload(entries: list[dict[str, Any]], text: str, *, upto: tuple[float, int] | None = None,
-                     revealed: dict[str, tuple[float, int]] | None = None) -> list[dict[str, Any]]:
+                     revealed: dict[str, tuple[float, int]] | None = None,
+                     readings: bool = False) -> list[dict[str, Any]]:
     """Terms present in ``text`` + (for named entities) the other name forms already revealed by story position
     ``upto`` = (volume, ordinal). Renderings of terms present in the text are always given (consistency across
-    volumes, even when a later volume was translated first); sibling forms and their links only once revealed."""
+    volumes, even when a later volume was translated first); sibling forms and their links only once revealed.
+    ``readings`` (the translator's request): a term the source annotates with a reading carries it."""
     revealed = revealed or {}
 
     def visible(g: dict[str, Any]) -> bool:
@@ -159,6 +161,8 @@ def glossary_payload(entries: list[dict[str, Any]], text: str, *, upto: tuple[fl
     for g in relevant_glossary(entries, text):
         item: dict[str, Any] = {"ja": g["source_term"], "zh": g["target_term"], "verified": g["verified"],
                                 "category": g["category"]}
+        if readings and g.get("readings"):
+            item["readings"] = g["readings"]
         siblings = [o for o in by_entity.get(g.get("entity_id") or "", []) if o is not g and visible(o)]
         if siblings and visible(g):
             item["form"] = g.get("form_type") or "official"

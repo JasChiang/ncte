@@ -40,6 +40,7 @@ def glossary_entries(conn: sqlite3.Connection, book_id: str) -> list[dict[str, A
                     "first_unit_id": r["first_unit_id"], "aliases": aliases.get(r["source_term"], []),
                     "entity_id": r["entity_id"], "form_type": r["form_type"], "form_note": r["form_note"],
                     "first_ordinal": r["first_ordinal"], "senses": shared.get(r["source_term"], []),
+                    "readings": json.loads(r["readings_json"] or "[]"),
                     "first_pos": (float(r["first_volume"]), int(r["first_ordinal"]))
                     if r["first_ordinal"] is not None else None})
     return out

@@ -461,6 +461,16 @@ class ContextOrchestrator(Orchestrator):
                 continue
             self.stage_scene_analyze(sid)
             self.stage_memory_update(sid)
+        if due:
+            self.refresh_readings()
+
+    def refresh_readings(self) -> None:
+        """The readings the source annotates on each glossary term, collected again (the program's, from the text)."""
+        from ..memory.repository import refresh_readings
+
+        with self.lock, Transaction(self.conn):
+            refresh_readings(self.conn, self.book.id)
+        self.reload_glossary()
 
     def verify_pass(self, *, record_job: bool = True) -> None:
         """Pass 1b (ADR-033): a second look at what the read pass left in doubt, with the surrounding text."""
@@ -1015,6 +1025,7 @@ class ContextOrchestrator(Orchestrator):
         return True
 
     def stage_naming(self, *, record_job: bool = True) -> dict[str, int]:
+        self.refresh_readings()  # names are chosen knowing the readings the book gives them
         with self.lock:
             payload = build_naming_payload(self.conn, self.book.id,
                                            definitions=self.cfg.context.term_definitions)

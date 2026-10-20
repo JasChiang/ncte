@@ -277,6 +277,9 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
         return (texts.get(at) or (None, None))[1]
     rendering = {g["source_term"]: g["target_term"] for g in conn.execute(
         f"SELECT source_term, target_term FROM glossary WHERE {SERIES_SCOPE}", (book.id,))}
+    from ..memory.repository import readings_of
+
+    said = readings_of(conn, book.id)  # readings the source annotates on a name (彩葉《いろは》)
     facts: dict[str, list[dict[str, Any]]] = defaultdict(list)
     from ..series import volume_of as _vol
     from ..series import volumes as _vols
@@ -328,7 +331,9 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
             continue
         # the name as the translation writes it: the glossary's rendering (your choice included) over the card's own
         out[cid] = {"ja": c["canonical_name"], "zh": rendering.get(c["canonical_name"]) or c["display_name_zh"] or c["canonical_name"],
-                    "aka": [{"ja": a, "zh": rendering.get(a)} for a in json.loads(c["aliases_json"] or "[]")], "from": c["known_from_ordinal"] if cv == here else -1,
+                    "readings": said.get(c["canonical_name"], []),
+                    "aka": [{"ja": a, "zh": rendering.get(a), **({"readings": said[a]} if said.get(a) else {})}
+                            for a in json.loads(c["aliases_json"] or "[]")], "from": c["known_from_ordinal"] if cv == here else -1,
                     "scenes": scene_count.get(cid, 0), "lines": lines.get(cid, 0), "facts": facts.get(cid, []),
                     "examples": examples.get(cid, [])[:6], "first_person": first_person[cid].most_common(4),
                     "info": cv == here and info(c["known_from_ordinal"])}  # earlier volumes: never book matter here
@@ -419,7 +424,8 @@ def _excerpt(ja: str, at: int, n: int, zh: str, limit: int = 120) -> str:
 
 def glossary(conn: sqlite3.Connection, book: Book) -> list[dict[str, Any]]:
     return [{"ja": g["source_term"], "zh": g["target_term"], "category": g["category"], "verified": bool(g["verified"]),
-             "origin": g["origin"], "entity": g["entity_id"], "form": g["form_type"]}
+             "origin": g["origin"], "entity": g["entity_id"], "form": g["form_type"],
+             "readings": json.loads(g["readings_json"] or "[]")}
             for g in conn.execute(f"SELECT * FROM glossary WHERE {SERIES_SCOPE} ORDER BY category, source_term", (book.id,))]
 
 
@@ -449,8 +455,10 @@ def proposals(conn: sqlite3.Connection, book: Book, *, include_done: bool = Fals
     """Proposals with their example sentences; each example also carries the current translation of its paragraph
     (when it has been translated), so a choice can be checked against how the line reads in Chinese now."""
     from ..analysis.naming import pending
+    from ..memory.repository import readings_of
 
     best = latest_texts(conn, book.id)
+    said = readings_of(conn, book.id)
     out = []
     for r in pending(conn, book.id, include_done=include_done):
         for c in r["context"]:
@@ -466,6 +474,8 @@ def proposals(conn: sqlite3.Connection, book: Book, *, include_done: bool = Fals
             else:
                 c["zh"] = plain(tr["text"]) if tr is not None else ""
         item = {k: v for k, v in r.items() if k not in ("options_json", "context_json")}
+        if r["kind"] == "name" and said.get(r["ref"]):
+            item["readings"] = said[r["ref"]]
         if r["kind"] == "address":  # other spellings of the same nickname already decided (「みずのっつぃー」→ 水野仔～～)
             from ..memory.address import decided_variants
 

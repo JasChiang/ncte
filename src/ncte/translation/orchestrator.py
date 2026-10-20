@@ -562,7 +562,7 @@ class Orchestrator:
                                        whole_scene=bool(self.opts.unit_ids) or batch.whole_scene, fix=batch.fix)
                 text += " " + " ".join(c["source"] for c in shown_context(ctx))
             ctx["glossary"] = glossary_payload(self.glossary, text, upto=(self.volume, batch.rows[-1]["ordinal"]),
-                                               revealed=self.link_revealed)
+                                               revealed=self.link_revealed, readings=True)
             if not batch.meta:
                 style = style_payload(load_style(self.conn, self.book.id), text)
                 if style:

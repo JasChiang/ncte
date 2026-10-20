@@ -13,10 +13,10 @@ import re
 import sqlite3
 from typing import Any
 
-from ..epub.units import match_text, source_form
+from ..epub.units import match_text, shown_excerpt, source_form
 from ..llm.schemas import NamingOutput
 from ..memory.db import utcnow
-from ..memory.repository import character_basics, pair_relations
+from ..memory.repository import character_basics, pair_relations, readings_of
 from ..series import SERIES_SCOPE, scope_clause
 
 NAME_CATEGORIES = ("character", "place", "organization", "item", "skill")
@@ -27,12 +27,13 @@ MAX_ADDRESS = 60
 MAX_ZH = 24
 
 
-def _book_texts(conn: sqlite3.Connection, book_id: str) -> list[tuple[int, str]]:
-    """(ordinal, text) of the story (front/back matter left out, ADR-024)."""
+def _book_texts(conn: sqlite3.Connection, book_id: str) -> list[tuple[int, str, str]]:
+    """(ordinal, text to match names in, stored text) of the story (front/back matter left out, ADR-024). Names are
+    found in the reading-free text; an example sentence is cut from the stored one (``shown_excerpt``)."""
     from ..epub.matter import story_hrefs
 
     story = story_hrefs(conn, book_id)
-    return [(r[0], match_text(r[1])) for r in conn.execute(
+    return [(r[0], match_text(r[1]), r[1]) for r in conn.execute(
         "SELECT ordinal, plain_text, resource_href FROM units WHERE book_id=? AND translatable=1 AND kind IN "
         "('text','heading') AND spine_index IS NOT NULL ORDER BY ordinal", (book_id,)) if r[2] in story]
 
@@ -68,8 +69,8 @@ def _proposed(conn: sqlite3.Connection, kind: str) -> set[str]:
 
 
 def _excerpt(text: str, term: str, width: int = 36) -> str:
-    i = text.find(term)
-    return text[max(0, i - width // 2): i + len(term) + width // 2].strip()
+    """An example sentence as the translator reads it: readings kept (強敵《とも》), so a name is chosen knowing them."""
+    return shown_excerpt(text, term, width)
 
 
 def char_names(conn: sqlite3.Connection, book_id: str) -> dict[str, str]:
@@ -83,6 +84,7 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str, *, definitions:
     from ..memory.style import load_style, style_payload
 
     texts = _book_texts(conn, book_id)
+    said = readings_of(conn, book_id)
     done = _proposed(conn, "name")
     suspects = [c for c in suspicious_characters(conn, book_id) if c["also"] and c["id"] not in _proposed(conn, "character")]
     done |= {c["name"] for c in suspects}  # a name that is someone else's form of address is checked as a character
@@ -97,7 +99,7 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str, *, definitions:
         if g["category"] not in NAME_CATEGORIES or g["verified"] or g["origin"] == "user" or term in done:
             continue
         pat = term_pattern(term)
-        hits = [(o, t) for o, t in texts if pat.search(t)]
+        hits = [(o, raw) for o, t, raw in texts if pat.search(t)]
         if not hits:
             continue
         spread = hits if len(hits) <= 3 else [hits[i * (len(hits) - 1) // 2] for i in range(3)]
@@ -105,6 +107,7 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str, *, definitions:
                for o in by_entity.get(g["entity_id"] or "", []) if o["source_term"] != term]
         names.append({"ref": term, "ja": term, "zh": g["target_term"], "category": g["category"], "count": len(hits),
                       **({"same_entity_as": sib} if sib else {}),
+                      **({"readings": said[term]} if said.get(term) else {}),
                       "samples": [_excerpt(t, term) for _, t in spread[:2]],
                       "_context": [{"at": o, "text": _excerpt(t, term, 70)} for o, t in spread]})
     names.sort(key=lambda n: -n["count"])
@@ -146,7 +149,7 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str, *, definitions:
     to_check = []
     for c in suspects:
         pat = term_pattern(c["name"])
-        hits = [(o, t) for o, t in texts if pat.search(t)]
+        hits = [(o, raw) for o, t, raw in texts if pat.search(t)]
         if not hits:
             continue
         spread = hits if len(hits) <= 4 else [hits[i * (len(hits) - 1) // 3] for i in range(4)]
@@ -505,7 +508,7 @@ def refresh_context(conn: sqlite3.Connection, book_id: str) -> int:
     for r in conn.execute("SELECT id, kind, ref FROM naming_proposals WHERE book_id=?", (book_id,)).fetchall():
         if r["kind"] == "name":
             pat = term_pattern(r["ref"])
-            hits = [(o, t) for o, t in texts if pat.search(t)]
+            hits = [(o, raw) for o, t, raw in texts if pat.search(t)]
             spread = hits if len(hits) <= 3 else [hits[i * (len(hits) - 1) // 2] for i in range(3)]
             ctx = [{"at": o, "text": _excerpt(t, r["ref"], 70)} for o, t in spread]
         else:
