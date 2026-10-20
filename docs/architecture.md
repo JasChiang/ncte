@@ -38,7 +38,7 @@ translate (context, read first — default; translation/context_pipeline.Context
      with memory/retrieval as known at that point (see 〈各階段傳遞了什麼〉)
      → program checks (second person 你／妳, narration 我, narrator's self form…) → confirm (the rule flags and the
        translator's own doubts, asked again with the lines around) → review of flagged units
-  6. proofread: every paragraph against its source, 2 passes on the Claude plan, else 1 (ADR-051, ADR-066)
+  6. proofread: every paragraph against its source, 2 passes on the Claude plan and Codex, else 1 (ADR-051, ADR-066)
   7. reader pass: Chinese only, what a reader cannot follow goes back to the translator (ADR-038)
   8. table of contents and book title (run_meta)
 
@@ -65,6 +65,8 @@ gui    ──► gui/server (127.0.0.1, token) ── data (reads; source quotes
 ### 總表（依執行順序）
 
 模型欄是 **Claude 方案的預設**（`config.use_claude_models`、`orchestrator.DEFAULT_STAGE_REASONING`）：讀的步驟（`CLAUDE_READ_STAGES`：切場景、讀場景、記憶整理、印象、體例）用 Sonnet，其餘用 Opus；推理程度整個 run 預設 medium，覆核、人物關係、修正檢查、校稿是 high。OpenRouter 上同樣這四步是 high（模型有提供 high 時），模型則是 run 的模型。
+
+模型來源（`openrouter.provider`、`NCTE_LLM_PROVIDER`；`cli.make_client` 建 client）：`claude`（預設，`llm/claude_cli`：每個請求一次 `claude -p`，ADR-062）、`codex`（`llm/codex_cli`：每個請求一次 `codex exec`，用 ChatGPT 訂閱，所有步驟預設 `codex/gpt-6.1-sol`，ADR-071）、`openrouter`／`fal`（`llm/openrouter`、`llm/fal_openrouter`，付費）、`local`（`llm/local`，本機 OpenAI 相容伺服器，ADR-068）。模型 id 的前綴 `claude/`、`codex/`、`local/` 指名自己的來源：`stage_models`、`review_model`、`fallback_models` 可以把某一步交給另一個來源（`llm/routing.RoutingClient` 依前綴分流），執行的來源仍是主來源。Claude 方案的預設不含 Codex；`codex` 來源只留 `codex/` 的模型。
 
 | # | 步驟 | 模型（推理） | 一次請求的範圍 | 模型拿到什麼 | 模型回傳什麼 | 程式核對什麼 | 寫到哪裡 | 之後誰會用 | ADR／程式 |
 |---|---|---|---|---|---|---|---|---|---|

@@ -996,3 +996,14 @@ open workspace/eval/<timestamp>/report.html
 - 品牌與作品的中文名：記憶整理、合併讀場景與翻譯（譯註）的提示詞原本要求「不要自己補上外國品牌的中文名稱」，改成 ADR-047 的原則：在臺灣有通行中文名稱、而且有把握時用它（可附原名），沒把握寫原名，不要自己編。
 - 線上抽驗（Claude 方案，校園日常整本副本）：重翻那一場後整本讀者檢查從 34 處降到 12 處，那一句不再被送回；譯註仍寫「日本知名平價服飾連鎖店」，沒有用臺灣的店名（模型沒把握就照規則不寫）。
 - 測試：`tests/integration/test_reader.py`（讀者檢查與校稿看到譯註）、`tests/unit/test_prompt_render.py`。592 passed、5 skipped。
+
+
+## Codex 來源：ChatGPT 方案當模型（2026-10-20，分支 codex-provider-2026-10-20，自 c2bc5d7；ADR-071）
+全部離線；沒有呼叫 `codex` 或 `claude`（測試以 monkeypatch 的 `subprocess.run` 代答）。
+- `llm/codex_cli.CodexCLIClient`（`codex/` 前綴、來源名 `codex`）：每個請求一次 `codex exec`（不帶 `--ephemeral`、`--skip-git-repo-check`、`--ignore-user-config`、`--ignore-rules`、`-s read-only`、`--output-schema`、`--json`、`-o`、`-m`，提示從 stdin），每個請求一個暫存目錄（空的 cwd、instructions 檔、schema 檔、最後訊息檔），用完刪。固定規則寫進 `model_instructions_file`，條件段與重試更正在 stdin 開頭；推理程度以 `model_reasoning_effort` 傳（模型在 Codex 的 cache 裡不接受的不傳）。第一個請求前問一次 `codex features list`，所有 enabled 且不是 removed 的功能每次都 `--disable`；問不到就不帶並記一行。回答從 `-o` 檔，token 數從 `turn.completed`；`cost_usd`、`list_cost_usd` 為 0。方案額度從這個 thread 的 rollout 檔最後一筆 `rate_limits` 讀進 `usage["plan"]`，讀完刪檔。等待與停止照 Claude 方案（額度類固定間隔、其他梯子；未登入、命令列被拒立即停）。
+- 模型清單從 `~/.codex/models_cache.json`（只列 visibility 為 list 的），讀不到用內建小清單（gpt-6.1-sol、gpt-6-sol、gpt-6-luna）；價格 0。
+- 設定：`NCTE_LLM_PROVIDER=codex`、`config.use_codex_models`（預設 `codex/gpt-6.1-sol`，只留 `codex/` 的步驟、審稿、備援模型，不帶 temperature，推理程度預設 medium）；校稿預設 2 輪；`make_client` 建 `CodexCLIClient`（帶 log）；前綴分流加 `codex/`，Claude 方案的 run 可以 `stage_models: {proofread: codex/gpt-6.1-sol}`。Claude 方案預設不變。順帶修正：Claude 方案在某一步設了其他來源的模型時，其他讀書步驟仍預設 Sonnet（原本會全部變 Opus；`test_local.py` 的斷言跟著改）。
+- 網頁：設定頁「Codex（ChatGPT 方案）」選項與說明卡（找不找得到 `codex`、ChatGPT 訂閱額度、不另收費、固定負擔較大、尚未整本實測）；書庫第一步「找到 Codex」；執行卡金額欄「Codex 方案（不另收費）」、估價不顯示預算上限。
+- 測試：`tests/unit/test_codex_cli.py`（24 個：送出的參數、instructions 與 stdin、回答與 usage、方案額度與 rollout 檔刪除、features 解析與失敗、等待、未登入、命令列被拒、沒安裝、模型清單、設定、Claude run 的一步走 Codex、整本範例書在 codex 來源與「Claude 讀翻＋Codex 校稿」各跑完）、`tests/integration/test_gui_manage.py`（設定頁切到 codex）。
+- 未實測：真的 `codex exec` 的失敗訊息（額度用完、沒登入、網路斷線）、整本書的品質、速度與額度。
+- 重現：`cd ../ncte-codex && source .venv/bin/activate && pytest && ruff check src tests && mypy src`。

@@ -479,3 +479,19 @@
 - 「先列讀法」只放在判意思的步驟（校稿、審稿、修正驗收），不放進翻譯：翻譯每一句都列讀法，輸出與思考會隨全書句數成長；判錯的步驟只在它要下判斷的句子上做，量小得多。翻譯那邊只用規則 5 的子項防止拆出斷言。
 - 不加 schema：修正驗收的讀法寫在 `reason`（`FixCheck` 不變），程式不判斷（ADR-059）。
 - 限制：沒有線上量過（不跑額度）。校稿與審稿在「每種讀法都多斷定」時歸 `addition` 會送去重譯，若模型把一般的兩可也說成多斷定，重譯會變多；修正驗收判 `undecided` 的會留著待看。列讀法讓 `problem`／`evidence`／`reason` 變長，輸出多少沒有量。
+
+## ADR-071（2026-10-20）：ChatGPT 方案當模型（`codex` 來源）
+- 背景：使用者也有 ChatGPT 訂閱，想讓它的額度也能翻書（或只做某一步），不經 OpenRouter 付費。OpenAI 的 Codex CLI 有非互動模式 `codex exec`，用使用者自己的 ChatGPT 登入。
+- 實測（codex-cli 0.162.1，2026-10-20，手動跑，不是整本）：
+  - `--output-schema <檔>` 有效：`-o <檔>` 寫出的最後訊息是符合 schema 的 JSON 字串。`--json` 在 stdout 輸出 JSONL 事件：`thread.started`（`thread_id`）、`turn.started`、`item.completed`、`turn.completed`（`usage`：`input_tokens`、`cached_input_tokens`、`cache_write_input_tokens`、`output_tokens`、`reasoning_output_tokens`）。
+  - 固定負擔：Codex 每個請求帶自己的系統提示與工具說明，一句話的請求輸入約 23,000 token。用 `-c model_instructions_file=…` 換掉它的基礎指示、並把 `codex features list` 裡所有 enabled 的功能都 `--disable`，降到約 10,400 token；兩次連續呼叫都沒有讀到快取（`cached_input_tokens` 0）。比 Claude 方案每次約 600 token 的額外負擔大得多，而且固定負擔不會因快取變便宜。
+  - 帳號可用的模型在 `~/.codex/models_cache.json`（gpt-6.1-sol、gpt-6-sol、gpt-6-astra、gpt-6-luna、gpt-5.6-sol／terra／luna），推理程度 low…max（部分有 ultra）。
+- 決定：
+  - 新增來源 `codex`（`NCTE_LLM_PROVIDER=codex`、網頁「Codex（ChatGPT 方案）」），`llm/codex_cli.CodexCLIClient` 照 `claude_cli` 的結構：每個請求一次 `codex exec --skip-git-repo-check --ignore-user-config --ignore-rules -s read-only … --output-schema … --json -o … -m <model> -`，在每個請求自己的空暫存目錄執行，用完刪除。步驟的固定規則（`cached_prefix_chars` 之前）寫進 instructions 檔；本批條件段與重試更正放 stdin 開頭，再接資料（同 ADR-062 補充的切法）。推理程度照 `stage_reasoning` 以 `-c model_reasoning_effort=…` 傳，模型不接受的程度不傳。
+  - 要關的功能在第一個請求前問一次 `codex features list`（每行「名稱 階段 true/false」，取 true 且階段不是 removed 的）；問不到就不帶 `--disable`，記一行。
+  - 不收費：`cost_usd` 0；Codex 不回報價格，`usage.list_cost_usd` 也是 0（沒有定價可換算），token 數照記。網頁金額欄顯示「Codex 方案（不另收費）」，不顯示預算。
+  - 方案額度：使用者要每本書記錄用了多少方案額度。實測不加 `--ephemeral` 時，Codex 每次請求後在 `~/.codex/sessions/YYYY/MM/DD/rollout-*-<thread_id>.jsonl` 寫入 `rate_limits`（`primary`／`secondary`：`used_percent`、`window_minutes`、`resets_at`）。所以不帶 `--ephemeral`；從 `thread.started` 取 `thread_id`，讀那個 rollout 檔最後一筆 `rate_limits`，存成 `usage["plan"] = {"windows": {"weekly"（10080 分鐘；1440 是 daily，整小時寫成 "5h"）: {"used": 0–1, "resets_at": epoch}}, "source": "codex"}`，讀完刪掉這個 thread 的 rollout 檔（失敗的嘗試也刪）。讀不到就不填，不影響請求。Claude 方案之後用同一格式。
+  - 預設模型 `codex/gpt-6.1-sol`（所有步驟）；`codex` 來源只留 `codex/` 的步驟模型、審稿與備援模型，不帶 temperature，推理程度預設 medium；覆核、人物關係、修正驗收、校稿照 `DEFAULT_STAGE_REASONING` 是 high；校稿輪數預設 2（同 Claude 方案：一輪花的是額度，不是錢）。
+  - 前綴分流加 `codex/`：Claude 方案的 run 可以用 `stage_models: {proofread: codex/gpt-6.1-sol}` 把某一步交給 Codex。**Claude 方案的預設不變**，Codex 只在使用者設定時用。順帶修正：原本 Claude 方案只要 `stage_models` 有任何其他來源的模型，讀書步驟就不再預設 Sonnet（整個變 Opus）；改為只補沒設的讀書步驟，一步交給別的來源不影響其他步驟的預設（本機來源同樣適用）。
+  - 失敗：exit code 非 0、沒有 `turn.completed`、或有 `type` 含 error／failed 的事件都算失敗。等待與 Claude 方案相同（額度類固定間隔、其他走梯子）；未登入（失敗時的訊息含 login、not logged in、unauthorized、401）立即停止；命令列被拒（exit 2、stderr 含 unexpected argument、unknown option／feature／variant 等）立即停止。
+- 限制：rollout 檔的事件結構只看過 `rate_limits` 那一段，程式在每一行 JSON 裡找最後一個 `rate_limits` 物件，不依賴外層鍵名。失敗時的事件與 stderr 格式沒有實測過，額度用完的字樣是猜的（凡是失敗都會等待重試，只是額度類若沒認出會走梯子、約四小時後放棄）。沒有整本實測：品質、速度、額度夠不夠翻一本都未知。`output_tokens` 是否已含 `reasoning_output_tokens` 沒有核對（兩個都記）。

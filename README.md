@@ -151,6 +151,9 @@ flowchart LR
   N -- 程式檢查格式、編號、證據 --> N
 ```
 
+### Codex（ChatGPT 方案，實驗）
+有 ChatGPT 訂閱的話，也可以用 OpenAI 的 Codex CLI 翻譯：先安裝 Codex 並在終端機執行 `codex login`，再到網頁設定選「Codex（ChatGPT 方案）」，或在命令前加 `NCTE_LLM_PROVIDER=codex`。每個請求是一次全新的 `codex exec`，用你的 ChatGPT 訂閱額度，NCTE 不另外收費；Codex 不回報定價，所以畫面上不顯示金額。Codex 每個請求都會帶上自己的固定說明（每次約一萬 token），比 Claude 方案吃額度。也可以只把某一步交給 Codex，其餘照 Claude 方案，例如在 `ncte.yaml` 寫 `openrouter: {stage_models: {proofread: codex/gpt-6.1-sol}}`。**還沒有整本書實測過。**
+
 **讓 agent 自己回答（進階）**：`ncte agent start 書.epub -w 工作區`，之後由對話中的 agent 逐題 `ncte agent next` → 回答 → `ncte agent submit`（每題有說明檔與輸出格式）；或安裝選用套件 `pip install -e '.[agent]'` 後 `claude mcp add ncte -- ncte mcp`，用 MCP 工具做同樣的事。Claude Code 的 skill 在 [`skills/ncte-translate`](skills/ncte-translate/SKILL.md)（複製或連結到 `~/.claude/skills/`）。一般翻書用上面的 Claude 方案即可，agent 逐題回答會多花很多額度。
 
 > 開發狀態與測試紀錄：[`docs/changelog.md`](docs/changelog.md)　決策：[`docs/decisions.md`](docs/decisions.md)　架構：[`docs/architecture.md`](docs/architecture.md)
