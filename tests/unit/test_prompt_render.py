@@ -257,3 +257,16 @@ def test_review_lists_the_readings_before_calling_a_mistranslation():
     for word in ("先列出", "容許的讀法", "其中一種讀法", "多斷定", "不帶這些斷定", "`evidence` 寫出列出的讀法"):
         assert word in rule, word
     assert not any(w in rv for w in BOOK_WORDS)
+
+
+def test_notes_are_read_as_printed_and_wellknown_names_may_be_used():
+    """A translator's note is part of what the reader reads (the reader's look and proofreading are told so); a brand
+    or work with a well-known Chinese name in Taiwan may be named by it when sure (ADR-047's principle), never invented."""
+    from ncte.llm.prompt_loader import load_prompt
+
+    assert "已經由譯註說明清楚的地方不算卡住" in load_prompt("reader").text
+    assert "譯註也要檢查" in load_prompt("proofread").text
+    for task in ("memory_update", "scene_read"):
+        t = load_prompt(task).text
+        assert "在臺灣有通行的中文名稱、而且你有把握時" in t and "不要自己編中文名" in t
+        assert "不要自己補上外國品牌的中文名稱" not in t
