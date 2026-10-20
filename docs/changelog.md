@@ -1021,3 +1021,10 @@ open workspace/eval/<timestamp>/report.html
 - 測試：`tests/integration/test_terms.py`（補漏請求的內容、程式收與不收、補上的詞走定義、關掉時不問；既有測試改成只看定義請求）。625 passed、4 skipped。
 - 沒做：整本實測；網頁顯示「這個詞是補上的」。
 
+## 通則、提示詞整理、翻譯實務、校稿兼潤稿（2026-10-20，分支 prompt-principles-2026-10-20，自 4b7b6bf；ADR-074）
+- 提示詞：三條通則（邏輯小詞保留作用、漢字詞不照搬、潤飾與加料的分界）進共用判斷順序與各步驟；49 項矛盾、重複與個案規則的整理；依翻譯實務的修訂（拆句、補償、暱稱與敬稱、外文名、親屬詞泛稱、日本事物、口頭禪、原文的辱罵、讀者檢查的知情範圍、敬稱依種類、第二人稱依前後文補、措辭）。
+- 對照校稿兼做潤稿：`ProofreadIssue.kind` 加 `expression`；`analysis/proofread.FIX_NOTE_EXPRESSION`；`context_pipeline` 送修時依類別選說明，同一次執行已潤過的段落後一輪略過（`expression_skipped`）；`review._claim` 一併去掉這段說明；修正驗收提示詞有潤稿的判準。
+- 體例規則上限 6 → 10（`analysis/house_style.MAX_RULES`），容納各種敬稱各一條。
+- 抽查數字見 ADR-074。
+- 測試：`tests/integration/test_proofread.py`、`test_proofread_passes.py`、`tests/unit/test_fix_claims.py`、`test_prompt_render.py`（判斷順序逐字相同、讀場景與兩步驟規則相同等）。629 passed、4 skipped。
+
