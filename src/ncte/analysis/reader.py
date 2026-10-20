@@ -25,6 +25,14 @@ _KANA = re.compile("[ぁ-ゟァ-ヺ]{2,}")
 _ABOUT_WORDS = re.compile(r"名前|名字|読み|響き|発音|漢字|平仮名|ひらがな|片仮名|カタカナ|ダジャレ|駄洒落|語呂|同じ字|同じ音|聞き間違")
 
 
+def as_exported(t: sqlite3.Row) -> str:
+    """The paragraph as it goes into the book: the text and a machine translator's note after it (exporter), without
+    placeholders. What the reader's look and proofreading read is what the reader will read."""
+    from ..exporter import exported_text
+
+    return PH_RE.sub("", exported_text(t["text"], t["translator_note"], t["status"]))
+
+
 def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = None,
            after: int | None = None, story: set[str] | None = None,
            since: int | None = None) -> list[list[dict[str, Any]]]:
@@ -48,7 +56,7 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
             out.append(cur)
             cur = []
         href = r["resource_href"]
-        item: dict[str, Any] = {"unit_id": r["id"], "zh": PH_RE.sub("", t["text"]), "_tid": t["id"], "_at": r["ordinal"],
+        item: dict[str, Any] = {"unit_id": r["id"], "zh": as_exported(t), "_tid": t["id"], "_at": r["ordinal"],
                                 "_href": r["resource_href"]}
         look = hint(r, t["text"])
         if look:
@@ -71,7 +79,7 @@ def tail(conn: sqlite3.Connection, book_id: str, upto: int, unit_ids: set[str] |
         if t is None or (unit_ids is not None and r["id"] not in unit_ids) or (story is not None and
                                                                              r["resource_href"] not in story):
             continue
-        out.append({"unit_id": r["id"], "zh": PH_RE.sub("", t["text"]), "_tid": t["id"], "_at": r["ordinal"],
+        out.append({"unit_id": r["id"], "zh": as_exported(t), "_tid": t["id"], "_at": r["ordinal"],
                     "_href": r["resource_href"]})
         if len(out) >= n:
             break

@@ -71,3 +71,19 @@ def test_each_stretch_after_the_first_reads_the_end_of_the_one_before(conn, cfg,
     assert tail and tail[-1]["unit_id"] == parts[0][-1]["unit_id"]
     from ncte.llm.prompt_loader import load_prompt
     assert "context_before" in load_prompt("reader").render({})
+
+
+def test_the_reader_and_proofreading_read_a_paragraph_as_it_is_exported_with_its_note(conn, cfg, fixtures):
+    """A machine translator's note goes into the book after its paragraph (exporter.exported_text): the reader's look
+    and proofreading must read it so, or a pun already explained is reported as unexplained (and "fixed" again)."""
+    from ncte.analysis import proofread, reader
+    from ncte.memory.db import Transaction
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    best = latest_texts(conn, book.id)
+    uid, t = next((u, t) for u, t in best.items() if t["status"] != "human")
+    with Transaction(conn):
+        conn.execute("UPDATE translations SET translator_note=? WHERE id=?", ("店名的雙關", t["id"]))
+    for chunks in (reader.chunks(conn, book.id), proofread.chunks(conn, book.id)):
+        item = next(p for part in chunks for p in part if p["unit_id"] == uid)
+        assert item["zh"].endswith("（註：店名的雙關）")

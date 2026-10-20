@@ -17,10 +17,10 @@ import json
 import sqlite3
 from typing import Any
 
-from ..epub.units import PH_RE
 from ..memory.repository import character_basics, line_relations
 from ..series import pos
 from ..translation.cache import latest_texts
+from .reader import as_exported
 
 CHUNK_UNITS = 60  # paragraphs per request: source and translation side by side (config: proofread_chunk_units)
 BEFORE_UNITS = 6  # paragraphs before the stretch, given to read (not checked)
@@ -74,7 +74,7 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
         href = r["resource_href"]
         # the source as written: 《》 may be a reading (漢字《かな》) or the author's own brackets (「…、《亡雄の旅団》」);
         # stripping it would make the translation look like it added words
-        item: dict[str, Any] = {"unit_id": r["id"], "ja": r["plain_text"], "zh": PH_RE.sub("", t["text"]),
+        item: dict[str, Any] = {"unit_id": r["id"], "ja": r["plain_text"], "zh": as_exported(t),
                                 "_tid": t["id"], "_at": r["ordinal"], "_href": r["resource_href"]}  # program only
         if r["id"] in actions:
             item["actions"] = actions[r["id"]]
@@ -112,7 +112,7 @@ def tail(conn: sqlite3.Connection, book_id: str, upto: int, unit_ids: set[str] |
         if t is None or (unit_ids is not None and r["id"] not in unit_ids) or (story is not None and
                                                                              r["resource_href"] not in story):
             continue
-        out.append({"unit_id": r["id"], "ja": r["plain_text"], "zh": PH_RE.sub("", t["text"]), "_tid": t["id"],
+        out.append({"unit_id": r["id"], "ja": r["plain_text"], "zh": as_exported(t), "_tid": t["id"],
                     "_at": r["ordinal"], "_href": r["resource_href"]})
         if len(out) >= n:
             break
