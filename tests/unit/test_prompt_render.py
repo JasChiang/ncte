@@ -221,3 +221,16 @@ def test_a_subordinate_part_stays_subordinate():
                  "只說原文那個成分本身說的"):
         assert word in rule, word
     assert not any(w in static for w in BOOK_WORDS)
+
+
+def test_proofreading_lists_the_readings_before_calling_a_meaning_error():
+    """ADR-070: before judging the meaning of a line, list the readings grammar and context allow; a translation in
+    one of them is not a meaning error; when every reading asserts more than the source, the fix is the wording that
+    asserts none of it; `problem` writes the readings out."""
+    pr = load_prompt("proofread").render({"paragraphs": []})
+    meaning = _bullet(pr, "meaning")
+    for word in ("先列出", "容許的讀法", "其中一種讀法", "`ambiguity`", "多斷定", "`fix`", "不帶這些斷定",
+                 "`problem` 要寫出列出的讀法"):
+        assert word in meaning, word
+    assert "列出的讀法" in _bullet(pr, "ambiguity")
+    assert not any(w in meaning + _bullet(pr, "ambiguity") for w in BOOK_WORDS)  # the ruby example elsewhere is older
