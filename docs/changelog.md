@@ -1007,3 +1007,10 @@ open workspace/eval/<timestamp>/report.html
 - 測試：`tests/unit/test_codex_cli.py`（24 個：送出的參數、instructions 與 stdin、回答與 usage、方案額度與 rollout 檔刪除、features 解析與失敗、等待、未登入、命令列被拒、沒安裝、模型清單、設定、Claude run 的一步走 Codex、整本範例書在 codex 來源與「Claude 讀翻＋Codex 校稿」各跑完）、`tests/integration/test_gui_manage.py`（設定頁切到 codex）。
 - 未實測：真的 `codex exec` 的失敗訊息（額度用完、沒登入、網路斷線）、整本書的品質、速度與額度。
 - 重現：`cd ../ncte-codex && source .venv/bin/activate && pytest && ruff check src tests && mypy src`，617 passed、5 skipped。
+
+## Codex 不用 `--output-schema`；每本書的方案額度（2026-10-20，分支 codex-provider-2026-10-20；ADR-071 補充、ADR-072）
+- Codex：步驟的 JSON schema 改寫在 instructions 檔最後（不帶 `--output-schema`：受限解碼讓約一半的嘗試在譯文結尾出亂碼或寫到 128,000 token 上限，見 ADR-071 補充）；移除 `to_openai_strict`／`from_openai_answer` 與 schema 被拒的判斷；加 `-c skills.include_instructions=false`（每個請求少約 3,200 token）；失敗嘗試（輸出上限、逾時）的 token 從 rollout 檔讀出加進用量，另存 `usage["failed_tries"]`。
+- Claude 方案：`claude -p` 改 `--output-format stream-json --verbose`，`rate_limit_event` 的 5 小時與每週已用比例存進 `usage["plan"]`；每次在空暫存目錄執行（不讀專案的 CLAUDE.md，少約 1,300 token）。
+- `reports/cost_report.plan_usage`：每個來源的 token 與每個時間窗用掉的比例（中途重置從 0 重新累加）；`ncte report` 印一行、網頁書籍總覽多一張「用掉的方案額度」卡（大字是最長時間窗的百分比）。
+- 實測（範例書，41 段）：Codex 修正後 34 個請求全部一次成功、約 7 分鐘（修正前約 1.5 小時），譯文無亂碼，每週額度 2% → 3%；Claude 方案同一本 28 個請求、約 3.5 分鐘，5 小時額度 +1%、每週 +0%（讀數只到 1%）。
+- 測試：`tests/unit/test_codex_cli.py`（schema 在 instructions、skills 說明關閉、失敗嘗試的 token）、`tests/unit/test_claude_cli.py`（stream-json 的額度、空目錄）、`tests/unit/test_plan_usage.py`（重置、亂序、失敗嘗試）。622 passed、5 skipped。

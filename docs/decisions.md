@@ -495,3 +495,22 @@
   - 前綴分流加 `codex/`：Claude 方案的 run 可以用 `stage_models: {proofread: codex/gpt-6.1-sol}` 把某一步交給 Codex。**Claude 方案的預設不變**，Codex 只在使用者設定時用。順帶修正：原本 Claude 方案只要 `stage_models` 有任何其他來源的模型，讀書步驟就不再預設 Sonnet（整個變 Opus）；改為只補沒設的讀書步驟，一步交給別的來源不影響其他步驟的預設（本機來源同樣適用）。
   - 失敗：exit code 非 0、沒有 `turn.completed`、或有 `type` 含 error／failed 的事件都算失敗。等待與 Claude 方案相同（額度類固定間隔、其他走梯子）；未登入（失敗時的訊息含 login、not logged in、unauthorized、401）立即停止；命令列被拒（exit 2、stderr 含 unexpected argument、unknown option／feature／variant 等）立即停止。
 - 限制：rollout 檔的事件結構只看過 `rate_limits` 那一段，程式在每一行 JSON 裡找最後一個 `rate_limits` 物件，不依賴外層鍵名。失敗時的事件與 stderr 格式沒有實測過，額度用完的字樣是猜的（凡是失敗都會等待重試，只是額度類若沒認出會走梯子、約四小時後放棄）。沒有整本實測：品質、速度、額度夠不夠翻一本都未知。`output_tokens` 是否已含 `reasoning_output_tokens` 沒有核對（兩個都記）。
+
+### ADR-071 補充（2026-10-20）：不用 `--output-schema`；關掉 skills 說明；失敗嘗試的 token 也記
+- 實測：範例書第一次真的跑（gpt-6.1-sol），42 個請求有幾個各卡約 30 分鐘：模型輸出一直寫到 128,000 token 的輸出上限（`Incomplete response returned, reason: max_output_tokens`），重試後才過；過了的譯文句尾也有亂碼（「…少女。W取」「第二章　在山丘上全球 end?」）。拿卡住那次的同一份提示各跑 4 次：帶 `--output-schema`（OpenAI 的嚴格格式）時，gpt-6.1-sol medium、high、不換基礎指示、gpt-6-sol 都會在譯文字串結尾冒出亂碼或接著無限輸出空白，約一半的嘗試出事；只留兩個必填欄位（沒有後面的選填欄位）、或完全不帶 `--output-schema` 時，4 次都正常。看起來是受限解碼在「譯文字串結束後還必須寫下一個欄位」時把模型擠歪；`reasoning_output_tokens` 在這些請求都是 0。
+- 決定：
+  - 不帶 `--output-schema`；步驟的 JSON schema 寫在固定規則（instructions 檔）的最後一段「回答格式」，回答照所有來源一樣由 NCTE 自己驗證（Pydantic、單元 id 檢查、重試更正）。上一版的嚴格格式轉換（`to_openai_strict`／`from_openai_answer`）與 schema 被拒立即停止的判斷一起移除。
+  - 加 `-c skills.include_instructions=false`：Codex 會把 skills 的使用說明（約 15,000 字元）放進每個請求，`--disable` 關不掉；這個設定每個請求少約 3,200 token。
+  - 失敗的嘗試（輸出上限、逾時）也耗方案額度：從那個 thread 的 rollout 檔讀最後一筆 `total_token_usage`（逾時的從被停下前已印出的 `thread.started` 取 thread id），加進這個請求的 token 數，另存 `usage["failed_tries"]`。rollout 檔一樣讀完刪除。
+- 修正後重跑範例書：34 個請求全部一次成功，約 7 分鐘（修正前同一本約 1.5 小時，大多卡在那幾個請求），譯文沒有亂碼；每個請求的輸入 8,400（術語）到 13,200 token（讀場景），切場景的請求從約 12,100 降到 9,000。每週額度讀數 2% → 3%。
+- 限制：只跑過範例書；整本的品質、速度與額度未知。固定負擔仍約 8,000 token／請求（Claude 方案約 1,100）；快取只偶爾讀到。
+
+## ADR-072（2026-10-20）：每本書用了多少方案額度
+- 背景：使用者要「每本書用了多少額度，Claude -p 還是 codex 都要記錄」，而且每個人的方案不同，不能只記 token 或照定價換算的金額。
+- 實測：`claude -p --output-format stream-json --verbose` 的事件裡有 `rate_limit_event`，`rate_limit_info.unifiedWindows` 給每個時間窗的已用比例（`five_hour`、`seven_day`：`utilization` 0–1、`resetsAt`）；`--output-format json` 沒有這一項。Codex 的見 ADR-071（rollout 檔的 `rate_limits`）。同一天 Codex 的每週額度中途重置過一次（20% → 1%，`resets_at` 往後移）。另外：`claude -p` 在專案資料夾裡執行時會讀那裡（與上層）的 CLAUDE.md，即使 `--setting-sources ""`：同一個請求在專案裡輸入多約 1,300 token，模型還知道專案名稱；`--bare` 會跳過，但只接受 API 金鑰、不能用方案登入。
+- 決定：
+  - `claude_cli` 改用 `stream-json --verbose`，取 `type: result` 的事件當回答（與原本的 JSON 同欄位），最後一個 `rate_limit_event` 存成 `usage["plan"]`，格式同 Codex：`{"windows": {"5h": {"used", "resets_at"}, "weekly": {…}}, "source": "claude"}`（`five_hour` → `5h`、`seven_day` → `weekly`，其他名稱照原樣）。讀不到就不填，請求照常。
+  - 每次 `claude -p` 在自己的空暫存目錄執行（同 Codex），不讀任何專案的 CLAUDE.md；使用者自己的 `~/.claude/CLAUDE.md` 仍會被讀（沒有不需 API 金鑰的關法）。
+  - `reports/cost_report.plan_usage`：依來源（`usage["plan"].source`，或 provider 是 claude／codex）彙總 token（輸入、快取讀寫、輸出、推理、失敗嘗試）與每個時間窗的已用比例：依完成時間排序，`resets_at` 相差 120 秒內算同一個窗；第一個窗算「最大 − 最小」，之後每個窗（中途重置）算「最大 − 0」。結果在 `cost_report` 的 `plan_usage`、`ncte report` 的一行、網頁總覽的「用掉的方案額度」卡。
+  - 顯示的是使用者自己方案的百分比，不換算成絕對量或金額。
+- 限制：比例是整個帳號的，同一時段其他用量（別的對話、別的工具）會一起算；第一個請求自己用的量算不到（每個請求結束後才讀）；Claude 的 `utilization` 只到小數兩位（1%），Codex 的 `used_percent` 是整數百分比，短的執行讀數可能是 0。

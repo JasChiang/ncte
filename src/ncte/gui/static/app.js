@@ -963,12 +963,16 @@ route();
 const PLAN_NAMES = {claude: "Claude 方案", codex: "Codex（ChatGPT 方案）"};
 const WINDOW_NAMES = {weekly: "每週", "5h": "5 小時", daily: "每日"};
 function planStat(pu) {
-  const parts = Object.entries(pu || {}).map(([src, p]) => {
-    const ws = Object.entries(p.windows || {}).map(([w, v]) =>
-      `${WINDOW_NAMES[w] || w}額度 ${(v.used * 100).toFixed(1)}%${v.resets ? `（中途重置 ${v.resets} 次）` : ""}`);
+  const entries = Object.entries(pu || {});
+  if (!entries.length) return "";
+  const pct = v => `${(v.used * 100).toFixed(1)}%`;
+  let main = "";
+  const lines = entries.map(([src, p]) => {
+    const ws = Object.entries(p.windows || {});
+    if (!main && ws.length) main = `${pct(ws[ws.length - 1][1])}`;
     const t = p.tokens || {};
-    return `<div><b>${PLAN_NAMES[src] || src}</b>：${ws.length ? ws.join("、") : "沒有讀到額度"}<br><span class="small muted">${p.requests} 個請求，輸入 ${(t.input || 0).toLocaleString()} token（其中快取 ${(t.cache_read || 0).toLocaleString()}），輸出 ${(t.output || 0).toLocaleString()} token</span></div>`;
+    const shares = ws.map(([w, v]) => `${WINDOW_NAMES[w] || w} ${pct(v)}${v.resets ? `（中途重置 ${v.resets} 次）` : ""}`).join("、") || "沒有讀到額度";
+    return `<div class="small">${PLAN_NAMES[src] || src}：${shares}</div><div class="small muted">${p.requests} 個請求；輸入 ${(t.input || 0).toLocaleString()}（快取 ${(t.cache_read || 0).toLocaleString()}）、輸出 ${(t.output || 0).toLocaleString()} token</div>`;
   });
-  if (!parts.length) return "";
-  return `<div class="card stat"><span class="muted small">這本書用掉的方案額度</span>${parts.join("")}<span class="small muted">是你自己方案的百分比；同一時段帳號的其他用量也會算進去。</span></div>`;
+  return `<div class="card stat"><span class="muted small">用掉的方案額度</span><b>${main || "—"}</b>${lines.join("")}<span class="small muted">你自己方案的百分比；同一時段帳號的其他用量也算在內。</span></div>`;
 }
