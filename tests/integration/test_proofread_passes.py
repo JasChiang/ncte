@@ -108,7 +108,7 @@ def test_a_second_pass_checks_the_whole_current_translation_and_its_findings_are
     assert pass2 - pass1  # the second pass found paragraphs the first did not
     # the second pass read the first pass's retranslations (each was flagged once, then fixed)
     shown2 = {x["unit_id"]: x["zh"] for part in reader.shown[total:] for x in part}
-    from ncte.analysis.proofread import PH_RE
+    from ncte.epub.units import PH_RE
 
     assert all(shown2[u] == PH_RE.sub("", now[u]["text"]) for u in pass1)
     retranslated = {r[0] for r in conn.execute("SELECT unit_id FROM translations t JOIN units u ON u.id=t.unit_id "
