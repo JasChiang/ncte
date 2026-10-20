@@ -29,10 +29,13 @@ def _rules(text: str) -> dict[str, str]:
 
 def test_later_paragraphs_are_for_understanding_not_for_adding():
     """3.1 (ADR-064): rule 4 says later paragraphs may and should be used to understand a line; what is forbidden is
-    writing in what is revealed later, and taking the guesses of scene / memory as fact."""
+    writing in what is revealed later. That the guesses of scene / memory are not fact is said once, where the input
+    describes them."""
     static, _ = load_prompt("translate").render_parts({"units": []})
     rule = _rules(static)["4"]
-    assert "也應該用來理解" in rule and "增譯" in rule and "推測" in rule and "懸念" in rule
+    assert "也應該用來理解" in rule and "增譯" in rule and "懸念" in rule
+    inputs = next(x for x in static.split("\n") if x.startswith("- `characters`、`scene`、`memory`"))
+    assert "`inferred`" in inputs and "不是確定事實" in inputs
     assert "推測或後文資訊寫進譯文" not in rule  # the old wording that read as "do not look ahead"
 
 
@@ -84,7 +87,7 @@ def test_an_omitted_subject_is_one_rule_on_three_sides():
     assert "主詞" in _bullet(pr, "meaning") and "另一個人" in _bullet(pr, "meaning")
     assert "已經確定的主詞不算" in _bullet(pr, "addition") and "刻意不說" in _bullet(pr, "addition")
     fc = load_prompt("fix_check").render({"items": []})
-    assert "已經確定是誰的主詞" in _bullet(fc, "new_error")
+    assert "已經確定的主詞不算" in _bullet(fc, "new_error") and "刻意不說" in _bullet(fc, "new_error")
 
 
 def test_a_fix_with_the_wrong_tone_is_a_new_error():
@@ -238,13 +241,14 @@ def test_proofreading_lists_the_readings_before_calling_a_meaning_error():
 
 def test_the_fix_check_weighs_before_and_after_against_the_readings_the_source_allows():
     """ADR-070: with two or more readings, `reason` lists them; before and after in different readings that both hold
-    is issue_invalid (keep before), not a new error; both asserting more than the source is undecided with the
-    wording that asserts none of it; `new_error` is only what no allowed reading has."""
+    is issue_invalid (keep before), not a new error; both asserting more than the source is still_wrong when the issue
+    was that addition, otherwise undecided, either way with the wording that asserts none of it; `new_error` is only
+    what no allowed reading has."""
     fc = load_prompt("fix_check").render({"items": []})
     gist = fc.split("## 每一項回答\n", 1)[1].split("\n- `gist`", 1)[0]
     method = gist.split("\n", 1)[1]  # the paragraph after the one on writing the gist
     for word in ("兩種以上讀法", "`reason` 列出", "`issue_invalid`", "保留 `before`", "不要判成新錯", "多斷定",
-                 "`undecided`", "不帶這些斷定的寫法"):
+                 "`still_wrong`", "`undecided`", "不帶斷定的寫法"):
         assert word in method, word
     assert "任何一種讀法都沒有" in _bullet(fc, "new_error")
     assert not any(w in fc for w in BOOK_WORDS)
@@ -270,3 +274,18 @@ def test_notes_are_read_as_printed_and_wellknown_names_may_be_used():
         t = load_prompt(task).text
         assert "在臺灣有通行的中文名稱、而且你有把握時" in t and "不要自己編中文名" in t
         assert "不要自己補上外國品牌的中文名稱" not in t
+
+
+def _between(text: str, start: str, end: str) -> str:
+    return text.split(start, 1)[1].split(end, 1)[0]
+
+
+def test_reading_in_one_request_carries_the_same_rules_as_the_two_steps():
+    """D11: scene_read is scene_analyze followed by memory_update in one request; apart from the headings its rules
+    are the same text, so an edit to one prompt is made to the other too."""
+    analyze, memory, read = (load_prompt(t).text for t in ("scene_analyze", "memory_update", "scene_read"))
+    assert (_between(analyze, "## 核心原則（極重要）\n", "\n## 輸出")
+            == _between(read, "### 核心原則（極重要）\n", "\n### 第一部分的格式"))
+    assert ("\n- 每個 `quotes`" + analyze.split("\n- 每個 `quotes`", 1)[1].rstrip()
+            == "\n- 每個 `quotes`" + _between(read, "\n- 每個 `quotes`", "\n## 第二部分").rstrip())
+    assert _between(memory, "## 規則\n", "\n## 輸出") == _between(read, "### 規則\n", "\n### 第二部分的格式")
