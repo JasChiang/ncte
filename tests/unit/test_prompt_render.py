@@ -207,3 +207,17 @@ def test_a_fact_s_evidence_is_the_sentence_that_states_it():
         text = load_prompt(task).render()
         rule = next(line for line in text.splitlines() if line.startswith("1. 每一筆 `facts` 必須附"))
         assert EVIDENCE_SENTENCE in rule, task
+
+
+BOOK_WORDS = ("魔法", "魔術", "じゃなくて", "戦力外")
+
+
+def test_a_subordinate_part_stays_subordinate():
+    """ADR-070: a part that hangs on the main clause (contrast, modifier, condition, concession) is not turned into a
+    statement of its own: split off, it says something the source does not (who did what, what the state was)."""
+    static, _ = load_prompt("translate").render_parts({"units": []})
+    rule = _rules(static)["5"]
+    for word in ("附屬", "對比", "修飾", "條件", "讓步", "獨立的斷言", "誰做了什麼", "當時是什麼狀態",
+                 "只說原文那個成分本身說的"):
+        assert word in rule, word
+    assert not any(w in static for w in BOOK_WORDS)
