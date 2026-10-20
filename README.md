@@ -152,7 +152,9 @@ flowchart LR
 ```
 
 ### Codex（ChatGPT 方案，實驗）
-有 ChatGPT 訂閱的話，也可以用 OpenAI 的 Codex CLI 翻譯：先安裝 Codex 並在終端機執行 `codex login`，再到網頁設定選「Codex（ChatGPT 方案）」，或在命令前加 `NCTE_LLM_PROVIDER=codex`。每個請求是一次全新的 `codex exec`，用你的 ChatGPT 訂閱額度，NCTE 不另外收費；Codex 不回報定價，所以畫面上不顯示金額。Codex 每個請求都會帶上自己的固定說明（每次約一萬 token），比 Claude 方案吃額度。也可以只把某一步交給 Codex，其餘照 Claude 方案，例如在 `ncte.yaml` 寫 `openrouter: {stage_models: {proofread: codex/gpt-6.1-sol}}`。**還沒有整本書實測過。**
+有 ChatGPT 訂閱的話，也可以用 OpenAI 的 Codex CLI 翻譯：先安裝 Codex 並在終端機執行 `codex login`，再到網頁設定選「Codex（ChatGPT 方案）」，或在命令前加 `NCTE_LLM_PROVIDER=codex`。每個請求是一次全新的 `codex exec`，用你的 ChatGPT 訂閱額度，NCTE 不另外收費；Codex 不回報定價，所以畫面上不顯示金額。Codex 每個請求都會帶上自己的固定說明（關掉能關的之後每次仍約八千到九千 token），比 Claude 方案吃額度。也可以只把某一步交給 Codex，其餘照 Claude 方案，例如在 `ncte.yaml` 寫 `openrouter: {stage_models: {proofread: codex/gpt-6.1-sol}}`。範例書（41 段）從讀到校完約 7 分鐘、34 個請求，用掉每週額度約 1%；**還沒有整本書實測過。**
+
+**每本書用了多少額度**：Claude 方案與 Codex 每個請求都會記下你的方案在各時間窗（5 小時、每週）已經用到幾 %，書的總覽頁（和 `ncte report --book …`）顯示這本書從第一個請求到最後一個請求用掉了幾 %，以及 token 數。每個人的方案不同，所以顯示的是你自己方案的百分比，不是絕對量；同一時段你在別處用 Claude 或 ChatGPT 也會算進去，中途額度重置會從 0 重新累加。
 
 **讓 agent 自己回答（進階）**：`ncte agent start 書.epub -w 工作區`，之後由對話中的 agent 逐題 `ncte agent next` → 回答 → `ncte agent submit`（每題有說明檔與輸出格式）；或安裝選用套件 `pip install -e '.[agent]'` 後 `claude mcp add ncte -- ncte mcp`，用 MCP 工具做同樣的事。Claude Code 的 skill 在 [`skills/ncte-translate`](skills/ncte-translate/SKILL.md)（複製或連結到 `~/.claude/skills/`）。一般翻書用上面的 Claude 方案即可，agent 逐題回答會多花很多額度。
 
