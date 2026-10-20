@@ -266,7 +266,7 @@ def test_notes_are_read_as_printed_and_wellknown_names_may_be_used():
 
     assert "已經由譯註說明清楚的地方不算卡住" in load_prompt("reader").text
     assert "譯註也要檢查" in load_prompt("proofread").text
-    for task in ("memory_update", "scene_read"):
+    for task in ("memory_update", "scene_read", "translate"):
         t = load_prompt(task).text
         assert "在臺灣有通行的中文名稱、而且你有把握時" in t and "不要自己編中文名" in t
         assert "不要自己補上外國品牌的中文名稱" not in t
