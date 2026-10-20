@@ -248,3 +248,12 @@ def test_the_fix_check_weighs_before_and_after_against_the_readings_the_source_a
         assert word in method, word
     assert "任何一種讀法都沒有" in _bullet(fc, "new_error")
     assert not any(w in fc for w in BOOK_WORDS)
+
+
+def test_review_lists_the_readings_before_calling_a_mistranslation():
+    """ADR-070: review's two-readings test starts from the readings grammar and context allow, as proofreading does."""
+    rv = load_prompt("review").render({"items": []})
+    rule = _bullet(rv, "mistranslation")
+    for word in ("先列出", "容許的讀法", "其中一種讀法", "多斷定", "不帶這些斷定", "`evidence` 寫出列出的讀法"):
+        assert word in rule, word
+    assert not any(w in rv for w in BOOK_WORDS)
