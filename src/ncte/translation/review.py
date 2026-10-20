@@ -564,9 +564,12 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
                 items.append(item)
             # the people of these lines, as known there (name, gender, narrator): the same cards proofreading reads
             who = {x for r, *_ in chunk for x in _people(conn, r["id"])}
-            cast = proofread.cast(conn, orch.book.id, [{"ja": r["plain_text"], "_who": sorted(who), "_at": r["ordinal"]}
-                                                       for r, *_ in chunk])
-        payload: dict[str, Any] = {"task": "fix_check", "items": items}
+            part = [{"ja": r["plain_text"], "_who": sorted(who), "_at": r["ordinal"]} for r, *_ in chunk]
+            cast = proofread.cast(conn, orch.book.id, part)
+            # the decided names of these paragraphs and how their speakers call their people, as proofreading has them
+            names_and_forms = proofread.renderings(conn, orch.book.id, part, glossary=orch.glossary,
+                                                   volume=orch.volume, revealed=orch.link_revealed)
+        payload: dict[str, Any] = {"task": "fix_check", "items": items, **names_and_forms}
         if orch.cfg.context.term_definitions:  # what the terms in these paragraphs mean, as shown there (ADR-069)
             from ..memory.terms import definitions_for
 

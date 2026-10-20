@@ -52,3 +52,44 @@ def _line_only_with(task, line, key, value):
 
 def test_the_review_prompt_says_what_the_memory_is_for():
     _line_only_with("review", REVIEW_MEMORY, "memory", {"facts": []})
+
+
+def _proofread_finds(*needles):
+    def proofread(payload, req):
+        return {"issues": [{"unit_id": p["unit_id"], "kind": "meaning", "severity": "high", "quote": p["zh"][:3],
+                            "problem": "意思弄錯", "fix": "改"} for p in payload["paragraphs"]
+                           if any(n in p["ja"] for n in needles)]}
+    return proofread
+
+
+def test_the_fix_check_gets_the_renderings_and_forms_of_address_proofreading_has(conn, cfg, fixtures):
+    """Whether a fix keeps the decided names and the way these speakers call these people: the glossary entries of
+    the paragraphs' source and the forms of address of their speakers, picked as for proofreading."""
+    client = FakeLLM(responders={**RESPONDERS, "proofread": _proofread_finds("銀の鍵をミナに")})
+    cfg.context.reader_pass = False
+    run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    checks = _stage(client, "fix_check")
+    assert checks
+    assert {"ja": "銀の鍵", "zh": "銀之鑰"}.items() <= next(g for c in checks for g in c.get("glossary", [])
+                                                         if g["ja"] == "銀の鍵").items()
+    forms = [a for c in checks for a in c.get("address_terms", [])]
+    assert any(a["ja"] == "カイト" and a["speaker"] == "米娜" for a in forms)  # first used before this paragraph
+
+
+def test_the_fix_check_is_not_given_a_form_first_used_later(conn, cfg, fixtures):
+    """A form of address first used at or after the fixed paragraph (and not decided) is not given yet."""
+    client = FakeLLM(responders={**RESPONDERS, "proofread": _proofread_finds("カイト、遅いですよ")})
+    cfg.context.reader_pass = False
+    run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    checks = _stage(client, "fix_check")
+    assert checks and not any(c.get("address_terms") for c in checks)
+
+
+FIX_CHECK_NAMES = ("- `glossary`、`address_terms`（可能不存在）：這些段落原文裡已定的譯名（`ja` → `zh`），以及說話者對某人慣用的"
+                   "稱呼與既有譯法（`usage: mention` 是談到、不是當面叫）。用來判斷 `after` 的名字與稱呼是否照既有譯法；"
+                   "稱呼本身在原文改變時不算錯，第二人稱與敬稱的語氣隨場合、情緒調整也不算錯。")
+
+
+def test_the_fix_check_prompt_says_what_the_renderings_are_for():
+    _line_only_with("fix_check", FIX_CHECK_NAMES, "glossary", [{"ja": "a", "zh": "b"}])
+    _line_only_with("fix_check", FIX_CHECK_NAMES, "address_terms", [{"ja": "a"}])

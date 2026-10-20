@@ -152,15 +152,12 @@ def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> 
     return out[:30]
 
 
-def notes(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]], before: list[dict[str, Any]], *,
-          glossary: list[dict[str, Any]], volume: float, revealed: dict[str, tuple[float, int]],
-          definitions: bool = False) -> dict[str, Any]:
-    """What the translator had for judging this stretch, as known there: the paragraphs just before it (to read, not
-    to check), decided renderings, how these speakers call these people, the house rules; with ``definitions``, what
-    the terms in it mean as shown by its end (ADR-069)."""
+def renderings(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]], *,
+               glossary: list[dict[str, Any]], volume: float, revealed: dict[str, tuple[float, int]]) -> dict[str, Any]:
+    """The decided renderings of the names in ``part``'s source (``glossary``) and how its speakers call its people
+    (``address_terms``), as known at its end: what the translator had, for whoever judges the translation."""
     from ..memory.address import FORMS_PER_QUOTA, context_items
     from ..memory.retrieval import batch_quota
-    from ..memory.style import load_style, style_payload
     from ..memory.visibility import visible_names
     from ..translation.context_builder import glossary_payload
     from ..translation.context_pipeline import drop_address_forms
@@ -169,8 +166,6 @@ def notes(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]], be
     start = min(p["_at"] for p in part)
     end = max(p["_at"] for p in part)
     out: dict[str, Any] = {}
-    if before:
-        out["context_before"] = [{"ja": b["ja"], "zh": b["zh"]} for b in before]
     gl = glossary_payload(glossary, text, upto=(volume, end), revealed=revealed)
     names = visible_names(conn, book_id, end)
     ids = {x for p in part for x in p.get("_who", [])}
@@ -181,6 +176,26 @@ def notes(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]], be
         gl = drop_address_forms(gl, address)
     if gl:
         out["glossary"] = gl
+    return out
+
+
+def notes(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]], before: list[dict[str, Any]], *,
+          glossary: list[dict[str, Any]], volume: float, revealed: dict[str, tuple[float, int]],
+          definitions: bool = False) -> dict[str, Any]:
+    """What the translator had for judging this stretch, as known there: the paragraphs just before it (to read, not
+    to check), decided renderings, how these speakers call these people, the house rules; with ``definitions``, what
+    the terms in it mean as shown by its end (ADR-069)."""
+    from ..memory.style import load_style, style_payload
+    from ..memory.visibility import visible_names
+
+    text = " ".join(p["ja"] for p in part)
+    end = max(p["_at"] for p in part)
+    out: dict[str, Any] = {}
+    if before:
+        out["context_before"] = [{"ja": b["ja"], "zh": b["zh"]} for b in before]
+    out.update(renderings(conn, book_id, part, glossary=glossary, volume=volume, revealed=revealed))
+    names = visible_names(conn, book_id, end)
+    ids = {x for p in part for x in p.get("_who", [])}
     if style := style_payload(load_style(conn, book_id), text, [names[x] for x in ids if x in names]):
         out["style"] = style
     if definitions:
