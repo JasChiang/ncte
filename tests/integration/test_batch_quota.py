@@ -38,13 +38,13 @@ def test_a_long_batch_gets_more_facts_and_a_short_one_the_same(conn, cfg, fixtur
     book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
     scene, rows = _scene_rows(conn, book.id)
     asked = []
-    real = retrieval.select_facts
+    real = retrieval.chosen_facts
 
     def spy(*a, **kw):
         asked.append(kw["limit"])
         return real(*a, **kw)
 
-    monkeypatch.setattr(retrieval, "select_facts", spy)
+    monkeypatch.setattr(retrieval, "chosen_facts", spy)
     retrieval.memory_context(conn, book.id, scene=scene, batch_rows=rows[:10], max_evidence=5)
     long = (rows * 20)[:123]  # a whole long scene in one request (the rows repeat: only their number matters here)
     retrieval.memory_context(conn, book.id, scene=scene, batch_rows=long, max_evidence=5)

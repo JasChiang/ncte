@@ -97,6 +97,10 @@ class TranslationConfig(_Strict):
     # line is translated (the answer's first field, so the batch is read through first); kept in the notes of the
     # request's first paragraph for a reviewer, never acted on. Off until a check shows it helps (instructions §5.4)
     read_through: bool = False
+    # the memory blocks of a request in fewer characters, nothing the prompts use left out: a line's quote and a fact's
+    # source as short excerpts, defaults omitted (a paragraph's only line, a stated speaker), two speech examples a
+    # character, no volume on a form of address; off: the earlier form, kept to compare
+    compact_payload: bool = True
 
 
 class ReviewConfig(_Strict):

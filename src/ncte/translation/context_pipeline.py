@@ -909,7 +909,8 @@ class ContextOrchestrator(Orchestrator):
             cast = proofread.cast(self.conn, self.book.id, part)
             extra = proofread.notes(self.conn, self.book.id, part, before, glossary=self.glossary,
                                     volume=self.volume, revealed=self.link_revealed,
-                                    definitions=self.cfg.context.term_definitions)
+                                    definitions=self.cfg.context.term_definitions,
+                                    compact=self.cfg.translation.compact_payload)
         visible = [{k: v for k, v in p.items() if not k.startswith("_")} for p in part]
         blocked: list[str] = []
         try:  # the content filter may refuse a stretch; it is then checked in halves
@@ -1415,7 +1416,8 @@ class ContextOrchestrator(Orchestrator):
                                            ids).fetchall() if ids else []
             mem = memory_context(self.conn, self.book.id, scene=scene, batch_rows=batch.rows,
                                  max_evidence=self.cfg.memory.max_retrieved_evidence, window_rows=window,
-                                 fix_facts=self.cfg.context.fix_fact_quota)
+                                 fix_facts=self.cfg.context.fix_fact_quota,
+                                 compact=self.cfg.translation.compact_payload)
         ctx.update(mem)
         if self.cfg.context.term_definitions:  # what the book's terms mean, once their evidence is reached (ADR-069)
             from ..memory.terms import definitions_for

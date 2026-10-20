@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+from collections import Counter
 from collections.abc import Iterable
 from typing import Any
 
@@ -64,7 +65,8 @@ def memory_chars(chars_budget: int, n_units: int) -> int:
 
 def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row, batch_rows: list[sqlite3.Row],
                    max_evidence: int = 8, chars_budget: int = 2400,
-                   window_rows: list[sqlite3.Row] | None = None, fix_facts: int = 4) -> dict[str, Any]:
+                   window_rows: list[sqlite3.Row] | None = None, fix_facts: int = 4,
+                   compact: bool = True) -> dict[str, Any]:
     """Characters, scene state, summaries, facts and props visible at this scene.
 
     ``max_evidence`` and ``chars_budget`` are for a batch of up to QUOTA_UNITS paragraphs; a longer batch gets one
@@ -75,7 +77,13 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
     that window need — the people who speak, are spoken to, are named or do (or undergo) a recorded action there, and
     the narrator of a first-person scene; their lines and actions; ``fix_facts`` facts chosen for that text; the
     latest summary of the chapter and no recap of the one before. Known as of the window's last paragraph (a woman
-    named two paragraphs after the fix is on the cards: her 妳 was once changed to 你)."""
+    named two paragraphs after the fix is on the cards: her 妳 was once changed to 你).
+
+    ``compact`` (``translation.compact_payload``): the same blocks in fewer characters — a line's ``quote`` its first
+    QUOTE_CHARS characters, a fact's ``source`` an excerpt around what it is about (``fact_excerpt``), a line's
+    ``quote_index`` left out when it is its paragraph's only line and its ``status`` when ``explicit``, COMPACT_EXAMPLES
+    speech examples a character (the prompts say what a missing field means). Which facts are kept is decided on the
+    full form, as without it: fewer characters, not more facts."""
     fix = window_rows is not None
     seen = sorted([*batch_rows, *(window_rows or [])], key=lambda r: r["ordinal"])
     max_evidence = fix_facts if fix else batch_quota(max_evidence, len(batch_rows))
@@ -118,7 +126,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             continue
         prof = json.loads(c["speech_profile_json"] or "{}")
         examples = []
-        for e in vis.visible_examples(conn, c["id"], horizon, book_id=book_id):
+        for e in vis.visible_examples(conn, c["id"], horizon, book_id=book_id,
+                                      **({"limit": COMPACT_EXAMPLES} if compact else {})):
             item = {"ja": e["raw_text"]}
             tr = latest_translation(conn, e["unit_id"], conn.execute(
                 "SELECT source_hash FROM units WHERE id=?", (e["unit_id"],)).fetchone()[0])
@@ -157,13 +166,21 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
     # book, the window's lines were 30% of a fix request); who is in the window still gets a card (above)
     batch_ids = {r["id"] for r in batch_rows}
     utts = []
-    for u in conn.execute("SELECT * FROM utterances WHERE book_id=? AND scene_id=? ORDER BY unit_id, quote_index",
-                          (book_id, scene["id"])):
-        if u["unit_id"] not in batch_ids:
-            continue
+    # in story order: by unit id the lines came in a hashed order (P35, P22, P16 …)
+    lines = [u for u in conn.execute("SELECT t.* FROM utterances t JOIN units n ON n.id=t.unit_id WHERE t.book_id=? AND "
+                                     "t.scene_id=? ORDER BY n.ordinal, t.quote_index", (book_id, scene["id"]))
+             if u["unit_id"] in batch_ids]
+    per_unit = Counter(u["unit_id"] for u in lines)
+    for u in lines:
         sid = u["speaker_id_nullable"]
-        item = {"unit_id": u["unit_id"], "quote_index": u["quote_index"], "quote": u["quote_text"][:60],
-                "speaker": names.get(sid) if sid else None, "status": u["status"]}
+        if compact:  # a paragraph's only line needs no index; a stated speaker no status (said so in the prompts)
+            item = {"unit_id": u["unit_id"],
+                    **({"quote_index": u["quote_index"]} if per_unit[u["unit_id"]] > 1 or u["quote_index"] else {}),
+                    "quote": clip(u["quote_text"], QUOTE_CHARS), "speaker": names.get(sid) if sid else None,
+                    **({"status": u["status"]} if u["status"] != "explicit" else {})}
+        else:
+            item = {"unit_id": u["unit_id"], "quote_index": u["quote_index"], "quote": u["quote_text"][:60],
+                    "speaker": names.get(sid) if sid else None, "status": u["status"]}
         to = [names[x] for x in json.loads(u["addressee_ids_json"] or "[]") if x in names]
         if to:  # who the line is said to: 你 or 妳 follows that person, not the last woman mentioned
             item["to"] = to
@@ -177,7 +194,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
     same_ch, prev_ch = story_so_far(conn, book_id, scene)
     present_ids = {p["character_id"] for p in present}
     batch_plain = seen_text if fix else match_text(" ".join(r["plain_text"] for r in batch_rows))
-    facts = select_facts(vis.visible_facts(conn, book_id, horizon), batch_plain, present, names, limit=max_evidence)
+    chosen = chosen_facts(vis.visible_facts(conn, book_id, horizon), batch_plain, present, names, limit=max_evidence)
+    facts = [item for _, item in chosen]
     props = [{"item": p["name_ja"], "holder": names.get(p["holder_character_id"]) if p["holder_character_id"] else None,
               **({"period": p["period"]} if p["period"] else {})}
              for p in vis.visible_props(conn, book_id, horizon) if p["name_ja"] in (seen_text if fix else scene_text)]
@@ -194,6 +212,10 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             mem["facts"].pop(0)
         else:
             mem["this_chapter_so_far"].pop(0)
+    if compact:  # kept as above; each source then shortened to the part around what the fact is about
+        rows_of = {id(item): f for f, item in chosen}
+        for item in mem["facts"]:
+            item["source"] = fact_excerpt(rows_of[id(item)], present, _grams(batch_plain))
     from .address import FORMS_PER_QUOTA, context_items
 
     batch_text = " ".join(r["plain_text"] for r in (seen if fix else batch_rows))
@@ -212,7 +234,7 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
         "memory": mem,
     }
     address = context_items(conn, book_id, horizon, batch_text, batch_speakers, all_names, present_ids, upto=upto,
-                            limit=batch_quota(FORMS_PER_QUOTA, len(batch_rows)))
+                            limit=batch_quota(FORMS_PER_QUOTA, len(batch_rows)), compact=compact)
     if address:
         out["address_terms"] = address
     return out
@@ -242,6 +264,12 @@ def select_facts(rows: list[Any], batch_text: str, present: list[dict[str, Any]]
     """The facts most related to *this batch* (not every fact about whoever is present): overlap between the
     batch's words and each fact's original evidence sentence, plus a bonus when the batch names the fact's
     subject. Each fact carries its Japanese evidence so the model reads the source, not only our paraphrase."""
+    return [item for _, item in chosen_facts(rows, batch_text, present, names, limit=limit, min_score=min_score)]
+
+
+def chosen_facts(rows: list[Any], batch_text: str, present: list[dict[str, Any]], names: dict[str, str], *,
+                 limit: int = 8, min_score: float = 1.0) -> list[tuple[Any, dict[str, Any]]]:
+    """``select_facts`` with each fact's row (its full evidence, for ``fact_excerpt``)."""
     bg = _grams(batch_text)
     named = {p["character_id"] for p in present if any(n and n in batch_text for n in [p["name_ja"], *p["aliases_ja"]])}
     present_ids = {p["character_id"] for p in present}
@@ -261,11 +289,43 @@ def select_facts(rows: list[Any], batch_text: str, present: list[dict[str, Any]]
     def nm(text: str | None) -> str:
         return _IDS.sub(lambda m: names.get(m.group(0), m.group(0)), text or "")
 
-    return [{"subject": names.get(f["subject"], f["subject"]), "predicate": nm(f["predicate"]), "object": nm(f["object"]),
-             "type": f["fact_type"], "certainty": f["certainty"],
-             **({"viewpoint": nm(f["source_viewpoint"])} if f["source_viewpoint"] else {}),
-             **({"period": f["period"]} if "period" in f.keys() and f["period"] else {}),
-             "source": match_text(f["evidence_quote"] or "")[:90]} for _, _, f in keep]
+    return [(f, {"subject": names.get(f["subject"], f["subject"]), "predicate": nm(f["predicate"]),
+                 "object": nm(f["object"]), "type": f["fact_type"], "certainty": f["certainty"],
+                 **({"viewpoint": nm(f["source_viewpoint"])} if f["source_viewpoint"] else {}),
+                 **({"period": f["period"]} if "period" in f.keys() and f["period"] else {}),
+                 "source": match_text(f["evidence_quote"] or "")[:90]}) for _, _, f in keep]
+
+
+QUOTE_CHARS = 16  # a line's quote only says which line it is (the paragraph is in the request)
+FACT_SOURCE_CHARS = 60  # a fact's source: the part of its evidence around what it is about, marks included
+COMPACT_EXAMPLES = 2  # speech examples a character (human-verified first, then the latest before the scene)
+
+
+def clip(text: str, n: int) -> str:
+    """The first ``n`` characters, 「…」 after them when the text goes on."""
+    return text if len(text) <= n else text[:n] + "…"
+
+
+def fact_excerpt(f: Any, present: list[dict[str, Any]], grams: set[str], width: int = FACT_SOURCE_CHARS) -> str:
+    """At most ``width`` characters of a fact's evidence, 「…」 where it is cut: around the first of what the fact is
+    about that the evidence writes (its subject's Japanese name or other names on the card, the subject or object as
+    written, the person the object refers to), kept whole; when it writes none of them, the stretch sharing the most
+    with the batch's words (``_grams``), else its beginning. Which part is shown only; the fact is unchanged."""
+    text = match_text(f["evidence_quote"] or "")
+    if len(text) <= width:
+        return text
+    cards = {p["character_id"]: [p["name_ja"], *p["aliases_ja"]] for p in present}
+    obj_ref = f["object_ref"] if "object_ref" in f.keys() else None
+    terms = [*cards.get(f["subject"], [f["subject"]]), f["object"], *cards.get(obj_ref or "", [])]
+    inner = width - 2  # room for a mark on each side
+    at = next(((i, len(t)) for t in terms if t and len(t) <= inner and (i := text.find(t)) >= 0), None)
+    if at is not None:
+        start = max(0, min(at[0] + at[1] // 2 - inner // 2, len(text) - inner))
+    else:
+        def shared(i: int) -> int:
+            return len(_grams(text[i:i + inner]) & grams)
+        start = max(range(len(text) - inner + 1), key=lambda i: (shared(i), -i))
+    return ("…" if start else "") + text[start:start + inner] + ("…" if start + inner < len(text) else "")
 
 
 RECAP_CHARS = 1200  # the previous chapter's recap: its scene summaries, the latest that fit

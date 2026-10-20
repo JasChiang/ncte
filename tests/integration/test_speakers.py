@@ -77,9 +77,12 @@ def test_translation_request_carries_speaker_status(conn, cfg, fixtures):
     run_book(conn, cfg, fixtures["basic"], fake, mode="context")
     p = next(p for p, c in zip(fake.payloads, fake.calls, strict=True)
              if c.stage == "translate" and any("待って" in u["source"] for u in p["units"]))
-    st = {x["quote"]: (x["speaker"], x["status"]) for x in p["scene"]["utterances"]}
+    from ncte.memory.retrieval import QUOTE_CHARS, clip
+
+    # the quote is the line's beginning (it only says which line); a missing status is a stated speaker
+    st = {x["quote"]: (x["speaker"], x.get("status", "explicit")) for x in p["scene"]["utterances"]}
     assert st["「待って」"] == (None, "unknown")
-    assert st["「ふふん、俺様に任せろってんだ！」"] == ("海斗", "inferred")  # the model's (the scripted one's) answer
+    assert st[clip("「ふふん、俺様に任せろってんだ！」", QUOTE_CHARS)] == ("海斗", "inferred")  # the scripted model's answer
 
 
 def test_a_stated_speaker_must_be_stated_next_to_the_line(conn, cfg, tmp_path):

@@ -222,10 +222,12 @@ FORMS_PER_QUOTA = 12  # forms of address per QUOTA_UNITS paragraphs of a request
 
 def context_items(conn: sqlite3.Connection, book_id: str, horizon: int, text: str, speakers: set[str],
                   names: dict[str, str], present: set[str] | None = None, limit: int = FORMS_PER_QUOTA,
-                  upto: int | None = None) -> list[dict[str, Any]]:
+                  upto: int | None = None, compact: bool = True) -> list[dict[str, Any]]:
     """Translation payload: forms occurring in the batch, plus how this batch's speakers usually call the
     characters present in the scene (the form they would use if they named them). ``limit``: the most used kept; a
-    caller with a long batch raises it with the batch (``retrieval.batch_quota``, ADR-069)."""
+    caller with a long batch raises it with the batch (``retrieval.batch_quota``, ADR-069). ``compact``
+    (``translation.compact_payload``): no ``since`` (the volume of first use) — the list is in order of first use,
+    which the prompts say."""
     vols = volumes(conn)
     out = []
     for r in visible_terms(conn, book_id, horizon, text, speakers, present or set(), upto=upto):
@@ -234,7 +236,7 @@ def context_items(conn: sqlite3.Connection, book_id: str, horizon: int, text: st
         item: dict[str, Any] = {"speaker": names[r["speaker_id"]],
                                 "to": "（自稱）" if r["speaker_id"] == r["addressee_id"] else names[r["addressee_id"]],
                                 "ja": r["form_ja"], "uses": r["uses"],
-                                "since": f"第{vols.get(r['book_id'], 1.0):g}集"}
+                                **({} if compact else {"since": f"第{vols.get(r['book_id'], 1.0):g}集"})}
         if r["form_zh"]:
             item["zh"] = r["form_zh"]
         if r["zh_origin"] not in DECIDED and (rel := decided_variants(conn, r["speaker_id"], r["addressee_id"],

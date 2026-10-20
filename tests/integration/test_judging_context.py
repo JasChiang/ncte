@@ -36,7 +36,8 @@ def test_review_gets_the_scenes_facts_and_summaries_and_its_questions(conn, cfg,
 
 
 REVIEW_MEMORY = ("- `memory`（可能不存在）：這一場開始以前已揭露的劇情記憶：`previous_chapter_summary`（上一章回顧）、"
-                 "`this_chapter_so_far`（本章前面的摘要）、`facts`（挑出來和這一場相關的事實，`source` 是它的原文依據）、"
+                 "`this_chapter_so_far`（本章前面的摘要）、`facts`（挑出來和這一場相關的事實，`source` 是它的原文依據的節錄，"
+                 "截掉的地方標「…」）、"
                  "`props`（物品與持有者）。標示 `inferred` 或 `unknown` 的**不是確定事實**。事實與摘要只用來理解人物與前情，"
                  "**不可改變本句原文的意思、對象或方向**（本句怎麼說，以本句原文為準）；譯文沒有寫出這些背景不是錯。")
 
@@ -86,7 +87,8 @@ def test_the_fix_check_is_not_given_a_form_first_used_later(conn, cfg, fixtures)
 
 
 FIX_CHECK_NAMES = ("- `glossary`、`address_terms`（可能不存在）：這些段落原文裡已定的譯名（`ja` → `zh`），以及說話者對某人慣用的"
-                   "稱呼與既有譯法（`usage: mention` 是談到、不是當面叫）。用來判斷 `after` 的名字與稱呼是否照既有譯法；"
+                   "稱呼與既有譯法，依首次使用的順序排列（`usage: mention` 是談到、不是當面叫；`certainty: inferred` 表示說話者"
+                   "是推測的）。用來判斷 `after` 的名字與稱呼是否照既有譯法；"
                    "稱呼本身在原文改變時不算錯，第二人稱與敬稱的語氣隨場合、情緒調整也不算錯。")
 
 

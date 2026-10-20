@@ -717,7 +717,8 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
             cast = proofread.cast(conn, orch.book.id, part)
             # the decided names of these paragraphs and how their speakers call their people, as proofreading has them
             names_and_forms = proofread.renderings(conn, orch.book.id, part, glossary=orch.glossary,
-                                                   volume=orch.volume, revealed=orch.link_revealed)
+                                                   volume=orch.volume, revealed=orch.link_revealed,
+                                                   compact=orch.cfg.translation.compact_payload)
         payload: dict[str, Any] = {"task": "fix_check", "items": items, **names_and_forms}
         if orch.cfg.context.term_definitions:  # what the terms in these paragraphs mean, as shown there (ADR-069)
             from ..memory.terms import definitions_for

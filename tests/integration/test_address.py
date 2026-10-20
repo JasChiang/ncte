@@ -66,8 +66,9 @@ def test_translation_payload_carries_earlier_address_terms(conn, cfg, fixtures):
     first = next(p for p in payloads if any("遅いですよ" in u["source"] for u in p["units"]))
     assert "address_terms" not in first  # nothing was known before the first scene
     later = [p for p in payloads if p.get("address_terms")]
+    # in order of first use, which the prompt says: no volume of first use (``translation.compact_payload``)
     assert later and later[0]["address_terms"][0] == {"speaker": "米娜", "to": "海斗", "ja": "カイト", "uses": 1,
-                                                       "since": "第1集", "zh": "海斗", "note": "直呼名字"}
+                                                       "zh": "海斗", "note": "直呼名字"}
 
 
 def test_llm_rendering_and_validation(conn, cfg, fixtures):

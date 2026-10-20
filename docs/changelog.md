@@ -1047,3 +1047,7 @@ open workspace/eval/<timestamp>/report.html
 - `translation.fix_batch_units`、`fix_batch_chars`；`review.fix_groups` 依場景分組、`_fix_parts` 平均切；`context_builder.fix_windows`、`shown_context`；`review_feedback[].around`；翻譯提示詞一句說明。
 - 抽查數字見 ADR-078。測試：`tests/integration/test_fix_scope.py`、`test_fix_context.py`。648 passed、4 skipped。
 
+## 精簡格式、台詞照故事順序（2026-10-21，分支 trim-translate-2026-10-21，自 2a1244f；ADR-079）
+- `translation.compact_payload`；`memory.retrieval`（`clip`、`fact_excerpt`、`chosen_facts`、`COMPACT_EXAMPLES`）；`memory.address.context_items(compact=)`；`analysis.proofread.renderings/notes(compact=)`；場景台詞依段落順序。提示詞說明省略的預設值與節錄。
+- 測試：`tests/integration/test_compact_payload.py`（新）等。655 passed、4 skipped。
+
