@@ -1028,3 +1028,8 @@ open workspace/eval/<timestamp>/report.html
 - 抽查數字見 ADR-074。
 - 測試：`tests/integration/test_proofread.py`、`test_proofread_passes.py`、`tests/unit/test_fix_claims.py`、`test_prompt_render.py`（判斷順序逐字相同、讀場景與兩步驟規則相同等）。629 passed、4 skipped。
 
+## 術語定義分階段（2026-10-20，分支 staged-terms-2026-10-20，自 53bbe77；ADR-075）
+- migration 32：`term_definitions` 一個詞可有幾筆（`UNIQUE(book_id, source_term, revealed_ordinal)`）。`memory/terms.set_model_stages`；`set_definition`（人寫的）取代該詞所有階段。`analysis/terms.apply` 依詞收集各階段、逐筆檢查，最多 3 筆（`MAX_STAGES`），統計多 `stages`。`terms` 提示詞：逐步揭露時分筆回答，第一筆從最早看得出的意思寫起。網頁術語卡依位置列出各階段。
+- 抽查：看不到定義的段落 829 → 569；62 筆階段裡 1 筆提前透露（數字見 ADR-075）。
+- 測試：`tests/integration/test_terms.py`（分階段存取、各位置拿到的那一筆、單筆退回、上限、人寫的取代）、`tests/unit/test_db.py`（migration）。632 passed、4 skipped。
+

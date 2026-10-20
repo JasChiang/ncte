@@ -282,3 +282,87 @@ def test_with_term_candidates_off_only_the_glossary_is_asked(conn, cfg, fixtures
     run_book(conn, cfg, fixtures["basic"], client, mode="context")
     assert not [p for p in _stage(client, "terms") if p.get("task") == "term_candidates"]
     assert len(_defining(client)) == 1
+
+
+EARLY = "米娜手上有一把銀色的鑰匙。"  # the first stage: only what the first sentence shows
+
+
+def _two_stages(payload, req):
+    """The key answered in two stages: what the first example shows, then the whole meaning from chapter two."""
+    if payload.get("task") == "term_candidates":
+        return {"candidates": []}
+    out = []
+    for t in payload["terms"]:
+        if t["ja"] == TERM:
+            first = t["examples"][0]["ref"]
+            late = next(x["ref"] for x in t["examples"] if LATE in x["text"])
+            assert first != late
+            out += [{"ref": t["ref"], "definition": EARLY, "evidence": [first], "revealed_from": first},
+                    {"ref": t["ref"], "definition": DEF, "evidence": [late], "revealed_from": late}]
+    return {"terms": out}
+
+
+def test_a_term_answered_in_stages_is_shown_by_stage(conn, cfg, fixtures):
+    from ncte.memory.terms import definitions_for
+
+    client = FakeLLM(responders={**RESPONDERS, "terms": _two_stages})
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    rows = conn.execute("SELECT definition, revealed_ordinal FROM term_definitions WHERE book_id=? AND source_term=? "
+                        "ORDER BY revealed_ordinal", (book.id, TERM)).fetchall()
+    assert [r[0] for r in rows] == [EARLY, DEF]
+    first, late = rows[0][1], rows[1][1]
+    assert first < late
+
+    def shown(upto):
+        return [d["definition"] for d in definitions_for(conn, book.id, TERM, upto)]
+    assert shown(first - 1) == []
+    assert shown(first) == shown(late - 1) == [EARLY]
+    assert shown(late) == shown(late + 50) == [DEF]
+    job = conn.execute("SELECT checkpoint_json FROM jobs WHERE stage='terms'").fetchone()
+    assert '"defined": 1' in job["checkpoint_json"] and '"stages": 2' in job["checkpoint_json"]
+    # the names page groups them under the term, in story order
+    from ncte.gui import data
+
+    assert [t["definition"] for t in data.term_definitions(conn, book) if t["ja"] == TERM] == [EARLY, DEF]
+    # a person's definition replaces every stage, and the model's answer does not replace it
+    from ncte.analysis import terms
+    from ncte.llm.schemas import TermsOutput
+    from ncte.memory.db import Transaction
+    from ncte.memory.terms import set_definition
+
+    with Transaction(conn):
+        set_definition(conn, book.id, TERM, "人工寫的定義")
+    lk = {"_terms": {"t1": TERM}, "_ev": {"s1": first, "s2": late}}
+    again = TermsOutput.model_validate({"terms": [{"ref": "t1", "definition": DEF, "evidence": ["s2"],
+                                                   "revealed_from": "s2"}]})
+    stats = terms.apply(conn, book.id, [(again, lk)])
+    assert stats["kept_human"] == 1 and stats["defined"] == 0
+    rows = conn.execute("SELECT definition, origin FROM term_definitions WHERE book_id=? AND source_term=?",
+                        (book.id, TERM)).fetchall()
+    assert [tuple(r) for r in rows] == [("人工寫的定義", "human")]
+    assert shown(0) == ["人工寫的定義"]
+
+
+def _answers(*stages):
+    from ncte.llm.schemas import TermsOutput
+
+    return TermsOutput.model_validate({"terms": [{"ref": "t1", "definition": d, "evidence": ev, "revealed_from": ev[0]}
+                                                 for d, ev in stages]})
+
+
+def test_each_stage_is_checked_alone_and_a_term_keeps_at_most_three(conn):
+    from ncte.analysis import terms
+
+    lk = {"_terms": {"t1": TERM}, "_ev": {"s1": 10, "s2": 20, "s3": 30, "s4": 40}}
+    stats = terms.apply(conn, "b", [(_answers(("一", ["s1"]), ("引用沒給的", ["s999"]), ("二", ["s2"])), lk)])
+    assert stats == {"defined": 1, "stages": 2, "rejected": 1, "kept_human": 0}
+    got = conn.execute("SELECT definition, revealed_ordinal FROM term_definitions ORDER BY revealed_ordinal").fetchall()
+    assert [tuple(r) for r in got] == [("一", 10), ("二", 20)]
+    # one per position shown from (the later answer), then the first, the middle and the last
+    terms.apply(conn, "b", [(_answers(("一", ["s1"]), ("二", ["s2"]), ("二改", ["s2"]), ("三", ["s3"]),
+                                      ("四", ["s4"])), lk)])
+    got = conn.execute("SELECT definition, revealed_ordinal FROM term_definitions ORDER BY revealed_ordinal").fetchall()
+    assert [tuple(r) for r in got] == [("一", 10), ("二改", 20), ("四", 40)]
+    # asked again and not answered: the model's stages are gone
+    terms.apply(conn, "b", [(_answers(), lk)])
+    assert conn.execute("SELECT COUNT(*) FROM term_definitions").fetchone()[0] == 0

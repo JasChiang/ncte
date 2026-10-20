@@ -40,3 +40,22 @@ def test_an_older_workspace_gains_finding_versions_without_losing_findings(tmp_p
     row = c.execute("SELECT status, translation_id FROM qa_findings").fetchone()
     assert (row["status"], row["translation_id"]) == ("open", None)
     c.close()
+
+
+def test_migration_32_keeps_term_definitions_and_allows_stages(tmp_path, monkeypatch):
+    """Migration 32 rebuilds term_definitions keyed by where a definition is shown from: earlier rows are kept, and a
+    term may then have a second one from another position."""
+    monkeypatch.setattr(db, "MIGRATIONS", [m for m in db.MIGRATIONS if m[0] < 32])
+    c = db.connect(tmp_path / "old.db")
+    c.execute("INSERT INTO term_definitions(book_id, source_term, definition, evidence_json, since_ordinal, "
+              "revealed_ordinal, origin, updated_at) VALUES ('b','鍵','鑰匙','[]',3,5,'model','t')")
+    c.close()
+    monkeypatch.undo()
+    c = db.connect(tmp_path / "old.db")
+    assert db.current_version(c) == max(m[0] for m in db.MIGRATIONS)
+    row = c.execute("SELECT definition, since_ordinal, revealed_ordinal, origin FROM term_definitions").fetchone()
+    assert tuple(row) == ("鑰匙", 3, 5, "model")
+    c.execute("INSERT INTO term_definitions(book_id, source_term, definition, revealed_ordinal, updated_at) "
+              "VALUES ('b','鍵','王家的鑰匙',9,'t')")
+    assert c.execute("SELECT COUNT(*) FROM term_definitions").fetchone()[0] == 2
+    c.close()

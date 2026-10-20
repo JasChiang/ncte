@@ -685,6 +685,27 @@ CREATE TABLE term_definitions (
     UNIQUE(book_id, source_term)
 );
 """),
+    (32, "a term's meaning in stages: several definitions per term, each shown from where its own evidence is", """
+CREATE TABLE term_definitions_by_stage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    book_id TEXT NOT NULL,
+    source_term TEXT NOT NULL,
+    definition TEXT NOT NULL,
+    contrast_with TEXT,
+    evidence_json TEXT NOT NULL DEFAULT '[]',
+    since_ordinal INTEGER NOT NULL DEFAULT 0,
+    revealed_ordinal INTEGER NOT NULL DEFAULT 0,
+    origin TEXT NOT NULL DEFAULT 'model',
+    run_id TEXT,
+    updated_at TEXT NOT NULL,
+    UNIQUE(book_id, source_term, revealed_ordinal)
+);
+INSERT INTO term_definitions_by_stage(id, book_id, source_term, definition, contrast_with, evidence_json, since_ordinal,
+    revealed_ordinal, origin, run_id, updated_at) SELECT id, book_id, source_term, definition, contrast_with,
+    evidence_json, since_ordinal, revealed_ordinal, origin, run_id, updated_at FROM term_definitions;
+DROP TABLE term_definitions;
+ALTER TABLE term_definitions_by_stage RENAME TO term_definitions;
+"""),
 ]
 
 

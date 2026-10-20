@@ -2,7 +2,9 @@
 
 A definition is the model's (from the terms step, citing example sentences and facts) or a person's; a person's is
 never replaced by the model's. It is shown from the latest position of the evidence it cites (``revealed_ordinal``):
-before that, a request where the term occurs does not get it. Which definitions a request gets is a string match of
+before that, a request where the term occurs does not get it. A term whose meaning the book reveals bit by bit has
+several of the model's definitions (stages), each shown from its own position; a request gets the latest one shown by
+then. A person's is one definition, shown from the start. Which definitions a request gets is a string match of
 the term in the request's source text, as the glossary is chosen; nothing here decides what a passage means.
 """
 
@@ -19,20 +21,33 @@ from .db import utcnow
 DEFINITION_CHARS = 300  # a definition is one or two sentences
 
 
+def _insert(conn: sqlite3.Connection, book_id: str, term: str, definition: str, contrast_with: str, origin: str,
+            evidence: list[dict[str, Any]], since: int, revealed: int, run_id: str | None) -> None:
+    conn.execute(
+        "INSERT INTO term_definitions(book_id, source_term, definition, contrast_with, evidence_json, since_ordinal, "
+        "revealed_ordinal, origin, run_id, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (book_id, term, definition.strip()[:DEFINITION_CHARS], contrast_with.strip() or None,
+         json.dumps(evidence, ensure_ascii=False), since, revealed, origin, run_id, utcnow()))
+
+
 def set_definition(conn: sqlite3.Connection, book_id: str, term: str, definition: str, *, contrast_with: str = "",
                    origin: str = "human", evidence: list[dict[str, Any]] | None = None, since: int = 0,
                    revealed: int = 0, run_id: str | None = None) -> None:
-    """Keep a definition (replacing this book's one for the term). A person's has no evidence and is shown from the
-    start of the book."""
-    conn.execute(
-        "INSERT INTO term_definitions(book_id, source_term, definition, contrast_with, evidence_json, since_ordinal, "
-        "revealed_ordinal, origin, run_id, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(book_id, source_term) "
-        "DO UPDATE SET definition=excluded.definition, contrast_with=excluded.contrast_with, "
-        "evidence_json=excluded.evidence_json, since_ordinal=excluded.since_ordinal, "
-        "revealed_ordinal=excluded.revealed_ordinal, origin=excluded.origin, run_id=excluded.run_id, "
-        "updated_at=excluded.updated_at",
-        (book_id, term, definition.strip()[:DEFINITION_CHARS], contrast_with.strip() or None,
-         json.dumps(evidence or [], ensure_ascii=False), since, revealed, origin, run_id, utcnow()))
+    """Keep one definition, replacing all of this book's ones for the term (the model's stages too). A person's has no
+    evidence and is shown from the start of the book."""
+    conn.execute("DELETE FROM term_definitions WHERE book_id=? AND source_term=?", (book_id, term))
+    _insert(conn, book_id, term, definition, contrast_with, origin, evidence or [], since, revealed, run_id)
+
+
+def set_model_stages(conn: sqlite3.Connection, book_id: str, term: str, stages: list[dict[str, Any]],
+                     run_id: str | None = None) -> None:
+    """Replace the model's definitions of the term in this book with ``stages`` (each: definition, contrast_with,
+    evidence, since, revealed; at distinct ``revealed``). None: the term is left without the model's. A person's
+    definition is not touched (the model is not asked about such a term)."""
+    conn.execute("DELETE FROM term_definitions WHERE book_id=? AND source_term=? AND origin='model'", (book_id, term))
+    for st in stages:
+        _insert(conn, book_id, term, st["definition"], st.get("contrast_with", ""), "model", st["evidence"],
+                st["since"], st["revealed"], run_id)
 
 
 def human_terms(conn: sqlite3.Connection, book_id: str) -> set[str]:
@@ -52,7 +67,8 @@ def all_definitions(conn: sqlite3.Connection, book_id: str) -> list[sqlite3.Row]
 def definitions_for(conn: sqlite3.Connection, book_id: str, text: str, upto: int) -> list[dict[str, str]]:
     """``term_definitions`` for a request: each defined term that occurs in ``text`` (as written, ``match_text``) and
     whose definition is shown by story position ``upto`` of this book, with its current rendering; in the order the
-    terms first occur in the text. A term defined in several volumes of a series: the latest one shown by then."""
+    terms first occur in the text. A term defined in stages, or in several volumes of a series: the latest
+    one shown by then."""
     t = match_text(text)
     hz = pos(conn, book_id, upto)
     vols = volumes(conn)

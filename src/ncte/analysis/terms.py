@@ -5,8 +5,10 @@ has only the rendering in the glossary and the handful of facts chosen for a bat
 terms of the glossary (not people's names) are put to the model with what the program finds by string match: example
 sentences that contain the term, spread over the book, and the facts whose predicate, object or source sentence
 contains it, each with where it is revealed. The model says what the term means here, citing those; the program
-checks that what it cites was given and shows the definition from the latest evidence it cites. Nothing here decides
-what a term means (ADR-059).
+checks that what it cites was given and shows the definition from the latest evidence it cites. A meaning the book
+reveals bit by bit is answered in stages (the same term more than once), each shown from its own evidence on, so a
+paragraph before the whole meaning is revealed still gets what is known by then. Nothing here decides what a term
+means (ADR-059).
 
 A term the reading never put in the glossary would never be asked (ADR-073: a book read by another model had no entry
 for 魔術, and 魔法じゃなくて…魔術士 was misread by every model given no definition). So first the model is shown the
@@ -24,7 +26,7 @@ from typing import Any
 from ..epub.units import match_text
 from ..llm.schemas import TermsOutput
 from ..memory.db import Transaction
-from ..memory.terms import human_terms, set_definition
+from ..memory.terms import human_terms, set_model_stages
 from ..series import SERIES_SCOPE
 
 CATEGORIES = ("term", "skill", "item", "organization", "place")  # not people's names
@@ -33,6 +35,7 @@ MAX_TERMS = 60  # the most frequent
 EXAMPLES = 3  # example sentences per term, spread over the book
 FACTS = 5  # facts per term, spread over the book
 PER_REQUEST = 20  # terms per request
+MAX_STAGES = 3  # definitions per term, for a meaning the book reveals bit by bit
 MAX_FACTS = 400  # facts shown when naming missing terms (spread over the book)
 MAX_CANDIDATES = 20  # named terms kept
 SENTENCE_CHARS = 160
@@ -197,18 +200,25 @@ def requests(conn: sqlite3.Connection, book_id: str,
     return out
 
 
+def _pick(stages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """At most MAX_STAGES of a term's stages (in story order): the first, the last and those evenly between."""
+    return _spread(sorted(stages, key=lambda st: st["revealed"]), MAX_STAGES)
+
+
 def apply(conn: sqlite3.Connection, book_id: str, results: list[tuple[TermsOutput, dict[str, Any]]],
           run_id: str | None = None) -> dict[str, int]:
     """Keep each answer whose evidence codes were all given (at least one): shown from the latest position of what it
-    cites (and of ``revealed_from``, where the definition holds from). A term asked again loses the model's earlier
-    definition (an unanswered one is then undefined); a person's definition is never replaced. ``lookup["_blocked"]``:
-    refs the content filter refused (not asked, so their earlier definitions stay)."""
-    stats = {"defined": 0, "rejected": 0, "kept_human": 0}
+    cites (and of ``revealed_from``, where the definition holds from). A term answered more than once has its stages:
+    each checked alone, one per position shown from (a later answer for the same position replaces an earlier one),
+    at most MAX_STAGES. A term asked again loses the model's earlier definitions (an unanswered one is then undefined);
+    a person's definition is never replaced. ``lookup["_blocked"]``: refs the content filter refused (not asked, so
+    their earlier definitions stay)."""
+    stats = {"defined": 0, "stages": 0, "rejected": 0, "kept_human": 0}
     human = human_terms(conn, book_id)
     with Transaction(conn):
         for parsed, lk in results:
             asked = {ref: term for ref, term in lk["_terms"].items() if ref not in lk.get("_blocked", set())}
-            got: dict[str, tuple[Any, list[str]]] = {}
+            got: dict[str, dict[int, dict[str, Any]]] = {}
             for d in parsed.terms:
                 term = asked.get(d.ref)
                 if term is None:
@@ -219,19 +229,21 @@ def apply(conn: sqlite3.Connection, book_id: str, results: list[tuple[TermsOutpu
                     continue
                 cited = [x.strip() for x in d.evidence]
                 if not d.definition.strip() or not cited or any(x not in lk["_ev"] for x in cited):
-                    stats["rejected"] += 1  # it cites what it was not given: not kept
+                    stats["rejected"] += 1  # it cites what it was not given: this stage is not kept
                     continue
-                got[term] = (d, cited)
-            for term in asked.values():
-                if term not in human:
-                    conn.execute("DELETE FROM term_definitions WHERE book_id=? AND source_term=? AND origin='model'",
-                                 (book_id, term))
-            for term, (d, cited) in got.items():
                 at = [lk["_ev"][x] for x in cited]
                 since = lk["_ev"].get(d.revealed_from.strip(), min(at))
-                set_definition(conn, book_id, term, d.definition, contrast_with=d.contrast_with, origin="model",
-                               evidence=[{"kind": "fact" if x.startswith("f") else "example", "at": lk["_ev"][x]}
-                                         for x in cited],
-                               since=since, revealed=max(*at, since), run_id=run_id)
-                stats["defined"] += 1
+                revealed = max(*at, since)
+                got.setdefault(term, {})[revealed] = {
+                    "definition": d.definition, "contrast_with": d.contrast_with, "since": since, "revealed": revealed,
+                    "evidence": [{"kind": "fact" if x.startswith("f") else "example", "at": lk["_ev"][x]}
+                                 for x in cited]}
+            for term in dict.fromkeys(asked.values()):
+                if term in human:
+                    continue
+                stages = _pick(list(got.get(term, {}).values()))
+                set_model_stages(conn, book_id, term, stages, run_id)
+                if stages:
+                    stats["defined"] += 1
+                    stats["stages"] += len(stages)
     return stats

@@ -432,10 +432,15 @@ async function namesView(id) {
   const styleCard = st && !st.default ? `<details class="card small"><summary><strong>全書體例</strong> <span class="muted">${st.auto ? "（模型讀完全書後定的）" : "（人工設定）"}</span></summary>
     <div>敬稱：${esc(st.honorifics_zh)}</div>${st.reason ? `<div class="muted">理由：${esc(st.reason)}</div>` : ""}
     ${st.rules.length ? `<div style="margin-top:4px">規則：${st.rules.map(r => esc(r)).join("；")}</div>` : ""}</details>` : "";
-  // what the book's recurring terms mean (ADR-069), as the translator gets them where the term occurs
-  const termsCard = (terms || []).length ? `<details class="card small"><summary><strong>術語的意思</strong> <span class="muted">（${terms.length} 個；讀完全書後整理，翻譯與校稿時附給模型參考）</span></summary>
-    ${terms.map(t => `<div style="margin-top:4px"><span class="ja">${esc(t.ja)}</span>${t.zh ? ` → ${esc(t.zh)}` : ""}　${esc(t.definition)}${t.contrast_with ? ` <span class="muted">（對照：${esc(t.contrast_with)}）</span>` : ""}
-      <span class="muted">${t.origin === "human" ? "人工" : `§${t.revealed_at} 起`}</span></div>`).join("")}</details>` : "";
+  // what the book's recurring terms mean (ADR-069), as the translator gets them where the term occurs; a meaning the
+  // book reveals bit by bit has several stages, each shown from its own position (the rows come in story order)
+  const byTerm = new Map();
+  (terms || []).forEach(t => { if (!byTerm.has(t.ja)) byTerm.set(t.ja, []); byTerm.get(t.ja).push(t); });
+  const stageLine = t => `${esc(t.definition)}${t.contrast_with ? ` <span class="muted">（對照：${esc(t.contrast_with)}）</span>` : ""}
+      <span class="muted">${t.origin === "human" ? "人工" : `§${t.revealed_at} 起`}</span>`;
+  const termsCard = byTerm.size ? `<details class="card small"><summary><strong>術語的意思</strong> <span class="muted">（${byTerm.size} 個；讀完全書後整理，翻譯與校稿時附給模型參考）</span></summary>
+    ${[...byTerm.values()].map(st => `<div style="margin-top:4px"><span class="ja">${esc(st[0].ja)}</span>${st[0].zh ? ` → ${esc(st[0].zh)}` : ""}${st.length === 1 ? `　${stageLine(st[0])}`
+      : `<span class="muted">（逐步揭露，${st.length} 段說明；各自從所寫的位置起附上）</span>${st.map(t => `<div style="margin-left:1.5em">${stageLine(t)}</div>`).join("")}`}</div>`).join("")}</details>` : "";
   const banner = lastRename ? `<div class="card" style="border-color:var(--accent)">
       <strong>已翻譯的 ${lastRename.affected} 段還在用舊譯法「${esc(lastRename.old)}」</strong>（${esc(lastRename.label)} → ${esc(lastRename.zh)}）
       <div class="row" style="gap:8px;margin-top:8px"><button class="btn primary" id="rnReplace">直接把「${esc(lastRename.old)}」換成「${esc(lastRename.zh)}」</button>

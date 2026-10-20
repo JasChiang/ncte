@@ -305,8 +305,9 @@ class NamingOutput(_M):
 
 # ------------------------------------------------------------------ terms (ADR-069)
 # What a recurring term means in this book, from the example sentences and facts the request gives (their codes in
-# ``evidence``; ``revealed_from``: the one from which the definition holds). Comments, not docstrings: a docstring
-# would go into the JSON schema the model reads.
+# ``evidence``; ``revealed_from``: the one from which the definition holds). A meaning the book reveals bit by bit:
+# the same ``ref`` answered more than once, one entry per stage, each with its own evidence. Comments, not docstrings:
+# a docstring would go into the JSON schema the model reads.
 class TermDefinitionOut(_M):
     ref: str
     definition: str
