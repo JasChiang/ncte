@@ -81,6 +81,12 @@ class TranslationConfig(_Strict):
     # retranslating chosen units: the rest of their scene is given as context (not retranslated), up to this many
     # Japanese characters on each side — a lone short sentence otherwise loses the scene it belongs to
     targeted_scene_context_chars: int = Field(2500, ge=0, le=20000)
+    # a fix (after review / proofreading / the reader's look): "window" = the paragraphs around it, up to
+    # fix_context_chars Japanese characters a side (at least two paragraphs when there are), and only the memory of
+    # that window (who is in it, its lines, its terms); "scene" = as much of the scene as a retranslation of chosen
+    # units sees, and the people of the whole scene (the earlier behaviour, kept to compare)
+    fix_scope: Literal["window", "scene"] = "window"
+    fix_context_chars: int = Field(1200, ge=0, le=20000)
     preserve_ambiguity: bool = True
     skip_already_translated: bool = True
     # ADR-064: before its translations the model lists where later paragraphs of the batch constrain how an earlier
@@ -137,6 +143,9 @@ class ContextConfig(_Strict):
     term_definitions: bool = True
     # ADR-073: before defining, the model names terms the reading left out of the glossary (from facts and summaries)
     term_candidates: bool = True
+    # facts given with a fix in the "window" scope (``translation.fix_scope``): chosen for the fixed paragraphs and the
+    # window around them
+    fix_fact_quota: int = Field(4, ge=0, le=50)
     skip_book_matter: bool = True  # ADR-024: no story analysis for covers, TOC, afterword, colophon (still translated)
 
 

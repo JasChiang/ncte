@@ -17,15 +17,22 @@ from .cache import latest_translation, relevant_glossary
 BODY_KINDS = ("text", "heading")
 _WHOLE = re.compile(r"⟦(\d+)⟧(.*)⟦/\1⟧", re.S)  # one placeholder around a whole unit
 META_KINDS = ("head_title", "nav", "ncx", "opf_title")
+FIX_LEAST_UNITS = 2  # a fix sees at least this many paragraphs on each side (when its scene has them)
 
 
 def neighbor_context(conn: sqlite3.Connection, cfg: Config, book_id: str, rows: list[sqlite3.Row],
-                     *, scene_id: str | None = None, whole_scene: bool = False) -> dict[str, Any]:
+                     *, scene_id: str | None = None, whole_scene: bool = False, fix: bool = False) -> dict[str, Any]:
     """Previous / next units as context. ``whole_scene`` (retranslating chosen units): the rest of the scene on
-    both sides, nearest first, up to ``targeted_scene_context_chars`` Japanese characters per side."""
+    both sides, nearest first, up to ``targeted_scene_context_chars`` Japanese characters per side. ``fix`` (a fix in
+    the "window" scope): the same within ``fix_context_chars`` a side, at least two paragraphs a side when the scene
+    has them."""
     first, last = rows[0]["ordinal"], rows[-1]["ordinal"]
+    if fix and (scene_id or rows[-1]["scene_id"]) and cfg.translation.fix_context_chars:
+        return _scene_window(conn, book_id, rows, scene_id or rows[-1]["scene_id"],
+                             budget=cfg.translation.fix_context_chars, least=FIX_LEAST_UNITS)
     if whole_scene and (scene_id or rows[-1]["scene_id"]) and cfg.translation.targeted_scene_context_chars:
-        return _scene_window(conn, cfg, book_id, rows, scene_id or rows[-1]["scene_id"])
+        return _scene_window(conn, book_id, rows, scene_id or rows[-1]["scene_id"],
+                             budget=cfg.translation.targeted_scene_context_chars)
     # lookahead never crosses the current scene (spec §5.5), in every mode; "none" disables it
     scene_id = scene_id or rows[-1]["scene_id"]
     if cfg.app.lookahead_scope == "none":
@@ -55,9 +62,8 @@ def neighbor_context(conn: sqlite3.Connection, cfg: Config, book_id: str, rows: 
             "context_after": [{"unit_id": r["id"], "source": r["source_text"]} for r in nxt]}
 
 
-def _scene_window(conn: sqlite3.Connection, cfg: Config, book_id: str, rows: list[sqlite3.Row],
-                  scene_id: str) -> dict[str, Any]:
-    budget = cfg.translation.targeted_scene_context_chars
+def _scene_window(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row],
+                  scene_id: str, *, budget: int, least: int = 1) -> dict[str, Any]:
     first, last = rows[0]["ordinal"], rows[-1]["ordinal"]
     q = ("SELECT * FROM units WHERE book_id=? AND scene_id=? AND translatable=1 AND kind IN ('text','heading') "
          "AND spine_index IS NOT NULL AND ordinal {} ? ORDER BY ordinal {}")
@@ -67,7 +73,7 @@ def _scene_window(conn: sqlite3.Connection, cfg: Config, book_id: str, rows: lis
         used = 0
         for r in cands:
             used += len(r["plain_text"])
-            if out and used > budget:
+            if len(out) >= least and used > budget:
                 break
             out.append(r)
         return out

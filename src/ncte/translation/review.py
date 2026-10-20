@@ -323,12 +323,12 @@ def _clear_confirmed(orch: Any, reviewed: dict[str, int], stats: dict[str, int])
                 stats["cleared"] = stats.get("cleared", 0) + 1
 
 
-def _fake_batch(orch: Any, rows: list[sqlite3.Row], *, whole_scene: bool = False) -> Any:
+def _fake_batch(orch: Any, rows: list[sqlite3.Row], *, whole_scene: bool = False, fix: bool = False) -> Any:
     from .orchestrator import Batch
 
     scene_ids = {r["scene_id"] for r in rows}
     return Batch(rows, False, next(iter(scene_ids)) if len(scene_ids) == 1 and orch.opts.mode == "context" else None,
-                 whole_scene)
+                 whole_scene, fix)
 
 
 def even_parts(rows: list[Any], size: int) -> list[list[Any]]:
@@ -427,10 +427,13 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
               for u, t in current.items()}
     stats["retranslated"] += len(todo)
     res = BatchResult()
-    # the fix sees as much of its scene as the first translation did (the scene around it, up to
-    # targeted_scene_context_chars a side), not only the two paragraphs before and one after
+    # "window" (translation.fix_scope): the paragraphs around the fix (fix_context_chars a side, at least two) and
+    # what they need of the memory — the people in them, their lines, terms and facts; a fix request carrying the
+    # whole scene's data cost more than the first translation of the book. "scene": as much of the scene as a
+    # retranslation of chosen units sees (targeted_scene_context_chars a side) and the people of the whole scene
+    whole = orch.cfg.translation.fix_scope == "scene"
     for group in fix_groups(conn, orch.book.id, todo):
-        ctx = orch.batch_context(_fake_batch(orch, group, whole_scene=True))
+        ctx = orch.batch_context(_fake_batch(orch, group, whole_scene=whole, fix=not whole))
         ctx["review_feedback"] = [
             {"unit_id": r["id"], **({"current_translation": before[r["id"]]} if before[r["id"]] else {}),
              "issues": [{k: v for k, v in i.items() if k in ("issue_type", "evidence", "suggestion")}

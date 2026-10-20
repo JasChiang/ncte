@@ -230,17 +230,22 @@ class DbRecorder:
         self.conn, self.lock, self.run_id, self.book_id, self.pricing = conn, lock, run_id, book_id, pricing
         self.reuse = reuse
         self.models: dict[str, Pricing] = {}  # step models other than the run's (``stage_models``)
+        self.sizes: dict[int, int] = {}  # request → its payload's characters, until it is answered
 
     def start(self, req: LLMRequest, unit_ids: list[str], est_cost: float) -> int:
+        # how big the request is (the payload, not the shared rules before it): kept in ``usage`` to measure by
+        size = sum(len(m["content"]) for m in req.messages if m.get("role") != "system")
         with self.lock:
             cur = self.conn.execute(
                 "INSERT INTO llm_requests(run_id, book_id, stage, request_hash, model, prompt_version, "
-                "structured_mode, unit_ids_json, est_cost_usd, status, cost_status, created_at, reasoning_effort) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "structured_mode, unit_ids_json, est_cost_usd, status, cost_status, created_at, reasoning_effort, "
+                "usage_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (self.run_id, self.book_id, req.stage, req.request_hash(), req.model, req.prompt_version,
                  req.structured_mode, json.dumps(unit_ids), est_cost, "sent", "pending", utcnow(),
-                 reasoning_label(req.extra.get("reasoning"))))
-            return int(cur.lastrowid or 0)
+                 reasoning_label(req.extra.get("reasoning")), json.dumps({"payload_chars": size})))
+            rid = int(cur.lastrowid or 0)
+            self.sizes[rid] = size
+            return rid
 
     def success(self, rid: int, resp: LLMResponse, parse_status: str) -> None:
         cost, status = resp.cost_usd, "reported"
@@ -254,10 +259,12 @@ class DbRecorder:
                 status = "unknown"
         req_status = "succeeded" if parse_status in ("strict", "repaired_fence") else f"invalid_output:{parse_status}"
         with self.lock:
+            size = self.sizes.pop(rid, None)
+            usage = {**(resp.usage or {}), **({"payload_chars": size} if size is not None else {})}
             self.conn.execute(
                 "UPDATE llm_requests SET provider=?, usage_json=?, generation_id=?, cost_usd=?, cost_status=?, "
                 "status=?, attempts=?, latency_ms=?, response_text=?, structured_mode=?, finished_at=? WHERE id=?",
-                (resp.provider, json.dumps(resp.usage), resp.generation_id, cost, status, req_status,
+                (resp.provider, json.dumps(usage), resp.generation_id, cost, status, req_status,
                  resp.attempts, resp.latency_ms, resp.content, resp.structured_mode, utcnow(), rid))
             for _ in range(resp.maybe_billed_attempts):
                 # an earlier attempt of this request timed out and may have been billed: its own row, cost unknown
@@ -272,6 +279,7 @@ class DbRecorder:
     def failure(self, rid: int, exc: Exception) -> None:
         billed = bool(getattr(exc, "possibly_billed", False))
         with self.lock:
+            self.sizes.pop(rid, None)  # the row keeps the size written when it was sent
             self.conn.execute(
                 "UPDATE llm_requests SET status='failed', error=?, cost_status=?, cost_usd=?, finished_at=? WHERE id=?",
                 (f"{type(exc).__name__}: {str(exc)[:500]}", "unknown" if billed else "none",
@@ -287,6 +295,7 @@ class Batch:
     meta: bool = False
     scene_id: str | None = None
     whole_scene: bool = False  # a part of a long scene: it sees the rest of the scene as context
+    fix: bool = False  # a fix ("window" scope): the paragraphs around it as context, and only their memory
 
     @property
     def unit_ids(self) -> list[str]:
@@ -543,7 +552,7 @@ class Orchestrator:
                                        "note": "These are chapter titles / table-of-contents labels / book title."}
             else:
                 ctx = neighbor_context(self.conn, self.cfg, self.book.id, batch.rows, scene_id=batch.scene_id,
-                                       whole_scene=bool(self.opts.unit_ids) or batch.whole_scene)
+                                       whole_scene=bool(self.opts.unit_ids) or batch.whole_scene, fix=batch.fix)
                 text += " " + " ".join(c["source"] for c in ctx["context_before"] + ctx["context_after"])
             ctx["glossary"] = glossary_payload(self.glossary, text, upto=(self.volume, batch.rows[-1]["ordinal"]),
                                                revealed=self.link_revealed)

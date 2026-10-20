@@ -63,25 +63,48 @@ def memory_chars(chars_budget: int, n_units: int) -> int:
 
 
 def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row, batch_rows: list[sqlite3.Row],
-                   max_evidence: int = 8, chars_budget: int = 2400) -> dict[str, Any]:
+                   max_evidence: int = 8, chars_budget: int = 2400,
+                   window_rows: list[sqlite3.Row] | None = None, fix_facts: int = 4) -> dict[str, Any]:
     """Characters, scene state, summaries, facts and props visible at this scene.
 
     ``max_evidence`` and ``chars_budget`` are for a batch of up to QUOTA_UNITS paragraphs; a longer batch gets one
     more quota of facts per QUOTA_UNITS paragraphs (rounded up, at most QUOTA_MAX_TIMES times) and a character budget
-    grown in proportion, up to MEMORY_CHARS_MAX (``batch_quota``, ``memory_chars``; ADR-069)."""
-    max_evidence = batch_quota(max_evidence, len(batch_rows))
+    grown in proportion, up to MEMORY_CHARS_MAX (``batch_quota``, ``memory_chars``; ADR-069).
+
+    ``window_rows`` (a fix in the "window" scope: the paragraphs shown around it): only what the fixed paragraphs and
+    that window need — the people who speak, are spoken to, are named or do (or undergo) a recorded action there, and
+    the narrator of a first-person scene; their lines and actions; ``fix_facts`` facts chosen for that text; the
+    latest summary of the chapter and no recap of the one before. Known as of the window's last paragraph (a woman
+    named two paragraphs after the fix is on the cards: her 妳 was once changed to 你)."""
+    fix = window_rows is not None
+    seen = sorted([*batch_rows, *(window_rows or [])], key=lambda r: r["ordinal"])
+    max_evidence = fix_facts if fix else batch_quota(max_evidence, len(batch_rows))
     chars_budget = memory_chars(chars_budget, len(batch_rows))
     horizon = scene["start_ordinal"]
-    upto = batch_rows[-1]["ordinal"]
+    upto = seen[-1]["ordinal"]
+    seen_ids = {r["id"] for r in seen}
+    seen_text = match_text(" ".join(r["plain_text"] for r in seen))
     scene_text = " ".join(match_text(r["plain_text"]) for r in conn.execute(
         "SELECT plain_text FROM units WHERE book_id=? AND scene_id=? AND ordinal <= ? ORDER BY ordinal",
         (book_id, scene["id"], upto)))
     state = json.loads(scene["state_json"] or "{}")
-    participants = {p["character_id"] for p in state.get("participants", [])}
-    # the scene's narrator (named or not, rarely named in their own narration) and whoever speaks in it are present
-    participants |= {x for x in ((state.get("narration") or {}).get("narrator"),) if x}
-    participants |= {r[0] for r in conn.execute("SELECT DISTINCT speaker_id_nullable FROM utterances WHERE book_id=? AND "
-                                                "scene_id=? AND speaker_id_nullable IS NOT NULL", (book_id, scene["id"]))}
+    narration = state.get("narration") or {}
+    if not fix:
+        participants = {p["character_id"] for p in state.get("participants", [])}
+        # the scene's narrator (named or not, rarely named in their own narration) and whoever speaks in it are present
+        participants |= {x for x in (narration.get("narrator"),) if x}
+        participants |= {r[0] for r in conn.execute("SELECT DISTINCT speaker_id_nullable FROM utterances WHERE book_id=? "
+                                                    "AND scene_id=? AND speaker_id_nullable IS NOT NULL", (book_id, scene["id"]))}
+    else:  # only who is in the window: speaks there, is spoken to, does or undergoes an action the source leaves out
+        participants = {narration["narrator"]} if narration.get("narrator") and narration.get("person") == "first" \
+            else set()
+        for u in conn.execute("SELECT unit_id, speaker_id_nullable, addressee_ids_json FROM utterances WHERE book_id=? "
+                              "AND scene_id=?", (book_id, scene["id"])):
+            if u["unit_id"] in seen_ids:
+                participants |= {x for x in [u["speaker_id_nullable"], *json.loads(u["addressee_ids_json"] or "[]")] if x}
+        for a in state.get("actions", []):
+            if a.get("unit_id") in seen_ids:
+                participants |= {*a.get("subject_candidates", []), *a.get("object_candidates", [])}
     forms_at = vis.form_positions(conn, book_id)
     views = {c["id"]: v for c in vis.visible_characters(conn, book_id, upto)
              if (v := vis.character_view(conn, book_id, c, upto, forms_at)) is not None}
@@ -91,7 +114,7 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
     for c in chars:
         v = views[c["id"]]
         aliases = [v["name_ja"], *v["aliases_ja"]]
-        if c["id"] not in participants and not any(a in scene_text for a in aliases):
+        if c["id"] not in participants and not any(a in (seen_text if fix else scene_text) for a in aliases):
             continue
         prof = json.loads(c["speech_profile_json"] or "{}")
         examples = []
@@ -130,6 +153,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
                 elif card["character_id"] == r["b_id"]:
                     card.setdefault("relations", []).append({"with": names.get(r["a_id"]), "is": r["b_is"] or r["relation_zh"],
                                                              **sure})
+    # a fix gets its own paragraphs' lines and actions only: the window around it is there as text (measured on a whole
+    # book, the window's lines were 30% of a fix request); who is in the window still gets a card (above)
     batch_ids = {r["id"] for r in batch_rows}
     utts = []
     for u in conn.execute("SELECT * FROM utterances WHERE book_id=? AND scene_id=? ORDER BY unit_id, quote_index",
@@ -151,15 +176,15 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
         a["object_candidates"] = [names.get(x, x) for x in a.get("object_candidates", [])]
     same_ch, prev_ch = story_so_far(conn, book_id, scene)
     present_ids = {p["character_id"] for p in present}
-    batch_plain = match_text(" ".join(r["plain_text"] for r in batch_rows))
+    batch_plain = seen_text if fix else match_text(" ".join(r["plain_text"] for r in batch_rows))
     facts = select_facts(vis.visible_facts(conn, book_id, horizon), batch_plain, present, names, limit=max_evidence)
     props = [{"item": p["name_ja"], "holder": names.get(p["holder_character_id"]) if p["holder_character_id"] else None,
               **({"period": p["period"]} if p["period"] else {})}
-             for p in vis.visible_props(conn, book_id, horizon) if p["name_ja"] in scene_text]
+             for p in vis.visible_props(conn, book_id, horizon) if p["name_ja"] in (seen_text if fix else scene_text)]
     mem: dict[str, Any] = {
         "note": "Only information revealed before this scene. 'inferred'/'unknown' items are NOT facts.",
-        "previous_chapter_summary": prev_ch,
-        "this_chapter_so_far": _cap(same_ch, 4),
+        **({} if fix else {"previous_chapter_summary": prev_ch}),
+        "this_chapter_so_far": _cap(same_ch, 1 if fix else 4),
         "facts": _cap(facts, max_evidence),
         "props": props,
     }
@@ -171,11 +196,13 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             mem["this_chapter_so_far"].pop(0)
     from .address import FORMS_PER_QUOTA, context_items
 
-    batch_text = " ".join(r["plain_text"] for r in batch_rows)
+    batch_text = " ".join(r["plain_text"] for r in (seen if fix else batch_rows))
     batch_speakers = {u["speaker_id_nullable"] for u in conn.execute(
         f"SELECT speaker_id_nullable FROM utterances WHERE unit_id IN ({','.join('?' * len(batch_ids))}) AND "
         "speaker_id_nullable IS NOT NULL", list(batch_ids))}
     all_names = names  # the names known here: a name revealed later never reaches a form of address
+    if fix:  # a form of address between two of the people on the cards, not one of the scene's others
+        all_names = {cid: n for cid, n in names.items() if cid in present_ids}
     out: dict[str, Any] = {
         "characters": present,
         "scene": {"scene_id": scene["id"], "pov": state.get("pov"), "location": state.get("location"),

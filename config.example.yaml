@@ -32,6 +32,8 @@ translation:
   include_previous_units: 2
   include_next_units: 1
   targeted_scene_context_chars: 2500   # retranslating chosen units: rest of the scene as context, per side
+  fix_scope: "window"                  # a fix after review/proofreading: "window" = the paragraphs around it and their memory only; "scene" = the whole scene's (earlier behaviour)
+  fix_context_chars: 1200              # "window": Japanese characters per side (at least two paragraphs a side)
   preserve_ambiguity: true
   skip_already_translated: true
   read_through: false       # ADR-064: list where later paragraphs constrain an earlier line before translating (kept for review; off until checked)
@@ -41,6 +43,7 @@ review:
   fix_check: true                    # a fix after review/proofreading/reader is checked against the source; false = kept but unverified
 context:
   # proofread_passes: 2        # ADR-066: 1–3 proofreading passes; each later one checks the whole current translation again after the fixes (one pass found about half; each pass costs about one more proofreading). Unset: 2 on the Claude plan, 1 on OpenRouter/fal
+  fix_fact_quota: 4            # facts given with a fix in the "window" scope
   term_definitions: true       # ADR-069: after reading, the model says what the recurring terms mean; sent with each request where the term occurs (false: not asked, not sent)
   read_in_one_request: false   # ADR-065: a scene's analysis and memory update from one request (read_first only; off until an A/B shows the quality holds)
 memory:

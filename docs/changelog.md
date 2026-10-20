@@ -1039,3 +1039,7 @@ open workspace/eval/<timestamp>/report.html
 - `translation/review`：交回不變的修正記為衝突（`_record_conflicts`、`in_conflict`），嚴重的意思問題除外；`supersede`。`context_pipeline` 校稿與讀者檢查略過已衝突的（`conflict_skipped`）、取代舊意見（`superseded`）。`reports/acceptance` 另列 `conflicts`、只算目前版本；網頁 `flagged_units` 同一算法，另有 `conflict_units`。測試替身的譯者收到修正意見時在文字後加「（改）」。
 - 測試：`tests/integration/test_rule_conflicts.py`（新）、`test_fix_check.py`、`tests/unit/test_prompt_render.py`。640 passed、4 skipped。
 
+## 修正請求瘦身（2026-10-21，分支 slim-fixes-2026-10-21，自 ead3932；ADR-077）
+- `translation.fix_scope`（`window`／`scene`）、`translation.fix_context_chars`、`context.fix_fact_quota`；`Batch.fix`；`memory.retrieval.memory_context(window_rows=…, fix_facts=…)`；`context_builder._scene_window` 的預算與最少段數；`DbRecorder` 記 `usage.payload_chars`。
+- 抽查數字見 ADR-077。測試：`tests/integration/test_fix_scope.py`（新）。643 passed、4 skipped。
+

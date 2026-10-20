@@ -1,5 +1,6 @@
-"""A fix sees what the first translation saw: the scene around it (not two paragraphs before and one after), and that
-scene's memory, also when the whole book is reviewed (`ncte review`) and a batch would span scenes."""
+"""A fix sees the scene around it (not two paragraphs before and one after: ``fix_context_chars`` a side, which a short
+scene fits in whole) and that scene's memory, also when the whole book is reviewed (`ncte review`) and a batch would
+span scenes. What a fix carries of the memory in a long scene: ``test_fix_scope``."""
 
 from ncte.llm.fake import FakeLLM
 from ncte.samples import story_spec, write_book
@@ -40,7 +41,7 @@ def test_a_fix_sees_its_scene_and_fixes_far_apart_are_sent_apart(conn, cfg, tmp_
         (uid,) = [u["unit_id"] for u in p["units"]]  # first and last of a scene: two requests, not one
         scene = next(ids for ids in scenes.values() if uid in ids)
         shown = {c["unit_id"] for c in p["context_before"] + p["context_after"]}
-        assert shown == set(scene) - {uid}  # the rest of the (short) scene, not two paragraphs and one
+        assert shown == set(scene) - {uid}  # the rest of the (short) scene, within the window, not two paragraphs and one
         assert "scene" in p  # the scene's memory
 
 

@@ -1408,8 +1408,14 @@ class ContextOrchestrator(Orchestrator):
             return ctx
         with self.lock:
             scene = get_scene(self.conn, self.book.id, batch.scene_id)
+            window = None
+            if batch.fix:  # a fix: the memory of the paragraphs it is shown, not of the whole scene
+                ids = [c["unit_id"] for c in ctx.get("context_before", []) + ctx.get("context_after", [])]
+                window = self.conn.execute(f"SELECT * FROM units WHERE id IN ({','.join('?' * len(ids))})",
+                                           ids).fetchall() if ids else []
             mem = memory_context(self.conn, self.book.id, scene=scene, batch_rows=batch.rows,
-                                 max_evidence=self.cfg.memory.max_retrieved_evidence)
+                                 max_evidence=self.cfg.memory.max_retrieved_evidence, window_rows=window,
+                                 fix_facts=self.cfg.context.fix_fact_quota)
         ctx.update(mem)
         if self.cfg.context.term_definitions:  # what the book's terms mean, once their evidence is reached (ADR-069)
             from ..memory.terms import definitions_for
