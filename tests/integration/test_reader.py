@@ -56,13 +56,16 @@ def test_each_stretch_after_the_first_reads_the_end_of_the_one_before(conn, cfg,
 
     book, rid, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "reader": reader}),
                             mode="context")
-    assert len(seen) > 2 and "context_before" not in seen[0]
-    later = [p for p in seen[1:] if "context_before" in p]
+    # stretches run side by side, so requests arrive in any order: find each by its first paragraph
+    parts = rd.chunks(conn, book.id)
+    by_first = {p["paragraphs"][0]["unit_id"]: p for p in seen}
+    first, second = by_first[parts[0][0]["unit_id"]], by_first[parts[1][0]["unit_id"]]
+    assert len(seen) > 2 and "context_before" not in first
+    later = [p for p in seen if p is not first and "context_before" in p]
     assert later and all(1 <= len(p["context_before"]) <= 6 and set(p["context_before"][0]) == {"zh"} for p in later)
     # the second stretch reads the end of the first when both are in one chapter
-    parts = rd.chunks(conn, book.id)
     if parts[0][-1]["_href"] == parts[1][0]["_href"]:
-        assert seen[1]["context_before"][-1]["zh"] == parts[0][-1]["zh"]
+        assert second["context_before"][-1]["zh"] == parts[0][-1]["zh"]
     # resumed after the first stretch, the second still gets it
     tail = rd.tail(conn, book.id, parts[0][-1]["_at"])
     assert tail and tail[-1]["unit_id"] == parts[0][-1]["unit_id"]
