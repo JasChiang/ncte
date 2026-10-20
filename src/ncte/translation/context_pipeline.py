@@ -971,7 +971,8 @@ class ContextOrchestrator(Orchestrator):
 
     def stage_naming(self, *, record_job: bool = True) -> dict[str, int]:
         with self.lock:
-            payload = build_naming_payload(self.conn, self.book.id)
+            payload = build_naming_payload(self.conn, self.book.id,
+                                           definitions=self.cfg.context.term_definitions)
         if not payload["names"] and not payload["address"] and not payload.get("characters_to_check"):
             stats = {"names": 0, "address": 0, "pending": 0, "rejected": 0}
         else:

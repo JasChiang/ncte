@@ -64,3 +64,15 @@ def definitions_for(conn: sqlite3.Connection, book_id: str, text: str, upto: int
             best[r["source_term"]] = r  # later in story order wins
     return [{"ja": term, "zh": zh.get(term, ""), "definition": r["definition"]}
             for term, r in sorted(best.items(), key=lambda kv: t.find(kv[0]))]
+
+
+def definitions_shown(conn: sqlite3.Connection, book_id: str, upto: int) -> dict[str, str]:
+    """term → its definition shown by story position ``upto`` of this book (the latest one in story order), only the
+    ones the model or a person wrote: for a step that is given a list of terms rather than a text (naming)."""
+    hz = pos(conn, book_id, upto)
+    vols = volumes(conn)
+    out: dict[str, str] = {}
+    for r in all_definitions(conn, book_id):
+        if r["origin"] in ("model", "human") and (vols.get(r["book_id"], 1.0), int(r["revealed_ordinal"])) <= hz:
+            out[r["source_term"]] = r["definition"]
+    return out

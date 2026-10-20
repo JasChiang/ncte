@@ -110,6 +110,7 @@ def test_switched_off_nothing_is_asked_or_sent(conn, cfg, fixtures):
     run_book(conn, cfg, fixtures["basic"], client, mode="context")
     assert not _stage(client, "terms")
     assert all(_defs(p) is None for p in _stage(client, "translate"))
+    assert all("definition" not in n for p in _stage(client, "naming") for n in p["names"])
 
 
 def test_the_content_filter_halves_the_terms_request(conn, cfg, fixtures):
@@ -197,3 +198,47 @@ def test_the_prompts_say_what_the_definitions_are_for():
     for rule in ("外部知識", "不要劇透", "寫出差別", "不要回答"):
         assert rule in terms
     assert "「" not in terms  # principles only: no example taken from a book
+
+
+def test_naming_gets_the_definition_of_a_term_it_is_asked_to_render(conn, cfg, fixtures):
+    """Naming reads the whole book, so a definition is shown to it wherever its evidence is; only for the names that
+    are not people's, and only a definition the model or a person wrote."""
+    client = FakeLLM(responders={**RESPONDERS, "terms": _terms()})
+    run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    names = [n for p in _stage(client, "naming") for n in p["names"]]
+    item = next(n for n in names if n["ja"] == TERM)
+    assert item["definition"] == DEF
+    assert all("definition" not in n for n in names if n["category"] == "character")
+
+
+def test_naming_leaves_out_a_definition_of_another_origin_and_of_a_person_name(conn, cfg, fixtures):
+    from ncte.analysis.naming import build_naming_payload
+    from ncte.memory.db import Transaction
+    from ncte.memory.terms import set_definition
+
+    client = FakeLLM(responders={**RESPONDERS, "terms": _terms()})
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    conn.execute("DELETE FROM naming_proposals")
+    person = conn.execute("SELECT source_term FROM glossary WHERE book_id=? AND category='character' AND verified=0",
+                          (book.id,)).fetchone()
+    with Transaction(conn):
+        if person is not None:
+            set_definition(conn, book.id, person[0], "一個人的說明", origin="human")
+        conn.execute("UPDATE term_definitions SET origin='imported' WHERE source_term=?", (TERM,))
+    names = build_naming_payload(conn, book.id)["names"]
+    assert all("definition" not in n for n in names)
+    with Transaction(conn):
+        conn.execute("UPDATE term_definitions SET origin='human' WHERE source_term=?", (TERM,))
+    names = build_naming_payload(conn, book.id)["names"]
+    assert next(n for n in names if n["ja"] == TERM)["definition"] == DEF
+    assert all("definition" not in n for n in build_naming_payload(conn, book.id, definitions=False)["names"])
+
+
+def test_the_naming_prompt_says_what_a_definition_is_for():
+    from ncte.llm.prompt_loader import load_prompt
+
+    line = "`names[].definition`（可能不存在）：讀完全書後整理的這個術語的意思，用來決定譯名；不是要寫進譯名的內容。"
+    p = load_prompt("naming")
+    static, extra = p.render_parts({"names": [{"ja": "a", "definition": "c"}]})
+    assert line not in static and line in extra
+    assert line not in p.render({"names": [{"ja": "a"}]})

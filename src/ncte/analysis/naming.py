@@ -77,8 +77,9 @@ def char_names(conn: sqlite3.Connection, book_id: str) -> dict[str, str]:
             for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,))}
 
 
-def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, Any]:
-    """Names and address terms of this volume that have no decision yet, most used first."""
+def build_naming_payload(conn: sqlite3.Connection, book_id: str, *, definitions: bool = True) -> dict[str, Any]:
+    """Names and address terms of this volume that have no decision yet, most used first; with ``definitions``, a
+    name that is not a person's carries what the term means (ADR-069), as read through the whole book."""
     from ..memory.style import load_style, style_payload
 
     texts = _book_texts(conn, book_id)
@@ -107,6 +108,14 @@ def build_naming_payload(conn: sqlite3.Connection, book_id: str) -> dict[str, An
                       "samples": [_excerpt(t, term) for _, t in spread[:2]],
                       "_context": [{"at": o, "text": _excerpt(t, term, 70)} for o, t in spread]})
     names.sort(key=lambda n: -n["count"])
+    # what the book's terms mean, as read through the whole book (ADR-069): naming reads the whole book too
+    from ..memory.terms import definitions_shown
+
+    last = conn.execute("SELECT MAX(ordinal) FROM units WHERE book_id=?", (book_id,)).fetchone()[0] or 0
+    defs = definitions_shown(conn, book_id, last) if definitions else {}
+    for n in names:
+        if n["category"] != "character" and n["ja"] in defs:
+            n["definition"] = defs[n["ja"]]
 
     who = char_names(conn, book_id)
     done_a = _proposed(conn, "address")
