@@ -234,3 +234,17 @@ def test_proofreading_lists_the_readings_before_calling_a_meaning_error():
         assert word in meaning, word
     assert "列出的讀法" in _bullet(pr, "ambiguity")
     assert not any(w in meaning + _bullet(pr, "ambiguity") for w in BOOK_WORDS)  # the ruby example elsewhere is older
+
+
+def test_the_fix_check_weighs_before_and_after_against_the_readings_the_source_allows():
+    """ADR-070: with two or more readings, `reason` lists them; before and after in different readings that both hold
+    is issue_invalid (keep before), not a new error; both asserting more than the source is undecided with the
+    wording that asserts none of it; `new_error` is only what no allowed reading has."""
+    fc = load_prompt("fix_check").render({"items": []})
+    gist = fc.split("## 每一項回答\n", 1)[1].split("\n- `gist`", 1)[0]
+    method = gist.split("\n", 1)[1]  # the paragraph after the one on writing the gist
+    for word in ("兩種以上讀法", "`reason` 列出", "`issue_invalid`", "保留 `before`", "不要判成新錯", "多斷定",
+                 "`undecided`", "不帶這些斷定的寫法"):
+        assert word in method, word
+    assert "任何一種讀法都沒有" in _bullet(fc, "new_error")
+    assert not any(w in fc for w in BOOK_WORDS)
