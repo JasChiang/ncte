@@ -327,7 +327,7 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
             stats["group_members"] += 1
 
     for p in parsed.prop_states:
-        if p.name_ja not in "".join(clean(t) for t in text_of.values()):
+        if clean(p.name_ja) not in "".join(clean(t) for t in text_of.values()):
             rej(p.model_dump(), "prop not mentioned in scene")
             continue
         holder = p.holder_ref if p.holder_ref in chars else None

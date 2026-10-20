@@ -1051,3 +1051,8 @@ open workspace/eval/<timestamp>/report.html
 - `translation.compact_payload`；`memory.retrieval`（`clip`、`fact_excerpt`、`chosen_facts`、`COMPACT_EXAMPLES`）；`memory.address.context_items(compact=)`；`analysis.proofread.renderings/notes(compact=)`；場景台詞依段落順序。提示詞說明省略的預設值與節錄。
 - 測試：`tests/integration/test_compact_payload.py`（新）等。655 passed、4 skipped。
 
+## 讀音標記不再讓名字被退回（2026-10-21，分支 ruby-names-2026-10-21，自 f797294）
+- 模型照它看到的原文（漢字《かな》）引用新人物的名字時，程式比對前沒有去掉讀音，判定原文沒有這個名字而退回，連帶退回這個人的台詞、在場與性別（一個錯一次退四筆）。`analysis/scene` 的新人物名字、`analysis/memory_update` 的物品名稱改為去掉讀音後比對（引用句本來就有）。
+- 讀場景、記憶整理的提示詞：物品名稱寫原文的日文、照原文用字、不譯成中文（模型寫成「學校指定泳裝」而被退回）。
+- 測試：`tests/integration/test_ruby_names.py`（新）。656 passed、4 skipped。
+

@@ -412,7 +412,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         existing_alias = repo.alias_map(repo.characters(conn, book_id))
         reveals: list[tuple[str, str, str, Any, list[str]]] = []
         for nc in parsed.new_characters:
-            name = nc.name_ja.strip()
+            name = clean(nc.name_ja).strip()  # a name quoted with its reading (婆《ばあ》) is the text's 婆
             ev_ids = [u for u in nc.evidence_unit_ids if u in unit_text]
             if not name or len(name) > MAX_NAME_LEN or any(ch in name for ch in "「」『』") or name in PRONOUNS:
                 rej(nc.model_dump(), "invalid character name")
