@@ -146,3 +146,46 @@ RELATION = ("`relation`（可能不存在）：這段台詞的說話者與對象
 def test_the_proofreading_and_fix_check_prompts_say_what_the_relation_is_for():
     _line_only_with("proofread", "- `paragraphs[]." + RELATION[1:], "relation", ["a"])
     _line_only_with("fix_check", "- `items[]." + RELATION[1:], "relation", ["a"])
+
+
+def test_the_rule_check_gets_the_names_and_the_listener_its_rules_need(conn, cfg, fixtures):
+    """An added name is judged with the people's renderings around it; a 你 said to a woman with who the line is said
+    to and that person's gender as known there. Each rule gets only what it needs."""
+    from ncte.memory.db import Transaction
+
+    from ..helpers import orchestrator_for, start_run
+
+    client = FakeLLM(responders={**RESPONDERS, "scene_analyze": _said_to})
+    book, rid, opts = start_run(conn, cfg, fixtures["basic"], client, mode="context")
+    orch = orchestrator_for(conn, cfg, book, rid, opts, client)
+    orch.run()
+    unit = {n: conn.execute("SELECT id FROM units WHERE book_id=? AND plain_text LIKE ?", (book.id, f"%{n}%")).fetchone()[0]
+            for n in ("ありがとうございます", "本当だろうな", "朝の市場")}
+    mina = conn.execute("SELECT id FROM characters WHERE canonical_name='ミナ'").fetchone()[0]
+    with Transaction(conn):
+        conn.execute("INSERT OR REPLACE INTO character_gender(character_id, gender, book_id, ordinal, evidence_quote, "
+                     "origin, updated_at, certainty) VALUES (?,?,?,?,?,?,?,?)",
+                     (mina, "female", book.id, 0, "x", "llm", "2026-01-01T00:00:00Z", "inferred"))
+        for name, rule in (("ありがとうございます", "possible_added_name"), ("本当だろうな", "second_person_gender"),
+                           ("朝の市場", "offensive_term")):
+            conn.execute("INSERT INTO qa_findings(book_id, unit_id, run_id, type, severity, evidence, status, created_at) "
+                         "VALUES (?,?,?,?,?,?,?,?)", (book.id, unit[name], rid, rule, "high", "x", "open",
+                                                      "2026-01-01T00:00:00Z"))
+    orch.confirm_flags(list(unit.values()))
+    items = {i["rule"]: i for p in _stage(client, "confirm") for i in p["items"]}
+    added = items["possible_added_name"]
+    assert {g["ja"] for g in added["glossary"]} >= {"ミナ", "カイト"}
+    assert all(g["category"] == "character" for g in added["glossary"])
+    assert "to" not in added
+    you = items["second_person_gender"]
+    assert you["to"] == [{"name": "米娜", "gender": "female (inferred)"}] and "glossary" not in you
+    assert "glossary" not in items["offensive_term"] and "to" not in items["offensive_term"]
+
+
+def test_the_rule_check_prompt_says_what_each_rule_is_given():
+    from ncte.llm.prompt_loader import load_prompt
+
+    text = load_prompt("confirm").render({"items": []})
+    assert "補錯人或補了劇透才是問題；可參考附上的 `glossary`（這段與前後文出現的人名與譯名）。" in text
+    assert ("可能是對男性、或對多人說）；可參考附上的 `to`（讀的時候判斷的說話對象與性別，標（推測）或 `(inferred)` 的"
+            "不確定）。") in text

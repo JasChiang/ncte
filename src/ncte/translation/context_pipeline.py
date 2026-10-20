@@ -1097,7 +1097,8 @@ class ContextOrchestrator(Orchestrator):
         speaker or term: ``CONFIRM_MODEL_FLAGS``) are asked about the same way. One small request per scene with flags."""
         from ..analysis import reader
         from ..llm.schemas import ConfirmOutput
-        from .review import _speakers, _surroundings
+        from .context_builder import glossary_payload
+        from .review import _addressees, _speakers, _surroundings
 
         if not unit_ids:
             return {}
@@ -1119,6 +1120,15 @@ class ContextOrchestrator(Orchestrator):
                               "source": row["source_text"], "translation": tr["text"] if tr else "",
                               "speakers": _speakers(self.conn, row["id"]),
                               "around": _surroundings(self.conn, self.book.id, [row])})
+                # what the rule needs: the people's renderings around an added name; who a 你 is said to
+                if f["type"] == "possible_added_name":
+                    text = " ".join([row["plain_text"], *(a["source"] for a in items[-1]["around"])])
+                    if people := [g for g in glossary_payload(self.glossary, text, upto=(self.volume, row["ordinal"]),
+                                                              revealed=self.link_revealed)
+                                  if g["category"] == "character"]:
+                        items[-1]["glossary"] = people
+                elif f["type"] == "second_person_gender" and (to := _addressees(self.conn, row["id"])):
+                    items[-1]["to"] = to
             # as known at the earliest line checked: nothing revealed after it is shown
             cast = reader.characters(self.conn, self.book.id, min(self.conn.execute(
                 "SELECT ordinal FROM units WHERE id=?", (f["unit_id"],)).fetchone()[0] for f in found))

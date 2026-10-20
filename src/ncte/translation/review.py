@@ -213,6 +213,30 @@ def _speakers(conn: sqlite3.Connection, unit_id: str) -> list[str]:
                                   "quote_index", (unit_id,))]
 
 
+def _addressees(conn: sqlite3.Connection, unit_id: str) -> list[dict[str, str]]:
+    """Who the unit's lines are said to, with their gender, both as known at the unit (an inference marked so)."""
+    from ..memory.repository import character_basics
+    from ..memory.visibility import visible_names
+    from ..series import pos
+
+    unit = conn.execute("SELECT book_id, ordinal FROM units WHERE id=?", (unit_id,)).fetchone()
+    if unit is None:
+        return []
+    names = visible_names(conn, unit["book_id"], unit["ordinal"])
+    out: list[dict[str, str]] = []
+    for r in conn.execute("SELECT addressee_ids_json to_, addressee_status ts FROM utterances WHERE unit_id=? ORDER BY "
+                          "quote_index", (unit_id,)):
+        for x in json.loads(r["to_"] or "[]"):
+            if x not in names:
+                continue
+            item = {"name": names[x] + ("" if r["ts"] == "explicit" else "（推測）")}
+            if g := character_basics(conn, x, pos(conn, unit["book_id"], unit["ordinal"])).get("gender"):
+                item["gender"] = g
+            if item not in out:
+                out.append(item)
+    return out
+
+
 def _people(conn: sqlite3.Connection, unit_id: str) -> set[str]:
     """Who speaks a line of the unit and who it is said to."""
     out: set[str] = set()
