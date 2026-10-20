@@ -222,20 +222,25 @@ def _people(conn: sqlite3.Connection, unit_id: str) -> set[str]:
     return out
 
 
-def _lines(conn: sqlite3.Connection, unit_id: str) -> list[str]:
-    """Each line of the unit as read: 「speaker → listener」, an inference marked （推測）."""
+def _scene_names(conn: sqlite3.Connection, unit_id: str) -> dict[str, str]:
+    """People named as known at the end of the unit's scene, as the scene was translated (a name may come a line
+    after the quote)."""
     from ..memory.visibility import visible_names
 
+    unit = conn.execute("SELECT book_id, scene_id, ordinal FROM units WHERE id=?", (unit_id,)).fetchone()
+    end = conn.execute("SELECT MAX(ordinal) FROM units WHERE book_id=? AND scene_id=?",
+                       (unit["book_id"], unit["scene_id"])).fetchone()[0] if unit["scene_id"] else None
+    return visible_names(conn, unit["book_id"], end or unit["ordinal"])
+
+
+def _lines(conn: sqlite3.Connection, unit_id: str) -> list[str]:
+    """Each line of the unit as read: 「speaker → listener」, an inference marked （推測）."""
     rows = conn.execute("SELECT u.speaker_id_nullable sp, u.status, u.addressee_ids_json to_, u.addressee_status ts "
                         "FROM utterances u "
                         "WHERE u.unit_id=? ORDER BY u.quote_index", (unit_id,)).fetchall()
     if not rows:
         return []
-    unit = conn.execute("SELECT book_id, scene_id, ordinal FROM units WHERE id=?", (unit_id,)).fetchone()
-    # named as known at the end of the scene, as the scene was translated (a name may come a line after the quote)
-    end = conn.execute("SELECT MAX(ordinal) FROM units WHERE book_id=? AND scene_id=?",
-                       (unit["book_id"], unit["scene_id"])).fetchone()[0] if unit["scene_id"] else None
-    names = visible_names(conn, unit["book_id"], end or unit["ordinal"])
+    names = _scene_names(conn, unit_id)
     out = []
     for r in rows:
         who = names.get(r["sp"], "？") if r["sp"] else "？"
@@ -540,6 +545,7 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
     if not fixes:
         return out
     from ..analysis import proofread
+    from ..memory.repository import line_relations
     from ..memory.retrieval import unit_actions
 
     prompt = load_prompt("fix_check")
@@ -559,6 +565,9 @@ def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[s
                     item["program_flags"] = [{"rule": f.type, "evidence": f.evidence[:200]} for f in flags]
                 if lines := _lines(conn, r["id"]):  # 你／妳 and who-did-what issues need who speaks to whom
                     item["lines"] = lines
+                    # how those two are related as of this paragraph: 你／您, honorifics, how heavy a form is
+                    if rel := line_relations(conn, orch.book.id, r["id"], r["ordinal"], _scene_names(conn, r["id"])):
+                        item["relation"] = rel
                 if r["id"] in actions:  # who does what where the source leaves the subject out, as read
                     item["actions"] = actions[r["id"]]
                 items.append(item)

@@ -345,17 +345,41 @@ def impression_at(conn: sqlite3.Connection, character_id: str, upto: int | None)
     return out
 
 
-def pair_relations(conn: sqlite3.Connection, book_id: str, a: str, b: str, names: dict[str, str]) -> list[str]:
-    """How two people are related, as read (「席爾法德是艾恩的祖父」), for tasks that render how one addresses the other."""
+def pair_relations(conn: sqlite3.Connection, book_id: str, a: str, b: str, names: dict[str, str],
+                   at: int | None = None) -> list[str]:
+    """How two people are related, as read (「席爾法德是艾恩的祖父」), for tasks that render how one addresses the other.
+    ``at``: as of that paragraph (begun by then and not yet replaced); None: the relations in force now."""
     out = []
+    when = ("AND until_ordinal IS NULL", ()) if at is None else (
+        "AND since_ordinal<=? AND (until_ordinal IS NULL OR until_ordinal>?)", (at, at))
     for r in conn.execute("SELECT * FROM relations WHERE book_id=? AND ((a_id=? AND b_id=?) OR (a_id=? AND b_id=?)) "
-                          "AND until_ordinal IS NULL", (book_id, a, b, b, a)):
+                          f"{when[0]}", (book_id, a, b, b, a, *when[1])):
         for x, y, role in ((r["a_id"], r["b_id"], r["a_is"]), (r["b_id"], r["a_id"], r["b_is"])):
             if role:
                 out.append(f"{names.get(x, '?')}是{names.get(y, '?')}的{role}{relation_guess(r)}")
         if not (r["a_is"] or r["b_is"]):
             out.append(f"{names.get(r['a_id'], '?')}與{names.get(r['b_id'], '?')}：{r['relation_zh']}{relation_guess(r)}")
     return list(dict.fromkeys(out))[:4]
+
+
+LINE_PAIRS = 3  # pairs of speaker and listener per paragraph whose relation is given
+
+
+def line_relations(conn: sqlite3.Connection, book_id: str, unit_id: str, at: int, names: dict[str, str]) -> list[str]:
+    """How the speaker and the listener of each line of the paragraph are related as of ``at`` (at most
+    ``LINE_PAIRS`` pairs), named by ``names`` (a pair with someone not named there is left out): for a step judging
+    你／您, honorifics and forms of address. Only those two; nothing about anyone else in the scene."""
+    pairs: list[tuple[str, str]] = []
+    for u in conn.execute("SELECT speaker_id_nullable sp, addressee_ids_json to_ FROM utterances WHERE unit_id=? "
+                          "ORDER BY quote_index", (unit_id,)):
+        for x in json.loads(u["to_"] or "[]"):
+            if u["sp"] and x != u["sp"] and u["sp"] in names and x in names and \
+                    (u["sp"], x) not in pairs and (x, u["sp"]) not in pairs:
+                pairs.append((u["sp"], x))
+    out: list[str] = []
+    for a, b in pairs[:LINE_PAIRS]:
+        out += pair_relations(conn, book_id, a, b, names, at=at)
+    return list(dict.fromkeys(out))
 
 
 def _merge_address(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> None:

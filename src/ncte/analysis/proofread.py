@@ -18,7 +18,7 @@ import sqlite3
 from typing import Any
 
 from ..epub.units import PH_RE
-from ..memory.repository import character_basics
+from ..memory.repository import character_basics, line_relations
 from ..series import pos
 from ..translation.cache import latest_texts
 
@@ -93,6 +93,8 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
                             if x in names):
                 item["to"] = "、".join(to)
             item["_who"] = sorted(said.get(r["id"], set()) | set(told.get(r["id"], {})))
+            if rel := line_relations(conn, book_id, r["id"], r["ordinal"], names):  # these two, as of this paragraph
+                item["relation"] = rel
         cur.append(item)
     if cur:
         out.append(cur)

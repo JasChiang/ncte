@@ -5,7 +5,7 @@ keeps positions; it judges nothing."""
 from ncte.llm.fake import FakeLLM
 
 from ..helpers import run_book
-from ..scripted import RESPONDERS, uid
+from ..scripted import RESPONDERS, known, uid
 
 
 def _stage(client, stage):
@@ -93,3 +93,56 @@ FIX_CHECK_NAMES = ("- `glossary`、`address_terms`（可能不存在）：這些
 def test_the_fix_check_prompt_says_what_the_renderings_are_for():
     _line_only_with("fix_check", FIX_CHECK_NAMES, "glossary", [{"ja": "a", "zh": "b"}])
     _line_only_with("fix_check", FIX_CHECK_NAMES, "address_terms", [{"ja": "a"}])
+
+
+def _said_to(payload, req):
+    """The read pass as scripted, with who each of the scene-one lines is said to."""
+    out = RESPONDERS["scene_analyze"](payload, req)
+    mina, kaito = known(payload, "ミナ") or "new_1", known(payload, "カイト") or "new_2"
+    to = {"カイト、遅いですよ": kaito, "ありがとうございます": kaito, "本当だろうな": mina}
+    for u in out.get("utterances", []):
+        q = next((q["text"] for q in payload.get("quotes", []) if q["unit_id"] == u["unit_id"] and
+                  q["quote_index"] == u["quote_index"]), "")
+        for needle, who in to.items():
+            if needle in q:
+                u["to"], u["to_status"] = [who], "explicit"
+    return out
+
+
+def _partners(payload, req):
+    """海斗 and 米娜 are partners, shown by the fact of the key handed over (so from that paragraph on)."""
+    return {"relations": [{"a": p["a"], "b": p["b"], "relation": "搭檔", "a_is": "搭檔", "b_is": "搭檔",
+                           "facts": [p["facts"][0]["ref"]], "reason": "一起行動", "kind": "feeling",
+                           "certainty": "inferred"} for p in payload["pairs"] if p["facts"]]}
+
+
+def test_proofreading_and_the_fix_check_know_how_the_two_speaking_are_related(conn, cfg, fixtures):
+    """A line's speaker and listener, and only how those two are related as of that paragraph (named as the line's
+    speaker is): for judging 你／您, honorifics and how heavy a form of address is."""
+    proofs: list = []
+
+    def proofread(payload, req):
+        proofs.append(payload)
+        return _proofread_finds("ありがとうございます")(payload, req)
+
+    client = FakeLLM(responders={**RESPONDERS, "scene_analyze": _said_to, "relations": _partners,
+                                 "proofread": proofread})
+    cfg.context.reader_pass = False
+    run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    paras = [p for s in proofs for p in s["paragraphs"]]
+    thanks = next(p for p in paras if "ありがとうございます" in p["ja"])
+    assert thanks["to"] == "海斗" and set(thanks["relation"]) == {"米娜是海斗的搭檔（推測）", "海斗是米娜的搭檔（推測）"}
+    early = next(p for p in paras if "カイト、遅いですよ" in p["ja"])
+    assert early.get("to") == "海斗" and "relation" not in early  # the relation is shown from its evidence on
+    assert all("relation" not in p for p in paras if "to" not in p and "speaker" not in p)
+    item = next(i for c in _stage(client, "fix_check") for i in c["items"] if "ありがとうございます" in i["source"])
+    assert item["relation"] == thanks["relation"]
+
+
+RELATION = ("`relation`（可能不存在）：這段台詞的說話者與對象兩人，在這個位置已成立的關係（只有這兩人）。判斷敬語、你／您、"
+            "稱呼的輕重時參考；標（推測）的是從劇情推論的，不確定。")
+
+
+def test_the_proofreading_and_fix_check_prompts_say_what_the_relation_is_for():
+    _line_only_with("proofread", "- `paragraphs[]." + RELATION[1:], "relation", ["a"])
+    _line_only_with("fix_check", "- `items[]." + RELATION[1:], "relation", ["a"])
