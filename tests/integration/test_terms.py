@@ -201,7 +201,7 @@ def test_the_prompts_say_what_the_definitions_are_for():
         assert line not in static and line in extra, task  # only with the data, after the shared (cached) part
         assert line not in p.render({"units": []}), task
     terms = load_prompt("terms").render()
-    for rule in ("外部知識", "不要劇透", "寫出差別", "不要回答"):
+    for rule in ("外部知識", "不要爆雷", "寫出差別", "不要回答"):
         assert rule in terms
     assert "「" not in terms  # principles only: no example taken from a book
 

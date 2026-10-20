@@ -46,7 +46,7 @@ def test_the_reactions_around_a_line_are_a_rule_of_their_own():
     speaking being mocked moved out of rule 7 into it."""
     static, _ = load_prompt("translate").render_parts({"units": []})
     order, rules = static.index("## 判斷順序"), static.index("## 翻譯規則")
-    at = static.index("## 讓前後的反應成立")
+    at = static.index("## 讓前後文的反應接得上")
     assert order < at < rules
     section = static[at:rules]
     for word in ("反駁", "追問", "糾正", "評論", "吐槽", "模仿", "比較", "指的是誰", "說法", "不是補資訊"):
@@ -217,12 +217,13 @@ BOOK_WORDS = ("魔法", "魔術", "じゃなくて", "戦力外")
 
 
 def test_a_subordinate_part_stays_subordinate():
-    """ADR-070: a part that hangs on the main clause (contrast, modifier, condition, concession) is not turned into a
-    statement of its own: split off, it says something the source does not (who did what, what the state was)."""
+    """ADR-070: a part that hangs on the main clause (contrast, modifier, condition, concession) may be split off, as
+    Chinese often needs, but keeps its logic, focus and certainty: split off, it must not say something the source
+    does not (who did what, what the state was) nor turn a condition or concession into an unconditional fact."""
     static, _ = load_prompt("translate").render_parts({"units": []})
     rule = _rules(static)["5"]
-    for word in ("附屬", "對比", "修飾", "條件", "讓步", "獨立的斷言", "誰做了什麼", "當時是什麼狀態",
-                 "只說原文那個成分本身說的"):
+    for word in ("附屬", "對比", "修飾", "條件", "讓步", "拆句", "確定程度", "無條件成立", "誰做了什麼",
+                 "當時是什麼狀態", "只說原文那個成分本身說的"):
         assert word in rule, word
     assert not any(w in static for w in BOOK_WORDS)
 

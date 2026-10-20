@@ -186,6 +186,6 @@ def test_the_rule_check_prompt_says_what_each_rule_is_given():
     from ncte.llm.prompt_loader import load_prompt
 
     text = load_prompt("confirm").render({"items": []})
-    assert "補錯人或補了劇透才是問題；可參考附上的 `glossary`（這段與前後文出現的人名與譯名）。" in text
+    assert "補錯人或提前透露了劇情才是問題；可參考附上的 `glossary`（這段與前後文出現的人名與譯名）。" in text
     assert ("可能是對男性、或對多人說）；可參考附上的 `to`（讀的時候判斷的說話對象與性別，標（推測）或 `(inferred)` 的"
             "不確定）。") in text

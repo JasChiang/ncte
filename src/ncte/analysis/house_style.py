@@ -24,6 +24,7 @@ from ..memory.style import SeriesStyle, load_style, save_style
 from .impressions import main_characters
 
 LINES = 12  # spread through the book
+MAX_RULES = 10  # house rules kept; each main honorific type may take one (ADR-074)
 EXAMPLES = 8  # one line for each repeated ending, so a habit is seen whatever the spread picks
 _END = re.compile(r"[」』！？!?…―─。、　 ～ー\s]+$")
 
@@ -135,7 +136,7 @@ def apply(conn: sqlite3.Connection, book_id: str, parsed: HouseStyleOutput, refs
             continue
         line = f"「{h.habit_ja.strip()}」譯作「{h.render_zh.strip()}」" + (f"（{h.note.strip()}）" if h.note.strip() else "")
         voices[names[cid]] = (voices.get(names[cid], "") + "；" + line).lstrip("；")
-    new = SeriesStyle(honorifics=parsed.honorifics, honorifics_reason=parsed.honorifics_reason.strip()[:300], rules=[r.strip() for r in parsed.rules if r.strip()][:6],
+    new = SeriesStyle(honorifics=parsed.honorifics, honorifics_reason=parsed.honorifics_reason.strip()[:300], rules=[r.strip() for r in parsed.rules if r.strip()][:MAX_RULES],
                       voices=voices, notes=style.notes, auto=True)
     save_style(conn, book_id, new)
     return {"habits": len(parsed.habits), "rules": len(new.rules)}
