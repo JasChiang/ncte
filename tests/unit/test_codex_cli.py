@@ -28,6 +28,7 @@ rmcp_client                  under development  true
 def _no_model_cache(monkeypatch, tmp_path):
     """Never read the user's own Codex model cache: the built-in list unless a test writes one."""
     monkeypatch.setenv("NCTE_CODEX_MODELS_CACHE", str(tmp_path / "no-models-cache.json"))
+    monkeypatch.setenv("NCTE_CODEX_SESSIONS", str(tmp_path / "sessions"))  # never the user's own sessions
 
 
 TURN_USAGE = {"input_tokens": 10400, "cached_input_tokens": 0, "cache_write_input_tokens": 0, "output_tokens": 80,
@@ -115,7 +116,8 @@ def test_a_request_is_one_plain_codex_exec_with_the_steps_schema_model_and_effor
     r = c.complete(_req(extra={"reasoning": {"effort": "high"}}))
     a = codex.args[0]
     assert a[:2] == ["codex", "exec"] and a[-1] == "-"  # the prompt comes on stdin
-    for flag in ("--ephemeral", "--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--json"):
+    assert "--ephemeral" not in a  # the session file says how much of the plan is used (read, then removed)
+    for flag in ("--skip-git-repo-check", "--ignore-user-config", "--ignore-rules", "--json"):
         assert flag in a
     assert a[a.index("-s") + 1] == "read-only"
     assert a[a.index("-m") + 1] == "gpt-6.1-sol"  # the part after codex/
@@ -437,3 +439,57 @@ def test_the_settings_page_offers_codex_and_shows_no_bill_for_it():
     card = card[:card.index("</div>`;")]
     for said in ("找到 Codex", "找不到 Codex", "ChatGPT 訂閱", "不另外收費", "固定負擔"):
         assert said in card, said
+
+
+def _rollout(sessions: Path, thread: str, *limits: dict[str, Any] | None) -> Path:
+    """A session file as Codex writes it without --ephemeral: events, some carrying the plan's rate limits."""
+    day = sessions / "2026" / "10" / "20"
+    day.mkdir(parents=True, exist_ok=True)
+    path = day / f"rollout-2026-10-20T10-00-00-{thread}.jsonl"
+    lines = [{"type": "session_meta", "payload": {"id": thread}}]
+    for lim in limits:
+        lines.append({"type": "event_msg", "payload": {"type": "token_count", "info": None, "rate_limits": lim}})
+    path.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    return path
+
+
+def test_the_plans_usage_is_read_from_the_threads_session_file_which_is_then_removed(monkeypatch, tmp_path):
+    sessions = tmp_path / "sessions"
+    other = _rollout(sessions, "t-other", {"limit_id": "codex", "primary": {"used_percent": 99.0}})
+    early = {"limit_id": "codex", "primary": {"used_percent": 16.0, "window_minutes": 10080, "resets_at": 1}}
+    late = {"limit_id": "codex", "primary": {"used_percent": 17.0, "window_minutes": 10080, "resets_at": 1792000000},
+            "secondary": {"used_percent": 42.5, "window_minutes": 300, "resets_at": 1791000000}}
+    codex = Codex(Answer(), Answer())
+    real = codex.__call__
+
+    def run(args: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        out = real(args, **kw)
+        if args[1] == "exec" and len(codex.args) == 1:
+            _rollout(sessions, "t-1", early, None, late)
+        return out
+
+    monkeypatch.setattr(subprocess, "run", run)
+    c = CodexCLIClient()
+    r = c.complete(_req())
+    assert r.usage["plan"] == {"windows": {"weekly": {"used": 0.17, "resets_at": 1792000000},
+                                           "5h": {"used": 0.425, "resets_at": 1791000000}}, "source": "codex"}
+    assert not list(sessions.rglob("*t-1*")) and other.exists()  # only this thread's file is removed
+    r2 = c.complete(_req())  # no session file: nothing filled, the answer stands
+    assert "plan" not in r2.usage and r2.content == '{"translations": []}'
+
+
+def test_an_unreadable_session_file_leaves_the_plan_out(monkeypatch, tmp_path):
+    sessions = tmp_path / "sessions"
+    codex = Codex(Answer())
+    real = codex.__call__
+
+    def run(args: list[str], **kw: Any) -> subprocess.CompletedProcess[str]:
+        out = real(args, **kw)
+        if args[1] == "exec":
+            p = _rollout(sessions, "t-1")
+            p.write_text("not json\n{", encoding="utf-8")
+        return out
+
+    monkeypatch.setattr(subprocess, "run", run)
+    r = CodexCLIClient().complete(_req())
+    assert "plan" not in r.usage and r.content == '{"translations": []}'
