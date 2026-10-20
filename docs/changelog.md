@@ -956,3 +956,13 @@ open workspace/eval/<timestamp>/report.html
   - `translate`、`proofread`、`fix_check`、`review` 輸入（條件區塊）：「`term_definitions`：讀完全書後整理的術語意思（`ja` 原文、`zh` 譯名、`definition` 說明），用來理解原文裡這個詞指的是什麼；不是要寫進譯文的內容。」
 - 沒做：線上驗證（不跑額度）——定義品質、§1749 那類錯是否改善、名額放大後長場景的輸入增加多少、校稿兩輪的實際效果都沒有量；網頁編輯定義；讀者檢查與規則確認不帶定義；章節標題的翻譯不帶定義；不在譯名表裡的術語不會被定義。
 - 重現：`cd ../ncte-terms && source .venv/bin/activate && pytest && ruff check src tests && mypy src`，574 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。已讀過的書補術語：`ncte names terms 書.epub`；人工定義：`ncte glossary define 書.epub 詞 "意思"`；關閉：設定檔 `context: {term_definitions: false}`；校稿輪數：`context: {proofread_passes: 1}` 或 `ncte proofread 書.epub --passes 1`。
+
+
+## 附屬成分與先列讀法（2026-10-20，分支 terms-and-facts-2026-10-20，自 d736ff0；ADR-070）
+全部離線；沒有跑任何 `claude -p` 或 OpenRouter 請求。提示詞都在 v1 內改（`prompt_version` 的雜湊跟著變），只寫通則，沒有書裡的句子或詞。
+- 翻譯規則 5 子項：附屬於主幹的成分（對比、修飾、條件、讓步）不拆成獨立的斷言；需要拆句時拆出的部分只說那個成分本身說的。
+- 校稿 `meaning`／`ambiguity`、審稿 `mistranslation`：判意思之前先列出原文容許的讀法；譯文落在其中一種不算意思錯；每種讀法寫成中文都多斷定了什麼、譯文也寫了時歸 `addition`，建議寫不帶斷定的寫法；說明欄寫出讀法。
+- 修正驗收：讀法列在 `reason`；`before`／`after` 各在一種讀法 → `issue_invalid`；兩者都多斷定 → `undecided` 並寫不帶斷定的寫法；`new_error` 只寫任何讀法都沒有的錯。沒有加 schema 欄位。
+- 測試：`tests/unit/test_prompt_render.py` 四個新測試（每份提示詞的關鍵字句，且新文字不含書中的詞）。
+- 沒做：線上驗證（不跑額度）；翻譯不列讀法（成本，見 ADR-070）。
+- 重現：`cd ../ncte-terms && source .venv/bin/activate && pytest && ruff check src tests && mypy src`，578 passed、5 skipped。
