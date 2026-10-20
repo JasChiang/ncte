@@ -148,8 +148,8 @@ def default_fix_check(payload: dict[str, Any], req: Any) -> dict[str, Any]:
 
 
 def default_terms(payload: dict[str, Any], req: Any) -> dict[str, Any]:
-    """Defines nothing (a term without enough material may be left out)."""
-    return {"terms": []}
+    """Defines nothing (a term without enough material may be left out) and names no further term."""
+    return {"candidates": []} if payload.get("task") == "term_candidates" else {"terms": []}
 
 
 def default_scene_read(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:

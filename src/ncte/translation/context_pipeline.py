@@ -600,10 +600,24 @@ class ContextOrchestrator(Orchestrator):
             return {}
         if record_job:
             self._begin_job("terms")
+        named: list[str] = []
+        if self.cfg.context.term_candidates:  # ADR-073: terms the reading left out of the glossary
+            with self.lock:
+                ask = terms.candidate_request(self.conn, self.book.id)
+            if ask is not None:
+                try:
+                    got = self._llm("terms", load_prompt("terms_candidates"), ask[0], [])
+                    with self.lock:
+                        named = terms.take_candidates(self.conn, self.book.id, got, ask[1])
+                except FatalAPIError:
+                    raise
+                except LLMError as exc:  # the glossary's terms are still defined
+                    self._finding(None, "terms_failed", "low", f"naming missing terms: {str(exc)[:280]}")
         with self.lock:
-            groups = terms.requests(self.conn, self.book.id)
+            groups = terms.requests(self.conn, self.book.id, named)
         prompt = load_prompt("terms")
-        stats: dict[str, int] = {"asked": sum(len(lk["_terms"]) for _, lk in groups), "blocked": 0, "failed": 0}
+        stats: dict[str, int] = {"named": len(named), "asked": sum(len(lk["_terms"]) for _, lk in groups),
+                                 "blocked": 0, "failed": 0}
         results: list[tuple[TermsOutput, dict[str, Any]]] = []
         cut = False
         for req, lk in groups:

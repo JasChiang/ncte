@@ -19,7 +19,8 @@ from ..errors import ConfigError
 
 TASKS = ("translate", "scene_analyze", "memory_update", "scene_read", "naming", "review", "verify", "reader",
          "relations",
-         "confirm", "impressions", "proofread", "house_style", "fix_check", "scene_windows", "terms")
+         "confirm", "impressions", "proofread", "house_style", "fix_check", "scene_windows", "terms",
+         "terms_candidates")
 
 
 @dataclass(frozen=True)

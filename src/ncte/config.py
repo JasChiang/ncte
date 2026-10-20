@@ -135,6 +135,8 @@ class ContextConfig(_Strict):
     # that mention them); the definitions go with every request that translates or judges a passage where the term
     # occurs, from where their evidence is. Off: nothing is asked and no definition is sent
     term_definitions: bool = True
+    # ADR-073: before defining, the model names terms the reading left out of the glossary (from facts and summaries)
+    term_candidates: bool = True
     skip_book_matter: bool = True  # ADR-024: no story analysis for covers, TOC, afterword, colophon (still translated)
 
 

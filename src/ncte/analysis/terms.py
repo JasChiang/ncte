@@ -7,6 +7,12 @@ sentences that contain the term, spread over the book, and the facts whose predi
 contains it, each with where it is revealed. The model says what the term means here, citing those; the program
 checks that what it cites was given and shows the definition from the latest evidence it cites. Nothing here decides
 what a term means (ADR-059).
+
+A term the reading never put in the glossary would never be asked (ADR-073: a book read by another model had no entry
+for 魔術, and 魔法じゃなくて…魔術士 was misread by every model given no definition). So first the model is shown the
+facts and chapter summaries of the whole book and the terms already known, and names the book's own terms missing
+from them, citing what it saw them in; the program keeps a name only when it occurs in the book's text often enough
+and is not known yet, and those go through the same definition request as the glossary's.
 """
 
 from __future__ import annotations
@@ -27,6 +33,8 @@ MAX_TERMS = 60  # the most frequent
 EXAMPLES = 3  # example sentences per term, spread over the book
 FACTS = 5  # facts per term, spread over the book
 PER_REQUEST = 20  # terms per request
+MAX_FACTS = 400  # facts shown when naming missing terms (spread over the book)
+MAX_CANDIDATES = 20  # named terms kept
 SENTENCE_CHARS = 160
 _ENDS = "。！？!?"
 _IDS = re.compile(r"(?<![0-9A-Za-z_])c_[0-9a-f]{12}(?![0-9a-f])")
@@ -57,13 +65,75 @@ def sentence(text: str, term: str) -> str:
     return text[start:end].strip(" 　")
 
 
-def candidates(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
-    """The glossary's terms (``CATEGORIES``) that occur at least MIN_COUNT times in this book's text, most frequent
-    first (at most MAX_TERMS), each with its example sentences and the facts that mention it. Terms a person has
-    defined are left out. String matching only."""
-    paras = [(r[0], match_text(r[1])) for r in conn.execute(
+def _paras(conn: sqlite3.Connection, book_id: str) -> list[tuple[int, str]]:
+    return [(r[0], match_text(r[1])) for r in conn.execute(
         "SELECT ordinal, plain_text FROM units WHERE book_id=? AND kind IN ('text','heading') AND spine_index IS NOT NULL "
         "ORDER BY ordinal", (book_id,))]
+
+
+def _names(conn: sqlite3.Connection, book_id: str) -> dict[str, str]:
+    return {r[0]: r[1] or r[2] for r in conn.execute(
+        f"SELECT id, display_name_zh, canonical_name FROM characters WHERE {SERIES_SCOPE}", (book_id,))}
+
+
+def known_terms(conn: sqlite3.Connection, book_id: str) -> set[str]:
+    """Every source term of the glossary (people's names too), and terms a person has defined."""
+    return {(r[0] or "").strip() for r in conn.execute(f"SELECT source_term FROM glossary WHERE {SERIES_SCOPE}", (book_id,))
+            } | human_terms(conn, book_id)
+
+
+def candidate_request(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """(payload, lookup) asking which of the book's own terms are missing from ``known``: the facts (at most
+    MAX_FACTS, spread) and the chapter summaries of the whole book, each with a code (``f``, ``m``). None when the
+    reading left neither."""
+    names = _names(conn, book_id)
+
+    def nm(text: str | None) -> str:
+        return _IDS.sub(lambda m: names.get(m.group(0), m.group(0)), text or "")
+
+    facts = conn.execute("SELECT * FROM facts WHERE book_id=? AND retracted_by IS NULL ORDER BY first_revealed_ordinal, "
+                         "id", (book_id,)).fetchall()
+    rows, ev = [], {}
+    for k, f in enumerate(_spread(list(facts), MAX_FACTS), 1):
+        ev[f"f{k}"] = int(f["first_revealed_ordinal"])
+        rows.append({"ref": f"f{k}", "at": int(f["first_revealed_ordinal"]),
+                     "text": f"{nm(names.get(f['subject'], f['subject']))}：{nm(f['predicate'])} {nm(f['object'])}".strip(),
+                     "source": match_text(f["evidence_quote"] or "")[:120]})
+    sums = []
+    for k, r in enumerate(conn.execute(
+            "SELECT summary, horizon_ordinal FROM chapter_summaries c WHERE book_id=? AND version=(SELECT MAX(version) "
+            "FROM chapter_summaries d WHERE d.book_id=c.book_id AND d.chapter_ref=c.chapter_ref) ORDER BY horizon_ordinal",
+            (book_id,)), 1):
+        ev[f"m{k}"] = int(r[1] or 0)
+        sums.append({"ref": f"m{k}", "at": int(r[1] or 0), "text": nm(r[0])})
+    if not rows and not sums:
+        return None
+    known = sorted(t for t in known_terms(conn, book_id) if t)
+    return ({"task": "term_candidates", "known": known, "facts": rows, "summaries": sums}, {"_ev": ev})
+
+
+def take_candidates(conn: sqlite3.Connection, book_id: str, parsed: Any, lookup: dict[str, Any]) -> list[str]:
+    """The named terms the program keeps: cited codes that were given (at least one), not known yet, and occurring at
+    least MIN_COUNT times in the book's text (string matching only; whether it is a term is the model's word)."""
+    whole = "\n".join(t for _, t in _paras(conn, book_id))
+    known = known_terms(conn, book_id)
+    out: list[str] = []
+    for c in parsed.candidates:
+        term = match_text(c.ja or "").strip(" 　「」『』")
+        cited = [x.strip() for x in c.evidence]
+        if (len(term) < 2 or term in known or term in out or not cited or any(x not in lookup["_ev"] for x in cited)
+                or whole.count(term) < MIN_COUNT):
+            continue
+        out.append(term)
+    return out[:MAX_CANDIDATES]
+
+
+def candidates(conn: sqlite3.Connection, book_id: str, extra: list[str] | None = None) -> list[dict[str, Any]]:
+    """The glossary's terms (``CATEGORIES``) that occur at least MIN_COUNT times in this book's text, most frequent
+    first (at most MAX_TERMS), and the ``extra`` terms the model named (``take_candidates``; no rendering yet), each
+    with its example sentences and the facts that mention it. Terms a person has defined are left out. String
+    matching only."""
+    paras = _paras(conn, book_id)
     whole = "\n".join(t for _, t in paras)
     skip = human_terms(conn, book_id)
     seen: dict[str, dict[str, Any]] = {}
@@ -77,8 +147,10 @@ def candidates(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
         if n >= MIN_COUNT:
             seen[term] = {"ja": term, "zh": g["target_term"], "category": g["category"], "count": n}
     chosen = sorted(seen.values(), key=lambda c: -c["count"])[:MAX_TERMS]
-    names = {r[0]: r[1] or r[2] for r in conn.execute(
-        f"SELECT id, display_name_zh, canonical_name FROM characters WHERE {SERIES_SCOPE}", (book_id,))}
+    for term in extra or []:
+        if term not in seen and term not in skip and (n := whole.count(term)) >= MIN_COUNT:
+            chosen.append({"ja": term, "zh": "", "category": "term", "count": n})
+    names = _names(conn, book_id)
 
     def nm(text: str | None) -> str:
         return _IDS.sub(lambda m: names.get(m.group(0), m.group(0)), text or "")
@@ -98,11 +170,12 @@ def candidates(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
     return chosen
 
 
-def requests(conn: sqlite3.Connection, book_id: str) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+def requests(conn: sqlite3.Connection, book_id: str,
+             extra: list[str] | None = None) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """(payload, lookup) per PER_REQUEST terms. Codes are unique over the whole step: ``t`` a term, ``s`` an example
     sentence, ``f`` a fact; the lookup maps each back to its term or to where its evidence is."""
     out = []
-    chosen = candidates(conn, book_id)
+    chosen = candidates(conn, book_id, extra)
     n_ev = 0
     for i in range(0, len(chosen), PER_REQUEST):
         items, terms, ev = [], {}, {}

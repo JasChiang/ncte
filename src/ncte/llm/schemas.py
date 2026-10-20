@@ -319,6 +319,17 @@ class TermsOutput(_M):
     terms: list[TermDefinitionOut]
 
 
+class TermCandidateOut(_M):
+    ja: str
+    evidence: list[str]
+    why: str = ""
+
+
+# ADR-073: the terms the reading did not put in the glossary, named by the model from the facts and summaries
+class TermCandidatesOutput(_M):
+    candidates: list[TermCandidateOut]
+
+
 # ------------------------------------------------------------------ review
 IssueType = Literal["mistranslation", "omission", "addition", "speaker_error", "name_inconsistency",
                     "subject_object_error", "spoiler", "placeholder", "tone", "voice", "style", "other"]
@@ -493,6 +504,8 @@ def output_model(stage: str, payload: Any = None) -> type[BaseModel] | None:
     base = stage.split(":")[0]
     if base == "translate" and isinstance(payload, dict) and payload.get("read_through") is True:
         return TranslationReadThroughOutput
+    if base == "terms" and isinstance(payload, dict) and payload.get("task") == "term_candidates":
+        return TermCandidatesOutput
     return SCHEMAS.get(base)
 
 

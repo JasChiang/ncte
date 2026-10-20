@@ -17,8 +17,10 @@ def _stage(client, stage):
     return [p for c, p in zip(client.calls, client.payloads, strict=True) if c.stage.split(":")[0] == stage]
 
 
-def _terms(evidence=None):
+def _terms(evidence=None, named=None):
     def answer(payload, req):
+        if payload.get("task") == "term_candidates":  # ADR-073: the terms missing from the glossary
+            return {"candidates": named(payload) if named else []}
         out = []
         for t in payload["terms"]:
             if t["ja"] != TERM:
@@ -43,10 +45,14 @@ def _defs(payload):
     return payload.get("term_definitions")
 
 
+def _defining(client):
+    return [p for p in _stage(client, "terms") if p.get("task") == "terms"]
+
+
 def test_the_terms_request_carries_examples_and_facts_found_by_the_word(conn, cfg, fixtures):
     client = FakeLLM(responders={**RESPONDERS, "terms": _terms()})
     run_book(conn, cfg, fixtures["basic"], client, mode="context")
-    asked = _stage(client, "terms")
+    asked = _defining(client)
     assert len(asked) == 1
     item = next(t for t in asked[0]["terms"] if t["ja"] == TERM)
     assert item["zh"] == "銀之鑰" and item["count"] >= 2
@@ -98,7 +104,7 @@ def test_a_definition_a_person_wrote_is_kept(conn, cfg, fixtures):
     orchestrator_for(conn, cfg, book, rid, opts, client).run()
     row = conn.execute("SELECT * FROM term_definitions WHERE book_id=? AND source_term=?", (book.id, TERM)).fetchone()
     assert row["definition"] == "人工寫的定義" and row["origin"] == "human"
-    assert all(t["ja"] != TERM for p in _stage(client, "terms") for t in p["terms"])  # not asked again
+    assert all(t["ja"] != TERM for p in _defining(client) for t in p["terms"])  # not asked again
     hit = [p for p in _stage(client, "translate") if any(TERM in u["source"] for u in p["units"])
            and "known_headings" not in p]  # chapter titles and the TOC are translated without the story's memory
     assert hit and all(_defs(p) == [{"ja": TERM, "zh": "銀之鑰", "definition": "人工寫的定義"}] for p in hit)
@@ -122,7 +128,7 @@ def test_the_content_filter_halves_the_terms_request(conn, cfg, fixtures):
     answer = _terms()
 
     def picky(payload, req):
-        if any(t["ja"] == "フード" for t in payload["terms"]):
+        if any(t["ja"] == "フード" for t in payload.get("terms", [])):
             raise ContentBlockedError("HTTP 403 content filter: fake")
         return answer(payload, req)
 
@@ -242,3 +248,37 @@ def test_the_naming_prompt_says_what_a_definition_is_for():
     static, extra = p.render_parts({"names": [{"ja": "a", "definition": "c"}]})
     assert line not in static and line in extra
     assert line not in p.render({"names": [{"ja": "a"}]})
+
+
+def test_terms_the_reading_left_out_of_the_glossary_are_named_by_the_model_and_defined(conn, cfg, fixtures):
+    """ADR-073: the model sees the whole book's facts and chapter summaries and the known terms, and names the book's
+    own terms missing from them. The program keeps a name that cites what it was given, is not known yet and occurs
+    at least twice in the text; those are defined like the glossary's (no rendering yet)."""
+    def named(payload):
+        f = payload["facts"][0]["ref"]
+        return [{"ja": "フード", "evidence": [f], "why": "x"},  # 3 times in the book, not in the glossary: kept
+                {"ja": "宝物庫", "evidence": [f], "why": "x"},  # once: dropped
+                {"ja": "銀の鍵", "evidence": [f], "why": "x"},  # already known: dropped
+                {"ja": "鍵の色", "evidence": ["f999"], "why": "x"}]  # cites what it was not given: dropped
+    client = FakeLLM(responders={**RESPONDERS, "terms": _terms(named=named)})
+    run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    ask = [p for p in _stage(client, "terms") if p.get("task") == "term_candidates"]
+    assert len(ask) == 1
+    assert "銀の鍵" in ask[0]["known"] and "カイト" in ask[0]["known"]  # people's names count as known
+    assert ask[0]["facts"] and all({"ref", "at", "text", "source"} <= set(f) for f in ask[0]["facts"])
+    assert ask[0]["summaries"] and all(m["ref"].startswith("m") for m in ask[0]["summaries"])
+    asked = [t for p in _defining(client) for t in p["terms"]]
+    hood = next(t for t in asked if t["ja"] == "フード")
+    assert hood["zh"] == "" and hood["count"] == 3 and hood["examples"]
+    assert not any(t["ja"] in ("宝物庫", "鍵の色") for t in asked)
+    assert sum(t["ja"] == "銀の鍵" for t in asked) == 1  # the glossary's own entry, not a second one
+    job = conn.execute("SELECT checkpoint_json FROM jobs WHERE stage='terms'").fetchone()
+    assert '"named": 1' in job["checkpoint_json"]
+
+
+def test_with_term_candidates_off_only_the_glossary_is_asked(conn, cfg, fixtures):
+    cfg.context.term_candidates = False
+    client = FakeLLM(responders={**RESPONDERS, "terms": _terms()})
+    run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    assert not [p for p in _stage(client, "terms") if p.get("task") == "term_candidates"]
+    assert len(_defining(client)) == 1

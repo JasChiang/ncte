@@ -954,7 +954,7 @@ open workspace/eval/<timestamp>/report.html
 - 提示詞新增的句子：
   - `memory_update`、`scene_read` 規則 1：「`evidence_quote` 要選原文中直接寫出這筆事實的那一句，包含事實的主體與關鍵詞，不要選只是在同一段開頭、沒有寫出這件事的句子。」
   - `translate`、`proofread`、`fix_check`、`review` 輸入（條件區塊）：「`term_definitions`：讀完全書後整理的術語意思（`ja` 原文、`zh` 譯名、`definition` 說明），用來理解原文裡這個詞指的是什麼；不是要寫進譯文的內容。」
-- 沒做：線上驗證（不跑額度）——定義品質、§1749 那類錯是否改善、名額放大後長場景的輸入增加多少、校稿兩輪的實際效果都沒有量；網頁編輯定義；讀者檢查與規則確認不帶定義；章節標題的翻譯不帶定義；不在譯名表裡的術語不會被定義。
+- 沒做：線上驗證（不跑額度）——定義品質、§1749 那類錯是否改善、名額放大後長場景的輸入增加多少、校稿兩輪的實際效果都沒有量；網頁編輯定義；讀者檢查與規則確認不帶定義；章節標題的翻譯不帶定義；不在譯名表裡的術語不會被定義（ADR-073 補上：模型從事實與摘要補漏）。
 - 重現：`cd ../ncte-terms && source .venv/bin/activate && pytest && ruff check src tests && mypy src`，574 passed、5 skipped（mcp 套件未裝 1、EPUBCheck 未裝 3、範例書角色印象只有 1 個請求 1）。已讀過的書補術語：`ncte names terms 書.epub`；人工定義：`ncte glossary define 書.epub 詞 "意思"`；關閉：設定檔 `context: {term_definitions: false}`；校稿輪數：`context: {proofread_passes: 1}` 或 `ncte proofread 書.epub --passes 1`。
 
 
@@ -1014,3 +1014,10 @@ open workspace/eval/<timestamp>/report.html
 - `reports/cost_report.plan_usage`：每個來源的 token 與每個時間窗用掉的比例（中途重置從 0 重新累加）；`ncte report` 印一行、網頁書籍總覽多一張「用掉的方案額度」卡（大字是最長時間窗的百分比）。
 - 實測（範例書，41 段）：Codex 修正後 34 個請求全部一次成功、約 7 分鐘（修正前約 1.5 小時），譯文無亂碼，每週額度 2% → 3%；Claude 方案同一本 28 個請求、約 3.5 分鐘，5 小時額度 +1%、每週 +0%（讀數只到 1%）。
 - 測試：`tests/unit/test_codex_cli.py`（schema 在 instructions、skills 說明關閉、失敗嘗試的 token）、`tests/unit/test_claude_cli.py`（stream-json 的額度、空目錄）、`tests/unit/test_plan_usage.py`（重置、亂序、失敗嘗試）。622 passed、5 skipped。
+
+## 術語補漏（2026-10-20，分支 terms-nominate-2026-10-20，自 c842f6b；ADR-073）
+- `analysis/terms`：`candidate_request`（全書事實最多 400 筆、各章摘要、已知的詞）、`take_candidates`（引用的代碼給過、不在已知裡、正文出現 2 次以上，最多 20 個）、`candidates(extra=…)`（補上的詞 `zh` 空）；`context_pipeline.terms_pass` 先問補漏再定義，統計多 `named`。新提示詞 `prompts/terms_candidates/v1.md`；`terms` 提示詞註明 `zh` 可能是空的。Schema `TermCandidatesOutput`（`output_model` 依 payload 的 `task` 選）。設定 `context.term_candidates`（預設開）。
+- 抽查（Claude、Codex、Gemini 三個模型，四本書 733 段＋奇幻愛情 186 段；數字見 ADR-073）：三個模型都補上「魔術」，§1749 重翻都對；盲評大錯／小錯 舊 Gemini 4／28、Gemini 2／33、Claude 0／9、Codex 0／5。
+- 測試：`tests/integration/test_terms.py`（補漏請求的內容、程式收與不收、補上的詞走定義、關掉時不問；既有測試改成只看定義請求）。625 passed、4 skipped。
+- 沒做：整本實測；網頁顯示「這個詞是補上的」。
+
