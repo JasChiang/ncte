@@ -300,7 +300,7 @@ class CodexCLIClient:
             schema = None
             if req.json_schema:
                 schema = base / "schema.json"
-                schema.write_text(json.dumps(req.json_schema, ensure_ascii=False), encoding="utf-8")
+                schema.write_text(json.dumps(to_openai_strict(req.json_schema), ensure_ascii=False), encoding="utf-8")
             answer = base / "last_message.txt"
             while True:
                 attempt += 1
@@ -324,6 +324,8 @@ class CodexCLIClient:
                 if failed and (proc.returncode == USAGE_ERROR_EXIT or any(s in stderr.lower() for s in BAD_COMMAND)):
                     raise FatalAPIError(f"Codex rejected the command (exit {proc.returncode}): {stderr[:300]}")
                 said = "\n".join([*errors, stderr]).strip()
+                if failed and "invalid schema" in said.lower():  # the same on every try
+                    raise FatalAPIError(f"Codex refused the step's JSON schema: {said[:300]}")
                 if failed and any(s in said.lower() for s in NOT_LOGGED_IN):  # never in a successful answer
                     raise FatalAPIError(f"Codex is not logged in (run `codex login`): {said[:300]}")
                 if failed:
@@ -336,6 +338,11 @@ class CodexCLIClient:
                     result = ""
                 if not result.strip():
                     raise ModelOutputError("empty answer")
+                if req.json_schema:  # the nulls written only because the strict form made every field required
+                    try:
+                        result = json.dumps(from_openai_answer(json.loads(result), req.json_schema), ensure_ascii=False)
+                    except ValueError:
+                        pass  # not JSON: NCTE's own parsing reports it
                 u = usage_in or {}
                 usage: dict[str, Any] = {
                     "prompt_tokens": int(u.get("input_tokens") or 0),
@@ -349,6 +356,54 @@ class CodexCLIClient:
                 return LLMResponse(content=result.strip(), model=req.model, provider="codex", generation_id=thread,
                                    usage=usage, cost_usd=0.0, latency_ms=int((time.monotonic() - start) * 1000),
                                    finish_reason="stop", attempts=attempt, structured_mode=req.structured_mode)
+
+
+def to_openai_strict(schema: dict[str, Any]) -> dict[str, Any]:
+    """The schema as OpenAI's strict structured output takes it: every property of an object is required (a real run
+    was refused otherwise). A property NCTE lets the model leave out becomes required but nullable; its null is dropped
+    again by ``from_openai_answer`` before NCTE validates the answer as strictly as ever."""
+    import copy
+
+    def nullable(node: dict[str, Any]) -> dict[str, Any]:
+        t = node.get("type")
+        if isinstance(t, str):
+            return {**node, "type": [t, "null"]} if t != "null" else node
+        if isinstance(t, list):
+            return node if "null" in t else {**node, "type": [*t, "null"]}
+        return {"anyOf": [node, {"type": "null"}]}
+
+    def fix(node: Any) -> Any:
+        if isinstance(node, dict):
+            out = {k: fix(v) for k, v in node.items()}
+            props = out.get("properties")
+            if out.get("type") == "object" and isinstance(props, dict):
+                given = set(node.get("required", []))
+                out["properties"] = {k: (v if k in given else nullable(v)) for k, v in props.items()}
+                out["required"] = list(props)
+            return out
+        if isinstance(node, list):
+            return [fix(x) for x in node]
+        return node
+
+    return fix(copy.deepcopy(schema))
+
+
+def from_openai_answer(data: Any, schema: dict[str, Any]) -> Any:
+    """Drop the nulls Codex wrote for properties NCTE's schema leaves optional (``to_openai_strict``); a property
+    that is required in NCTE's schema keeps its null (it may mean "nobody")."""
+    if isinstance(data, dict) and isinstance(schema, dict):
+        props = schema.get("properties") or {}
+        req = set(schema.get("required", []))
+        return {k: from_openai_answer(v, props.get(k, {})) for k, v in data.items()
+                if not (v is None and k in props and k not in req)}
+    if isinstance(data, list) and isinstance(schema, dict):
+        item = schema.get("items", {})
+        return [from_openai_answer(v, item) for v in data]
+    if isinstance(schema, dict) and "anyOf" in schema and isinstance(data, (dict, list)):
+        for alt in schema["anyOf"]:
+            if isinstance(alt, dict) and alt.get("type") in ("object", "array"):
+                return from_openai_answer(data, alt)
+    return data
 
 
 def found() -> str | None:

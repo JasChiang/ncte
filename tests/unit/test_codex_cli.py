@@ -493,3 +493,52 @@ def test_an_unreadable_session_file_leaves_the_plan_out(monkeypatch, tmp_path):
     monkeypatch.setattr(subprocess, "run", run)
     r = CodexCLIClient().complete(_req())
     assert "plan" not in r.usage and r.content == '{"translations": []}'
+
+
+def test_schemas_are_sent_in_openai_strict_form_and_the_nulls_of_optional_fields_are_dropped():
+    """OpenAI's strict structured output wants every property required (real run, 2026-10-20: "'required' is required
+    to include every key in properties"). An optional field is sent as required-but-nullable, and a null the model
+    gives for it is dropped before NCTE's own validation, which stays as strict as before. A field that may itself be
+    null (a speaker nobody can name) keeps its null."""
+    from ncte.llm.codex_cli import from_openai_answer, to_openai_strict
+    from ncte.llm.schemas import SceneWindowsOutput, strict_json_schema
+
+    ours = strict_json_schema(SceneWindowsOutput)
+    sent = to_openai_strict(ours)
+
+    def check(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object" and "properties" in node:
+                assert set(node["required"]) == set(node["properties"])
+            for v in node.values():
+                check(v)
+        elif isinstance(node, list):
+            for v in node:
+                check(v)
+    check(sent)
+    item = ours["properties"]["breaks"]["items"]
+    optional = [k for k in item["properties"] if k not in item["required"]]
+    assert optional  # the case that was rejected
+    answer = {"first_kind": "present", "breaks": [{**{k: None for k in optional},
+              **{k: ("x" if k == "unit_id" else "present" if k == "kind" else True) for k in item["required"]}}]}
+    back = from_openai_answer(answer, ours)
+    assert all(k not in back["breaks"][0] for k in optional)
+    SceneWindowsOutput.model_validate(back)
+    assert from_openai_answer({"a": None}, {"type": "object", "properties": {"a": {"type": ["string", "null"]}},
+                                            "required": ["a"]}) == {"a": None}
+
+
+def test_a_schema_codex_rejects_stops_at_once(monkeypatch, tmp_path):
+    bad = {"type": "error", "error": {"message": "Invalid schema for response_format 'codex_output_schema': x"}}
+    calls = []
+
+    def run(args, **kw):
+        if "features" in args:
+            return subprocess.CompletedProcess(args, 0, "", "")
+        calls.append(args)
+        return subprocess.CompletedProcess(args, 1, json.dumps(bad) + "\n", "")
+    monkeypatch.setattr(subprocess, "run", run)
+    c = CodexCLIClient(waits=(1, 1), sleep=lambda s: None, sessions=tmp_path)
+    with pytest.raises(FatalAPIError, match="schema"):
+        c.complete(_req())
+    assert len(calls) == 1
