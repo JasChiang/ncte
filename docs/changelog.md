@@ -966,3 +966,22 @@ open workspace/eval/<timestamp>/report.html
 - 測試：`tests/unit/test_prompt_render.py` 四個新測試（每份提示詞的關鍵字句，且新文字不含書中的詞）。
 - 沒做：線上驗證（不跑額度）；翻譯不列讀法（成本，見 ADR-070）。
 - 重現：`cd ../ncte-terms && source .venv/bin/activate && pytest && ruff check src tests && mypy src`，578 passed、5 skipped。
+
+
+## 判錯步驟的第二批資料接線（2026-10-20，分支 docs-architecture-2026-10-20，自 28ca886；ADR-067 補充）
+全部離線；沒有跑任何 `claude -p` 或 OpenRouter 請求。提示詞都在 v1 內改，只加輸入說明（通則，沒有書裡的例子）。依 `docs/architecture.md`〈資料流向表〉的缺口接：
+- 1 定名拿到術語定義：`build_naming_payload` 對不是人名、有定義（model／human）的 `names` 附 `definition`（`memory/terms.definitions_shown`，取到全書）；`context.term_definitions` 關閉時不附。測試 `tests/integration/test_terms.py`（三個新測試：定名請求帶定義、人名與其他來源的定義不帶、開關；提示詞那行只在有資料時出現）。
+- 2 審稿拿到記憶：審稿 payload 帶同一份場景 context 的 `memory`（上一章回顧、本章最近摘要、事實、物品；全空不送）；`scene.uncertainties` 原本就有。測試 `tests/integration/test_judging_context.py`：和翻譯同一場的 `memory` 相同、疑問帶到、第一場不送。
+- 3 修正檢查拿到譯名與稱呼：`proofread.renderings`（從 `notes` 抽出，校稿照用）給修正檢查每批的 `glossary`、`address_terms`。測試：帶到「銀の鍵」與米娜叫海斗的「カイト」；在本段才第一次用的稱呼不給。
+- 4 說話兩人的關係：`repository.line_relations`（每段最多 3 對，`pair_relations` 加 `at`：該段已開始、未被取代）；校稿每段、修正檢查每項的 `relation`。測試：關係從證據那段起才出現，之前的台詞沒有；修正檢查和校稿同一段相同。
+- 5 規則確認：`possible_added_name` 附本段與前後文的人名 `glossary`，`second_person_gender` 附對象與性別 `to`（`review._addressees`），其他規則不附。測試：三條規則各拿到該拿的、沒有多的。
+- 文件：`docs/architecture.md` 總表、資料流向表、缺口、可見範圍、名額表；ADR-067 補充（含刻意不接的兩項）；README 那句例子改成仍然成立的。
+- 提示詞新增的句子：
+  - `naming`（條件區塊 `definition`）：「`names[].definition`（可能不存在）：讀完全書後整理的這個術語的意思，用來決定譯名；不是要寫進譯名的內容。」
+  - `review`（條件區塊 `memory`）：「`memory`（可能不存在）：這一場開始以前已揭露的劇情記憶：`previous_chapter_summary`（上一章回顧）、`this_chapter_so_far`（本章前面的摘要）、`facts`（挑出來和這一場相關的事實，`source` 是它的原文依據）、`props`（物品與持有者）。標示 `inferred` 或 `unknown` 的**不是確定事實**。事實與摘要只用來理解人物與前情，**不可改變本句原文的意思、對象或方向**（本句怎麼說，以本句原文為準）；譯文沒有寫出這些背景不是錯。」
+  - `fix_check`（條件區塊 `glossary|address_terms`）：「`glossary`、`address_terms`（可能不存在）：這些段落原文裡已定的譯名（`ja` → `zh`），以及說話者對某人慣用的稱呼與既有譯法（`usage: mention` 是談到、不是當面叫）。用來判斷 `after` 的名字與稱呼是否照既有譯法；稱呼本身在原文改變時不算錯，第二人稱與敬稱的語氣隨場合、情緒調整也不算錯。」
+  - `proofread`／`fix_check`（條件區塊 `relation`）：「`paragraphs[].relation`／`items[].relation`（可能不存在）：這段台詞的說話者與對象兩人，在這個位置已成立的關係（只有這兩人）。判斷敬語、你／您、稱呼的輕重時參考；標（推測）的是從劇情推論的，不確定。」
+  - `confirm`：`possible_added_name` 補「可參考附上的 `glossary`（這段與前後文出現的人名與譯名）」；`second_person_gender` 補「可參考附上的 `to`（讀的時候判斷的說話對象與性別，標（推測）或 `(inferred)` 的不確定）」。
+- 請求大小（範例書 basic、FakeLLM、context 模式、預設設定；讀場景加上說話對象、一條推測的關係、一個術語定義、一段補了人名的譯文、兩處校稿發現；JSON 字元數，改前→改後）：規則確認 1,127→1,282；修正檢查 3 個請求 3,794→4,462（1,284/1,205/1,305→1,448/1,369/1,645）；校稿 2 個 4,905→4,997（只有含那句台詞的一群多 92）；定名 1,032→1,078；審稿（只審旗標段，在第一場）2,220→2,220，全審時 4 個 14,482→15,724（第一場不變，後面三場各多 217–524）。
+- 沒做：線上驗證（不跑額度）——這些資料對審稿、修正檢查、校稿的判斷有沒有幫助、長場景的審稿多出多少字，都要整本實測。
+- 重現：`cd ../ncte-docs && source .venv/bin/activate && pytest && ruff check src tests && mypy src`，590 passed、5 skipped。
