@@ -126,6 +126,9 @@ def review_scope(orch: Any, unit_ids: list[str], *, any_run: bool = False) -> di
         for key in ("address_terms", "style", "term_definitions"):
             if ctx.get(key):
                 payload[key] = ctx[key]
+        mem = ctx.get("memory") or {}
+        if any(mem.get(k) for k in ("previous_chapter_summary", "this_chapter_so_far", "facts", "props")):
+            payload["memory"] = mem  # what the translator had for this scene: known before it begins, chosen alike
         est = orch._estimate(payload, sum(len(x["source"]) for x in items) // 2, "review")
         orch.check_budget(est)
         def ask(pl: dict[str, Any], est: float = est) -> Any:
