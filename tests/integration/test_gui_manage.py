@@ -220,3 +220,24 @@ def test_the_claude_plan_needs_no_key_and_shows_list_price_instead_of_a_bill(sit
     assert call(f"/api/book/{imp['book_id']}/overview")[1]["plan_usd"] == 1.25
     assert call("/api/settings/provider", {"provider": "openrouter"})[0] == 200  # back: an API model again
     assert app.ws.cfg.openrouter.model == DEFAULT_MODEL and not app.ws.cfg.openrouter.stage_models
+
+
+def test_the_codex_plan_needs_no_key_and_finds_the_codex_command(site, monkeypatch, tmp_path):
+    from ncte.config import CODEX_MODEL, DEFAULT_MODEL
+
+    call, app, _, tmp = site
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "openrouter")  # restored after the test (the server writes it)
+    monkeypatch.setenv("NCTE_CODEX_BIN", str(tmp_path / "no-such-codex"))
+    out = call("/api/settings/provider", {"provider": "codex"})[1]
+    assert out["provider"] == "codex" and not out["set"] and out["codex"] is None
+    fake_bin = tmp_path / "codex"
+    fake_bin.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_bin.chmod(0o755)
+    monkeypatch.setenv("NCTE_CODEX_BIN", str(fake_bin))
+    out = call("/api/settings")[1]
+    assert out["provider"] == "codex" and out["set"] and out["codex"] == str(fake_bin)
+    o = app.ws.cfg.openrouter
+    assert o.model == CODEX_MODEL and not o.stage_models and o.temperature is None
+    assert call("/api/settings/key", {"key": "sk-or-v1-" + "d" * 40})[0] == 400  # no key on the plan
+    assert call("/api/settings/provider", {"provider": "openrouter"})[0] == 200  # back: an API model again
+    assert app.ws.cfg.openrouter.model == DEFAULT_MODEL and not app.ws.cfg.openrouter.stage_models

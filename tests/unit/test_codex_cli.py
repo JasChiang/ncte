@@ -425,3 +425,15 @@ def test_a_claude_run_proofreads_on_codex_when_set(monkeypatch, tmp_path, fixtur
     assert {st for st, _, _ in codex.seen} == {"proofread"}
     assert {e for st, _, e in codex.seen} == {"high"}
     assert "proofread" not in {st for st, _, _ in claude.seen} and "translate" in {st for st, _, _ in claude.seen}
+
+
+def test_the_settings_page_offers_codex_and_shows_no_bill_for_it():
+    import ncte
+
+    js = (Path(ncte.__file__).resolve().parents[2] / "src/ncte/gui/static/app.js").read_text(encoding="utf-8")
+    assert '<option value="codex"' in js and "Codex（ChatGPT 方案）" in js
+    assert "Codex 方案（不另收費）" in js and 'provider === "codex"' in js
+    card = js[js.index("const codexCard"):]
+    card = card[:card.index("</div>`;")]
+    for said in ("找到 Codex", "找不到 Codex", "ChatGPT 訂閱", "不另外收費", "固定負擔"):
+        assert said in card, said

@@ -84,6 +84,11 @@ def key_status(env_path: Path, provider: str = "openrouter") -> dict[str, Any]:
 
         found = shutil.which(os.environ.get("NCTE_CLAUDE_BIN") or "claude")
         return {"provider": provider, "set": bool(found), "hint": None, "file": str(env_path.resolve()), "claude": found}
+    if provider == "codex":  # no key: the Codex CLI's own ChatGPT login on this computer
+        from ..llm.codex_cli import found as codex_found
+
+        found = codex_found()
+        return {"provider": provider, "set": bool(found), "hint": None, "file": str(env_path.resolve()), "codex": found}
     if provider == "local":  # no key: is a model server answering, and which model has it loaded?
         return {"provider": provider, **local_status(), "hint": None, "file": str(env_path.resolve())}
     key = get_api_key(provider)
@@ -127,9 +132,9 @@ def _save_env(env_path: Path, name: str, value: str) -> None:
 
 
 def set_provider(env_path: Path, cfg: Any, provider: str) -> dict[str, Any]:
-    from ..config import DEFAULT_MODEL, use_claude_models, use_local_models
+    from ..config import DEFAULT_MODEL, PROVIDERS, use_claude_models, use_codex_models, use_local_models
 
-    if provider not in ("openrouter", "fal", "claude", "local"):
+    if provider not in PROVIDERS:
         raise NCTEError("未知的連線方式")
     _save_env(env_path, "NCTE_LLM_PROVIDER", provider)
     was = cfg.openrouter.provider
@@ -138,7 +143,9 @@ def set_provider(env_path: Path, cfg: Any, provider: str) -> dict[str, Any]:
         use_claude_models(cfg)
     elif provider == "local":
         use_local_models(cfg)
-    elif was in ("claude", "local"):  # back to an API: its default model, not another source's alias
+    elif provider == "codex":
+        use_codex_models(cfg)
+    elif was in ("claude", "local", "codex"):  # back to an API: its default model, not another source's alias
         cfg.openrouter.model = DEFAULT_MODEL
         cfg.openrouter.stage_models = {}
         cfg.openrouter.temperature = type(cfg.openrouter)().temperature
