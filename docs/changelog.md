@@ -1006,4 +1006,4 @@ open workspace/eval/<timestamp>/report.html
 - 網頁：設定頁「Codex（ChatGPT 方案）」選項與說明卡（找不找得到 `codex`、ChatGPT 訂閱額度、不另收費、固定負擔較大、尚未整本實測）；書庫第一步「找到 Codex」；執行卡金額欄「Codex 方案（不另收費）」、估價不顯示預算上限。
 - 測試：`tests/unit/test_codex_cli.py`（24 個：送出的參數、instructions 與 stdin、回答與 usage、方案額度與 rollout 檔刪除、features 解析與失敗、等待、未登入、命令列被拒、沒安裝、模型清單、設定、Claude run 的一步走 Codex、整本範例書在 codex 來源與「Claude 讀翻＋Codex 校稿」各跑完）、`tests/integration/test_gui_manage.py`（設定頁切到 codex）。
 - 未實測：真的 `codex exec` 的失敗訊息（額度用完、沒登入、網路斷線）、整本書的品質、速度與額度。
-- 重現：`cd ../ncte-codex && source .venv/bin/activate && pytest && ruff check src tests && mypy src`。
+- 重現：`cd ../ncte-codex && source .venv/bin/activate && pytest && ruff check src tests && mypy src`，617 passed、5 skipped。
