@@ -409,8 +409,9 @@ class HouseStyleOutput(_M):
 # ------------------------------------------------------------ bilingual proofreading (ADR-051)
 class ProofreadIssue(_M):
     unit_id: str
-    # ambiguity: the source allows another reading at least as natural as the current one (ADR-063) — not an error
-    kind: Literal["meaning", "omission", "addition", "speaker", "tone", "voice", "style", "ambiguity"]
+    # ambiguity: the source allows another reading at least as natural as the current one (ADR-063) — not an error;
+    # expression: the meaning is right but the Chinese reads badly (polishing, with the meaning kept)
+    kind: Literal["meaning", "omission", "addition", "speaker", "tone", "voice", "expression", "style", "ambiguity"]
     severity: Literal["low", "medium", "high"]
     quote: str
     problem: str  # what is wrong, quoting the source

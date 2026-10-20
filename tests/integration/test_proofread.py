@@ -263,3 +263,45 @@ def test_the_fix_check_has_the_same_voice_and_habits_as_proofreading(conn, cfg, 
     run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "proofread": proofread,
                                                                "fix_check": fix_check}), mode="context")
     assert checks and all(c["characters"] == [card] for c in checks)
+
+
+def test_clumsy_chinese_is_polished_with_the_meaning_kept_and_the_check_reads_what_was_said(conn, cfg, fixtures):
+    """Proofreading also polishes: a paragraph whose meaning is right but whose Chinese reads badly (``expression``)
+    goes back with the note to keep the meaning; how the Chinese reads is not a claim about the source, so the fix
+    check gets what the proofreader said and suggested, not the kind only."""
+    from ncte.analysis import proofread as pr
+    from ncte.llm.fake import default_translate
+    from ncte.llm.schemas import ProofreadIssue
+
+    assert "expression" in ProofreadIssue.model_fields["kind"].annotation.__args__
+    asked, checks = [], []
+
+    def proofread(payload, req):
+        p = payload["paragraphs"][0]
+        return {"issues": [{"unit_id": p["unit_id"], "kind": "expression", "severity": "medium", "quote": p["zh"][:4],
+                            "problem": "語序照搬日文，讀者要回頭重看", "fix": "把修飾語拆成兩句"}]}
+
+    def translate(payload, req):
+        out = default_translate(payload, req)
+        if "review_feedback" in payload:
+            asked.append(payload["review_feedback"])
+            for t in out["translations"]:
+                t["translated_text"] += "（潤）"
+        return out
+
+    def fix_check(payload, req):
+        checks.append(payload)
+        return {"checks": [{"unit_id": i["unit_id"], "gist": "g", "verdict": "fixed", "new_error": "", "reason": "r"}
+                           for i in payload["items"]]}
+
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"],
+                            FakeLLM(responders={**RESPONDERS, "proofread": proofread, "translate": translate,
+                                                "fix_check": fix_check}), mode="context")
+    issues = [i for fb in asked for u in fb for i in u["issues"]]
+    assert issues and all(i["issue_type"] == "proofread_expression" for i in issues)
+    assert all(pr.FIX_NOTE_EXPRESSION in i["suggestion"] and pr.FIX_NOTE not in i["suggestion"] for i in issues)
+    claims = [c for p in checks for i in p["items"] for c in i["issues"]]
+    assert claims and all("讀者要回頭重看" in c and "把修飾語拆成兩句" in c and "只給類別" not in c and
+                          pr.FIX_NOTE_EXPRESSION not in c for c in claims)
+    assert not conn.execute("SELECT 1 FROM qa_findings WHERE run_id=? AND type='review:proofread_expression' AND "
+                            "status='open'", (rid,)).fetchone()  # settled by the checked fix

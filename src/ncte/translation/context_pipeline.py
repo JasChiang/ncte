@@ -931,6 +931,16 @@ class ContextOrchestrator(Orchestrator):
         if self.cfg.context.proofread_verdicts:  # paragraphs the model gave no verdict for were not looked at
             stats["no_verdict"] = stats.get("no_verdict", 0) + len(valid - {c.unit_id for c in parsed.checked})
         feedback: dict[str, list[dict[str, Any]]] = {}
+        polished: set[str] = set()
+        if asked := sorted({it.unit_id for it in parsed.issues if it.kind == "expression" and it.unit_id in valid}):
+            # polished once in this run: an earlier pass found how a paragraph reads and its text has changed since
+            # (the finding was about another version; a fix shown unneeded or rejected left the text as it was)
+            with self.lock:
+                polished = {r["unit_id"] for r in self.conn.execute(
+                    f"SELECT unit_id, translation_id FROM qa_findings WHERE run_id=? AND "
+                    f"type='review:proofread_expression' AND status!='dismissed_by_check' AND translation_id IS NOT "
+                    f"NULL AND unit_id IN ({','.join('?' * len(asked))})", [self.run_id, *asked])
+                    if r["translation_id"] != tids[r["unit_id"]]}
         for it in parsed.issues:
             if it.unit_id in valid and it.kind == "ambiguity" and it.problem.strip():
                 # two readings the source allows (ADR-063): kept for a person to look at, never retranslated
@@ -941,13 +951,19 @@ class ContextOrchestrator(Orchestrator):
                 continue
             if it.unit_id not in valid or it.severity == "low" or not it.problem.strip():
                 continue  # a small slip is not worth a retranslation
+            if it.kind == "expression" and it.unit_id in polished:
+                # not polished twice: a later pass rewording a reworded sentence only drifts (a meaning issue still
+                # goes back)
+                stats["expression_skipped"] = stats.get("expression_skipped", 0) + 1
+                continue
             stats["issues"] += 1
             fid = self._finding(it.unit_id, f"review:proofread_{it.kind}", it.severity,
                                 f"{it.problem[:300]}" + (f" → {it.fix[:160]}" if it.fix.strip() else ""),
                                 translation_id=tids[it.unit_id])
+            note = proofread.FIX_NOTE_EXPRESSION if it.kind == "expression" else proofread.FIX_NOTE
             feedback.setdefault(it.unit_id, []).append(
                 {"issue_type": f"proofread_{it.kind}", "evidence": f"{it.problem}（譯文：{it.quote}）",
-                 "suggestion": f"{it.fix}\n{proofread.FIX_NOTE}", "finding_id": fid})
+                 "suggestion": f"{it.fix}\n{note}", "finding_id": fid})
         if not feedback:
             return
         with self.lock:

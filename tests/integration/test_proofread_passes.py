@@ -258,3 +258,50 @@ def test_a_run_on_the_claude_plan_proofreads_twice(conn, cfg, fixtures, monkeypa
     book, rid, _ = run_book(conn, cfg, fixtures["basic"], client, mode="context")
     _, cp = _job(conn, rid)
     assert len(cp["passes"]) == 2
+
+
+def test_a_later_pass_does_not_polish_a_paragraph_polished_already_but_still_fixes_its_meaning(conn, cfg, fixtures):
+    """A paragraph polished in the first pass (``expression``) is not polished again by the second, which counts it
+    as ``expression_skipped``; a meaning issue the second pass finds on it still goes back to the translator."""
+    from ncte.llm.fake import default_translate
+
+    _setup(cfg, 2)
+    cfg.context.reader_pass = False
+    seen: set[str] = set()
+    first: list[str] = []  # the first paragraph of each stretch, as the first pass saw it
+    sent: list[tuple[int, str, str]] = []  # (pass, unit id, issue type) sent back to the translator
+    now = [1]  # the pass the last proofreading request was in (its fixes follow it)
+
+    def proofread(payload, req):
+        p = payload["paragraphs"][0]
+        again = p["unit_id"] in seen
+        now[0] = 2 if again else 1
+        seen.update(x["unit_id"] for x in payload["paragraphs"])
+        if not again:
+            first.append(p["unit_id"])
+        issue = {"unit_id": p["unit_id"], "severity": "medium", "quote": p["zh"][:2], "fix": "改"}
+        return {"issues": [{**issue, "kind": "expression", "problem": "句子拖沓"},
+                           *([{**issue, "kind": "meaning", "severity": "high", "problem": "原文是否定"}] if again
+                             else [])]}
+
+    def translate(payload, req):
+        out = default_translate(payload, req)
+        for fb in payload.get("review_feedback", []):
+            sent.extend((now[0], fb["unit_id"], i["issue_type"]) for i in fb["issues"])
+        if "review_feedback" in payload:
+            for t in out["translations"]:
+                t["translated_text"] += "（改）"
+        return out
+
+    client = Counting(responders={**RESPONDERS, "proofread": proofread, "translate": translate})
+    book, rid, summary = run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    assert summary.status == "completed", summary
+    total = len(first)
+    assert total and client.asked["proofread"] == 2 * total
+    assert sorted(u for k, u, t in sent if k == 1) == sorted(first) and {t for k, _, t in sent if k == 1} == {
+        "proofread_expression"}
+    assert sorted(u for k, u, t in sent if k == 2) == sorted(first) and {t for k, _, t in sent if k == 2} == {
+        "proofread_meaning"}  # the meaning issue went back, the second polish did not
+    status, cp = _job(conn, rid)
+    assert [p.get("expression_skipped", 0) for p in cp["passes"]] == [0, total]
+    assert [p["retranslated"] for p in cp["passes"]] == [total, total]

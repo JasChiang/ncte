@@ -6,8 +6,9 @@ then 「你」. The selective review sees only flagged paragraphs. Here, after a
 goes to the model with its source, who says each line and to whom (as read), the cards of the people in that stretch
 (name, gender, way of speaking), the decided renderings, forms of address and house rules the translator had, and the
 paragraphs just before the stretch (to read, not to check); the model reads the stretch through first, then
-checks paragraph by paragraph and points at real errors only — meaning, omission, addition, speaker or addressee,
-tone, a character's voice, a house-style slip — and each goes back to the translator with the source and the scene's
+checks paragraph by paragraph and points at real errors — meaning, omission, addition, speaker or addressee,
+tone, a character's voice, a house-style slip — and at Chinese that says the right thing but reads badly
+(``expression``: polished with the meaning kept, once per run), and each goes back to the translator with the source and the scene's
 memory, which fixes it or keeps the rendering. The program finds the paragraphs and the people; it decides nothing.
 """
 
@@ -210,3 +211,6 @@ def notes(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]], be
 
 FIX_NOTE = ("對照校稿認為這段譯文有誤（見說明）。請對照原文與前後文判斷：說明正確就改正，只改那個錯，其他照舊；"
             "說明不對（原文其實就是這個意思），就維持原譯。")
+# an issue of how the Chinese reads, not of what it says: polished with the meaning kept, or left as it is
+FIX_NOTE_EXPRESSION = ("對照校稿認為這段意思沒錯、但中文讀起來不順（見說明）。在意思、視角、語氣與角色口吻都不變、"
+                       "也不增不減的前提下，改寫成自然的臺灣中文；說明不成立（其實讀得順），就維持原譯。")
