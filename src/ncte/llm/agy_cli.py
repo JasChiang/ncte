@@ -10,15 +10,23 @@ own empty temporary directory with ``--sandbox`` (terminal restricted) and slash
 from ``--output-format stream-json``'s ``result`` event and the process is then stopped (``_run_turn``: agy
 sometimes never exits after the turn).
 
-agy sends its own instructions and tool descriptions with every request: measured 2026-10-21 (agy 1.2.x), a
-one-sentence request carried about 7,600 input tokens. The user's own rules (``~/.gemini/GEMINI.md``) are read by
-agy too; NCTE cannot turn that off.
+agy sends its own instructions and tool descriptions with every request: measured 2026-10-21 (agy 1.4.4), a
+one-sentence request carried about 7,600 input tokens, some 60 tool descriptions among them (browser, files, shell,
+web search, subagents). A custom agent can name the tools it has (``tools`` in ``.agents/agents/<name>/agent.md`` of
+the working directory); each call writes ``PLAIN_AGENT`` there, with only ``finish`` (and ``view_file`` when the
+request is in ``request.md``), and passes ``--agent``: the same one-sentence request then carried about 2,400 input
+tokens; the model's thinking did not change. The agent's body is a one-line instruction to answer directly; NCTE's
+rules stay in the prompt. ``openrouter.agy_plain_agent: false`` turns it off; when agy does not know the agent (a
+CLI update), the call says so once in the log and goes on without it. The user's own rules (``~/.gemini/GEMINI.md``)
+are read by agy too; NCTE cannot turn that off.
 
 Model ids are ``agy/<name>``: ``agy models`` lists each model once per reasoning level (``gemini-3.8-flash-high``),
 so ``agy/gemini-3.8-flash`` with a step's level becomes ``gemini-3.8-flash-<level>`` when agy lists that (else the
 listed id as given, else medium). A family name without the version (``agy/gemini-flash``) is the newest model of
 that family agy lists when the run starts, so a setting survives a model being retired; the id actually used is kept
-in ``usage["agy_model"]``. A versioned id agy no longer lists is not in the catalog, so a run naming it stops before
+in ``usage["agy_model"]``, and the level that id carries in ``usage["effort"]`` (the step's own, e.g. ``high`` for a
+fix check, not the run's; ``usage["effort_asked"]`` when the id given carried another level). The level is the model
+id: ``--effort`` with an id that carries another level is refused by agy, so it is not sent. A versioned id agy no longer lists is not in the catalog, so a run naming it stops before
 it starts (as for any step model the catalog does not list). Nothing is billed through NCTE: ``cost_usd`` and ``list_cost_usd`` are 0; the
 token counts agy prints are kept in ``usage``. How much of the plan is used comes from ``agy -p /quota`` (answered
 without a model turn and without spending quota), read after a request at most every ``QUOTA_EVERY`` seconds: the
@@ -64,6 +72,14 @@ USAGE_LIMIT = ("resource exhausted", "resource_exhausted", "quota", "rate limit"
 NOT_LOGGED_IN = ("not signed in", "sign in", "not logged in", "login", "unauthenticated", "401")
 BAD_COMMAND = ("flag provided but not defined", "unknown flag", "flag needs an argument", "invalid value",
                "took \"--", "unknown model", "model not found")
+PLAIN_AGENT_NAME = "ncte-plain"
+# tool names must be agy's own (a name agy does not have may hang the agent, per its docs)
+PLAIN_AGENT_TOOLS = ("finish",)
+FILE_AGENT_TOOLS = ("view_file", "finish")  # the request is in request.md: the model has to read it
+PLAIN_AGENT = ("---\nname: {name}\ndescription: Answers one request with one JSON object; uses no tools.\n"
+               "tools:\n{tools}mainAgent: true\nsubagent: false\n---\n"
+               "Answer the request in the prompt directly with the requested output only. Do not use tools{but}.\n")
+UNKNOWN_AGENT = ("unknown agent", "no custom agents", "agent not found")
 READ_FILE = ("這次請求的完整內容在工作目錄的 `request.md`（{n} 字元）。請先完整讀取這個檔案（從頭到尾，"
              "不要只讀一部分），再照檔案裡的指示作答；不要修改任何檔案，只輸出答案。")
 
@@ -128,7 +144,7 @@ class AgyCLIClient:
     def __init__(self, *, models: list[str] | None = None, timeout: float = 1800,
                  waits: tuple[float, ...] = RETRY_WAITS, binary: str | None = None, sleep: Any = time.sleep,
                  log: Callable[[str], None] | None = None, limit_wait: float = LIMIT_WAIT,
-                 limit_max: float = LIMIT_MAX, home: str | Path | None = None):
+                 limit_max: float = LIMIT_MAX, home: str | Path | None = None, plain_agent: bool = True):
         self.extra_models = [m for m in models or [] if m and m.startswith(PREFIX)]
         self.log = log
         self.timeout = timeout
@@ -140,6 +156,7 @@ class AgyCLIClient:
         self._listed: list[str] | None = None
         self._quota: tuple[float, dict[str, Any] | None] = (0.0, None)
         self._lock = threading.Lock()
+        self.plain_agent = plain_agent  # set off for the client's life when agy does not know the agent
 
     # ------------------------------------------------------------ catalog
     def listed(self) -> list[str]:
@@ -201,9 +218,20 @@ class AgyCLIClient:
         return name
 
     # ------------------------------------------------------------ requests
-    def args(self, model: str, prompt: str) -> list[str]:
+    def args(self, model: str, prompt: str, *, agent: str | None = None) -> list[str]:
         return [self.binary, "--model", model, "--output-format", "stream-json", "--sandbox",
-                "--disable-slash-commands", f"--print={prompt}"]
+                "--disable-slash-commands", *(["--agent", agent] if agent else []), f"--print={prompt}"]
+
+    @staticmethod
+    def write_agent(work: Path, *, reads_file: bool) -> str:
+        """``PLAIN_AGENT`` in the call's working directory; its name, for ``--agent``."""
+        tools = FILE_AGENT_TOOLS if reads_file else PLAIN_AGENT_TOOLS
+        folder = work / ".agents" / "agents" / PLAIN_AGENT_NAME
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "agent.md").write_text(PLAIN_AGENT.format(
+            name=PLAIN_AGENT_NAME, tools="".join(f"  - {t}\n" for t in tools),
+            but=" except reading request.md" if reads_file else ""), encoding="utf-8")
+        return PLAIN_AGENT_NAME
 
     def quota(self, model: str) -> dict[str, Any] | None:
         """The plan's usage for this model's group, read at most every ``QUOTA_EVERY`` seconds."""
@@ -290,13 +318,15 @@ class AgyCLIClient:
 
         with tempfile.TemporaryDirectory(prefix="ncte-agy-") as tmp:
             work = Path(tmp)
-            if len(prompt.encode("utf-8")) > ARG_LIMIT:
+            reads_file = len(prompt.encode("utf-8")) > ARG_LIMIT
+            if reads_file:
                 (work / "request.md").write_text(prompt, encoding="utf-8")
                 prompt = READ_FILE.format(n=len(prompt))
             while True:
                 attempt += 1
+                agent = self.write_agent(work, reads_file=reads_file) if self.plain_agent else None
                 try:
-                    proc = _run_turn(self.args(model, prompt), timeout=self.timeout, cwd=str(work))
+                    proc = _run_turn(self.args(model, prompt, agent=agent), timeout=self.timeout, cwd=str(work))
                 except subprocess.TimeoutExpired:
                     last = f"no answer within {self.timeout:.0f}s"
                     later(False)
@@ -311,6 +341,13 @@ class AgyCLIClient:
                 failed = proc.returncode != 0 or out.get("status") != "SUCCESS"
                 if failed:
                     count(out.get("usage"))
+                    if agent and any(s in said.lower() for s in UNKNOWN_AGENT):
+                        self.plain_agent = False  # a CLI that does not read the agent: on without it, at once
+                        if self.log:
+                            self.log(f"Antigravity：agy 不認得 NCTE 的精簡 agent，改用 agy 預設（每個請求多約 5,000 "
+                                     f"token 的工具說明）：{said[:200]}")
+                        attempt -= 1
+                        continue
                     if any(s in said.lower() for s in BAD_COMMAND):
                         raise FatalAPIError(f"agy rejected the command (exit {proc.returncode}): {said[:300]}")
                     if any(s in said.lower() for s in NOT_LOGGED_IN) and not any(
@@ -335,7 +372,11 @@ class AgyCLIClient:
                     "reasoning_tokens": n("thinking_tokens"),
                     "cache_read_tokens": n("cache_read_tokens"),
                     "cache_write_tokens": 0,
-                    "list_cost_usd": 0, "effort": effort_of(req), "agy_model": model}
+                    "list_cost_usd": 0, "effort": split_level(model)[1] or effort_of(req), "agy_model": model}
+                if agent:
+                    usage["agy_agent"] = agent
+                if (asked := effort_of(req)) and asked != usage["effort"]:
+                    usage["effort_asked"] = asked
                 if failed_tries:
                     usage["failed_tries"] = failed_tries
                 try:

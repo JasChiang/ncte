@@ -53,6 +53,9 @@ class Fake:
         if kw.get("cwd"):  # what the call left for the model to read
             req = Path(kw["cwd"]) / "request.md"
             self.calls[-1]["file"] = req.read_text(encoding="utf-8") if req.exists() else None
+            agent = Path(kw["cwd"]) / ".agents" / "agents" / "ncte-plain" / "agent.md"
+            self.calls[-1]["agent"] = agent.read_text(encoding="utf-8") if agent.exists() else None
+            self.calls[-1]["left"] = sorted(p.name for p in Path(kw["cwd"]).iterdir())
         code, out, err = self.turns.pop(0)
         return subprocess.CompletedProcess(args, code, json.dumps(out), err)
 
@@ -79,11 +82,13 @@ def test_a_request_is_one_print_call_with_rules_schema_and_data_in_one_prompt(mo
     assert "--sandbox" in args and "--disable-slash-commands" in args and "--json-schema" not in args
     prompt = next(a for a in args if a.startswith("--print="))[len("--print="):]
     assert prompt.index("SYS") < prompt.index("JSON Schema") < prompt.index('{"units": []}')
-    assert call["cwd"] and not list(Path(call["cwd"]).iterdir() if Path(call["cwd"]).exists() else [])
+    assert call["left"] == [".agents"]  # an empty directory but for the agent NCTE runs as
+    assert args[args.index("--agent") + 1] == "ncte-plain"
     assert resp.content == '{"translations": []}' and resp.provider == "agy" and resp.cost_usd == 0
     u = resp.usage
     assert u["prompt_tokens"] == 7700 and u["completion_tokens"] == 300 and u["reasoning_tokens"] == 250
     assert u["cache_read_tokens"] == 100 and u["list_cost_usd"] == 0 and u["agy_model"] == "gemini-3.8-flash-high"
+    assert u["effort"] == "high" and "effort_asked" not in u and u["agy_agent"] == "ncte-plain"
     assert u["plan"] == {"source": "agy", "windows": {"weekly": {"used": 0.25, "resets_at": 1793158244},
                                                       "5h": {"used": 0.5, "resets_at": 1792571444}}}
 
@@ -96,6 +101,56 @@ def test_a_level_agy_does_not_list_falls_back_to_medium_and_a_full_id_is_kept(mo
     first, second = (t["args"] for t in fake.turns_sent())
     assert first[first.index("--model") + 1] == "gemini-3.8-flash-medium"
     assert second[second.index("--model") + 1] == "claude-opus-5-5-high"
+
+
+def test_the_usage_says_the_level_the_model_id_really_carries(monkeypatch, tmp_path):
+    c = _client(monkeypatch, tmp_path, Fake([ok(), ok()]))
+    u1 = c.complete(_req(level="max:2000")).usage  # a token cap has no level: the medium id is what ran
+    u2 = c.complete(_req(model="agy/claude-opus-5-5-high", level="medium")).usage  # the id carries its own level
+    assert u1["effort"] == "medium" and "effort_asked" not in u1
+    assert (u2["effort"], u2["effort_asked"], u2["agy_model"]) == ("high", "medium", "claude-opus-5-5-high")
+
+
+def test_each_call_runs_as_an_agent_with_no_tools_but_finish(monkeypatch, tmp_path):
+    fake = Fake([ok()])
+    _client(monkeypatch, tmp_path, fake).complete(_req())
+    (call,) = fake.turns_sent()
+    text = call["agent"]
+    assert text.startswith("---\nname: ncte-plain\n") and "tools:\n  - finish\nmainAgent: true\n" in text
+    assert "view_file" not in text and "SYS" not in text  # NCTE's rules stay in the prompt
+
+
+def test_a_request_in_a_file_lets_the_agent_read_it(monkeypatch, tmp_path):
+    monkeypatch.setattr(agy_cli, "ARG_LIMIT", 100)
+    fake = Fake([ok()])
+    _client(monkeypatch, tmp_path, fake).complete(_req(messages=[
+        {"role": "system", "content": "SYS"}, {"role": "user", "content": "長" * 200}]))
+    (call,) = fake.turns_sent()
+    assert "  - view_file\n  - finish\n" in call["agent"]
+
+
+def test_an_agy_that_does_not_know_the_agent_goes_on_without_it_and_says_so(monkeypatch, tmp_path):
+    unknown = (1, {"conversation_id": "", "status": "ERROR", "response": "",
+                   "error": 'unknown agent "ncte-plain" (no custom agents are available)', "usage": {}}, "")
+    fake = Fake([unknown, ok(), ok()])
+    said: list[str] = []
+    c = _client(monkeypatch, tmp_path, fake, log=said.append)
+    resp = c.complete(_req())
+    c.complete(_req())
+    first, second, third = (t["args"] for t in fake.turns_sent())
+    assert "--agent" in first and "--agent" not in second and "--agent" not in third
+    assert resp.attempts == 1 and "agy_agent" not in resp.usage and len(said) == 1 and "agent" in said[0]
+
+
+def test_the_plain_agent_can_be_turned_off(monkeypatch, tmp_path):
+    fake = Fake([ok()])
+    _client(monkeypatch, tmp_path, fake, plain_agent=False).complete(_req())
+    (call,) = fake.turns_sent()
+    assert "--agent" not in call["args"] and call["agent"] is None
+    from ncte.cli import _agy_client
+    cfg = Config()
+    cfg.openrouter.agy_plain_agent = False
+    assert _agy_client(cfg).plain_agent is False and _agy_client(Config()).plain_agent is True
 
 
 def test_a_long_prompt_goes_to_a_file_the_model_is_asked_to_read(monkeypatch, tmp_path):
@@ -214,3 +269,24 @@ def test_a_turn_is_read_from_its_result_event_and_a_process_that_never_exits_is_
     silent.write_text("import time\ntime.sleep(600)\n", encoding="utf-8")
     with pytest.raises(subprocess.TimeoutExpired):
         agy_cli._run_turn([sys.executable, str(silent)], timeout=2, cwd=str(tmp_path))
+
+
+
+def test_the_cost_report_shows_the_level_each_step_really_ran_at(tmp_path):
+    from ncte.memory.db import connect, migrate
+    from ncte.reports.cost_report import cost_report
+
+    conn = connect(tmp_path / "t.db")
+    migrate(conn)
+    rows = [("translate", {"effort": "medium", "agy_model": "gemini-3.8-flash-medium"}, None),
+            ("fix_check", {"effort": "high", "agy_model": "gemini-3.8-flash-high"}, None),
+            ("fix_check", {"effort": "high", "agy_model": "gemini-3.8-flash-high"}, None),
+            ("review", {}, "low")]
+    for i, (stage, usage, eff) in enumerate(rows):
+        conn.execute("INSERT INTO llm_requests(run_id, stage, request_hash, model, usage_json, status, created_at, "
+                     "reasoning_effort) VALUES ('r', ?, ?, 'agy/gemini-flash', ?, 'succeeded', '2026-10-21T00:00:00Z', ?)",
+                     (stage, f"h{i}", json.dumps(usage), eff))
+    st = cost_report(conn, run_id="r")["by_stage"]
+    assert st["fix_check"]["efforts"] == {"high": 2} and st["fix_check"]["models_used"] == ["gemini-3.8-flash-high"]
+    assert st["translate"]["efforts"] == {"medium": 1} and st["review"]["efforts"] == {"low": 1}
+    assert "models_used" not in st["review"]

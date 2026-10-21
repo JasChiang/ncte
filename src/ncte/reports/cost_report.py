@@ -79,6 +79,14 @@ def cost_report(conn: sqlite3.Connection, *, run_id: str | None = None, book_id:
             b["cost_usd"] += cost
             b["prompt_tokens"] += pt
             b["completion_tokens"] += ct
+        # the reasoning level each request of a step really ran at (a step's own default, e.g. high for a fix check,
+        # is not the run's), and the model id an agy family name became
+        eff = str(u.get("effort") or r["reasoning_effort"] or "default")
+        efforts = by_stage[r["stage"]].setdefault("efforts", {})
+        efforts[eff] = efforts.get(eff, 0) + 1
+        if u.get("agy_model"):
+            st = by_stage[r["stage"]]
+            st["models_used"] = sorted(set(st.get("models_used", [])) | {str(u["agy_model"])})
         if u.get("models"):  # the model ids a Claude Code alias was really run on
             b = by_model[r["model"]]
             b["models"] = sorted(set(b.get("models", [])) | {str(m) for m in u["models"]})

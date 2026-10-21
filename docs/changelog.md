@@ -1093,3 +1093,9 @@ open workspace/eval/<timestamp>/report.html
 - 覆核全文、空答案重問（`EmptyAnswerError`、FakeLLM `empty_answer`）、性別依據（migration 35）：`verify.py`、`gender_gaps.py`、`schemas`、`repository.set_gender`、`memory_update`／`scene_read`／`gender_gaps`／`translate`／`proofread` 提示詞。
 - `_shared/told_voice.md`；逐段判定的 `sent`／`checked`／`no_verdict` 與 partial；`cost_report` 兩種 token 欄位。
 - 測試：`tests/integration/test_scene_starts.py`、`test_reported_speech.py`（新）、`test_relations.py`、`test_proofread.py`、`test_cost_report_tokens.py` 等。748 passed、1 skipped；ruff、mypy 通過。
+
+## 讀後整理同時送、agy 不帶工具（2026-10-22，分支 post-read-parallel-2026-10-22、agy-plain-agent-2026-10-21；ADR-090、ADR-091）
+- `context_pipeline._ask_groups`（覆核、補問性別、人物關係兩輪、角色印象、術語定義）；`Recorder.answered`、`call_structured(reuse=)`。
+- `agy_cli`：`ncte-plain` agent、`--agent`、不認得時退回；`openrouter.agy_plain_agent`；usage `effort`／`effort_asked`／`agy_agent`；`cost_report` 每一步的推理等級與模型 id。
+- 分步實測結果見 ADR-091（暫存資料：scratchpad agytest）。
+- 測試：`tests/integration/test_post_read_parallel.py`（新）、`test_pause_checkpoint.py`、`tests/unit/test_agy_cli.py`。757 passed、2 skipped；ruff、mypy 通過。

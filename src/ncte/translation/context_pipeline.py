@@ -351,6 +351,33 @@ class ContextOrchestrator(Orchestrator):
             raise failure
         return stopped
 
+    def _ask_groups(self, stage: str, prompt: Any, payloads: list[dict[str, Any]], key: str, what: str
+                    ) -> tuple[list[tuple[Any, list[str], LLMError | None] | None], bool]:
+        """A post-read step's requests, built from one snapshot of the notes before any of them is asked, sent side by
+        side (``max_concurrency``) and each refused one asked in halves (``call_in_parts`` on ``key``). Every answer
+        is in the run's record as soon as it arrives; a resumed run sends again only the requests it has no answer
+        for (the same snapshot gives the same requests: ``reuse``). Returns, in the requests' order, ``(parsed or
+        None, blocked items, the LLM error)`` for each one asked (None for one not started because of a stop), and
+        whether it was stopped. A fatal error is raised once the requests already started are back."""
+        out: list[tuple[Any, list[str], LLMError | None] | None] = [None] * len(payloads)
+
+        def work(i: int) -> tuple[Any, list[str], LLMError | None]:
+            blocked: list[str] = []
+            try:
+                parsed = call_in_parts(lambda pl: self._llm(stage, prompt, pl, [], reuse=True), payloads[i], key,
+                                       blocked, min_part=1)
+            except FatalAPIError:
+                raise
+            except LLMError as exc:
+                return None, blocked, exc
+            return parsed, blocked, None
+
+        def done(i: int, r: tuple[Any, list[str], LLMError | None]) -> None:
+            out[i] = r
+
+        stopped = self._side_by_side(len(payloads), work, done, what)
+        return out, stopped or any(r is None for r in out)
+
     def _stretches(self, stage: str, what: str, parts: list[list[dict[str, Any]]],
                    befores: list[list[dict[str, Any]]], one: Callable[..., None], stats: dict[str, Any],
                    after: int | None, done_beyond: list[str], record_job: bool,
@@ -516,22 +543,24 @@ class ContextOrchestrator(Orchestrator):
             items = verify.collect(self.conn, self.book.id)
         stats: dict[str, int] = {"items": len(items)}
         prompt = load_prompt("verify")
-        for i in range(0, len(items), VERIFY_BATCH):
-            if self._paused("second look"):  # what was answered is kept; the rest is asked on resume
-                return
-            chunk = items[i:i + VERIFY_BATCH]
-            try:
-                blocked: list[str] = []  # the content filter may refuse an item's passages: the rest are asked in halves
-                parsed = call_in_parts(lambda pl: self._llm("verify", prompt, pl, []), {"task": "verify", "items": [
-                    {k: v for k, v in it.items() if not k.startswith("_")} for it in chunk]}, "items", blocked, min_part=1)
-                for ref in blocked:
-                    self._finding(None, "verify_blocked", "low", f"the content filter refused the second look at {ref}")
-                if parsed is None:
-                    continue
-            except FatalAPIError:
-                raise
-            except LLMError as exc:  # the read pass's answers stand
+        chunks = [items[i:i + VERIFY_BATCH] for i in range(0, len(items), VERIFY_BATCH)]
+        payloads = [{"task": "verify", "items": [{k: v for k, v in it.items() if not k.startswith("_")} for it in chunk]}
+                    for chunk in chunks]
+        # all asked from the same snapshot, side by side; applied in order once every one is back (a stop applies
+        # nothing: the resumed run collects the same items and reuses the answers it has)
+        answers, cut = self._ask_groups("verify", prompt, payloads, "items", "second look")
+        if cut and self._paused("second look"):
+            return
+        for chunk, got in zip(chunks, answers, strict=True):
+            if got is None:
+                continue
+            parsed, blocked, exc = got
+            for ref in blocked:  # the content filter refused an item's passages: the rest were asked in halves
+                self._finding(None, "verify_blocked", "low", f"the content filter refused the second look at {ref}")
+            if exc is not None:  # the read pass's answers stand
                 self._finding(None, "verify_failed", "low", str(exc)[:400])
+                continue
+            if parsed is None:
                 continue
             assert isinstance(parsed, VerifyOutput)
             with self.lock, Transaction(self.conn):
@@ -560,16 +589,14 @@ class ContextOrchestrator(Orchestrator):
         prompt = load_prompt("gender_gaps")
         stats: dict[str, int] = {"asked": sum(len(lk["_chars"]) for _, lk in groups), "blocked": 0, "failed": 0}
         results: list[tuple[GenderGapsOutput, dict[str, Any]]] = []
-        for req, lk in groups:
-            if self._paused("genders"):  # kept all at once: asked again on resume
-                return stats
-            blocked: list[str] = []
-            try:
-                parsed = call_in_parts(lambda pl: self._llm("verify:genders", prompt, pl, []), req, "characters",
-                                       blocked, min_part=1)
-            except FatalAPIError:
-                raise
-            except LLMError as exc:  # those characters stay without a gender: said in the report, and the step is partial
+        answers, cut = self._ask_groups("verify:genders", prompt, [req for req, _ in groups], "characters", "genders")
+        if cut and self._paused("genders"):  # written all at once: answers so far reused on resume
+            return stats
+        for (req, lk), got in zip(groups, answers, strict=True):
+            if got is None:
+                continue
+            parsed, blocked, exc = got
+            if exc is not None:  # those characters stay without a gender: said in the report, and the step is partial
                 names = "、".join(c["name"] for c in req["characters"])
                 self._finding(None, "gender_gaps_failed", "medium",
                               f"{len(lk['_chars'])} 個角色沒問到性別（{names[:200]}）：{str(exc)[:200]}")
@@ -608,26 +635,23 @@ class ContextOrchestrator(Orchestrator):
         cut: list[bool] = []  # stopped with pairs left unasked
 
         def ask(groups: list[tuple[dict[str, Any], dict[str, Any]]]) -> None:
-            for req, lookup in groups:
-                if self._stop_reason:
-                    cut.append(True)
-                    return
-                try:
-                    blocked: list[str] = []
-                    parsed = call_in_parts(lambda pl: self._llm("relations", prompt, pl, []), req, "pairs", blocked,
-                                           min_part=1)
-                    if blocked:
-                        self._finding(None, "relations_blocked", "low",
-                                      f"the content filter refused the material of {len(blocked)} pair(s)")
-                    if parsed is None:
-                        continue
-                except FatalAPIError:
-                    raise
-                except LLMError as exc:  # those pairs keep no relation this time
+            answers, stopped = self._ask_groups("relations", prompt, [req for req, _ in groups], "pairs", "relations")
+            for (_req, lookup), got in zip(groups, answers, strict=True):
+                if got is None:
+                    continue
+                parsed, blocked, exc = got
+                if blocked:
+                    self._finding(None, "relations_blocked", "low",
+                                  f"the content filter refused the material of {len(blocked)} pair(s)")
+                if exc is not None:  # those pairs keep no relation this time
                     self._finding(None, "relations_failed", "low", str(exc)[:300])
+                    continue
+                if parsed is None:
                     continue
                 assert isinstance(parsed, RelationsOutput)
                 results.append((parsed, lookup))
+            if stopped:
+                cut.append(True)
 
         from ..memory.repository import character_basics
 
@@ -636,7 +660,7 @@ class ContextOrchestrator(Orchestrator):
         again = [] if cut else relations.unanswered(pairs, results)
         if again:
             ask(relations.requests(again, chars, recheck=True, basics=basics))
-        if cut and self._paused("relations"):  # put together from all pairs at once: asked again on resume
+        if cut and self._paused("relations"):  # put together from all pairs at once: answers so far reused
             return 0
         n = 0
         stats: dict[str, int] = {}
@@ -713,18 +737,13 @@ class ContextOrchestrator(Orchestrator):
         stats: dict[str, int] = {"named": len(named), "asked": sum(len(lk["_terms"]) for _, lk in groups),
                                  "blocked": 0, "failed": 0}
         results: list[tuple[TermsOutput, dict[str, Any]]] = []
-        cut = False
-        for req, lk in groups:
-            if self._stop_reason:
-                cut = True
-                break
-            blocked: list[str] = []
-            try:
-                parsed = call_in_parts(lambda pl: self._llm("terms", prompt, pl, []), req, "terms", blocked, min_part=1)
-            except FatalAPIError:
-                raise
-            except LLMError as exc:  # those terms stay as they were
-                self._finding(None, "terms_failed", "low", str(exc)[:300])
+        answers, cut = self._ask_groups("terms", prompt, [req for req, _ in groups], "terms", "terms")
+        for (_req, lk), got in zip(groups, answers, strict=True):
+            if got is None:
+                continue
+            parsed, blocked, err = got
+            if err is not None:  # those terms stay as they were
+                self._finding(None, "terms_failed", "low", str(err)[:300])
                 stats["failed"] += len(lk["_terms"])
                 continue
             for ref in blocked:
@@ -734,7 +753,7 @@ class ContextOrchestrator(Orchestrator):
             if parsed is not None:
                 assert isinstance(parsed, TermsOutput)
                 results.append((parsed, {**lk, "_blocked": set(blocked)}))
-        if cut and self._paused("terms"):  # kept all at once: asked again on resume
+        if cut and self._paused("terms"):  # written all at once: answers so far reused on resume
             return stats
         if results:
             with self.lock:
@@ -778,25 +797,19 @@ class ContextOrchestrator(Orchestrator):
         with self.lock:
             groups = impressions.requests(self.conn, self.book.id)
         prompt, results = load_prompt("impressions"), []
-        cut = False
-        for req, lookup in groups:
-            if self._stop_reason:
-                cut = True
-                break
-            try:
-                blocked: list[str] = []
-                parsed = call_in_parts(lambda pl: self._llm("impressions", prompt, pl, []), req, "characters", blocked,
-                                       min_part=1)
-                if parsed is None:
-                    continue
-            except FatalAPIError:
-                raise
-            except LLMError as exc:
+        answers, cut = self._ask_groups("impressions", prompt, [req for req, _ in groups], "characters", "impressions")
+        for (_req, lookup), got in zip(groups, answers, strict=True):
+            if got is None:
+                continue
+            parsed, _blocked, exc = got
+            if exc is not None:
                 self._finding(None, "impressions_failed", "low", str(exc)[:300])
+                continue
+            if parsed is None:
                 continue
             assert isinstance(parsed, ImpressionsOutput)
             results.append((parsed, lookup))
-        if cut and self._paused("impressions"):  # written all at once: asked again on resume
+        if cut and self._paused("impressions"):  # written all at once: answers so far reused on resume
             return 0
         n = 0
         if results:
@@ -1430,7 +1443,8 @@ class ContextOrchestrator(Orchestrator):
             self.log(f"  rule flags checked: {stats}")
         return stats
 
-    def _llm(self, stage: str, prompt: Any, payload: dict[str, Any], unit_ids: list[str]) -> Any:
+    def _llm(self, stage: str, prompt: Any, payload: dict[str, Any], unit_ids: list[str], *,
+             reuse: bool = False) -> Any:
         assert self.translator is not None and self.pricing is not None
         out_chars = sum(len(u.get("source", "")) for u in payload.get("units", []))
         est = self._estimate(payload, out_chars, stage)
@@ -1443,7 +1457,7 @@ class ContextOrchestrator(Orchestrator):
                 parsed, _rid, mode = call_structured(
                     self.client, self.recorder, stage=stage, model=model, prompt=prompt, payload=payload,
                     mode=self.mode_for(model), cfg=self.cfg, unit_ids=unit_ids, est_cost=est, correction=correction,
-                    on_downgrade=self._note)
+                    on_downgrade=self._note, reuse=reuse and correction is None)
                 if model == self.model:
                     self.translator.mode = mode
                 return parsed

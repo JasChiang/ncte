@@ -121,14 +121,16 @@ def test_the_readers_look_goes_on_from_its_checkpoint(conn, cfg, fixtures, monke
         len(p) for p in rd.chunks(conn, book.id))
 
 
+@pytest.mark.parametrize("conc", [1, 2])
 @pytest.mark.parametrize("stage,size", [("verify", "ncte.translation.context_pipeline.VERIFY_BATCH"),
                                         ("relations", "ncte.analysis.relations.PAIRS_PER_REQUEST"),
                                         ("impressions", "ncte.analysis.impressions.PER_REQUEST")])
 def test_a_pause_in_a_whole_book_step_is_kept_and_the_step_is_done_on_resume(conn, cfg, fixtures, monkeypatch,
-                                                                            stage, size, tmp_path):
+                                                                            stage, size, tmp_path, conc):
     from ncte.memory.db import connect, migrate
 
     monkeypatch.setattr(size, 1)  # one item per request: a pause can fall between two
+    cfg.openrouter.max_concurrency = conc  # side by side, what was already started when paused comes back
     probe = Counting(responders=dict(RESPONDERS))
     other = connect(tmp_path / "probe.db")  # its own database: a book done there would not redo the step (2.11)
     migrate(other)
@@ -138,9 +140,11 @@ def test_a_pause_in_a_whole_book_step_is_kept_and_the_step_is_done_on_resume(con
     client = Stopping(stage, 1, responders=dict(RESPONDERS))
     book, rid, summary = _run(conn, cfg, fixtures, client)
     assert summary.status == "interrupted"
-    assert client.asked[stage] == 1  # nothing more asked after the pause
+    assert client.asked[stage] <= conc  # nothing more started after the pause
     assert _job(conn, rid, stage)["status"] == "running"  # not marked done with its work cut short
     assert "translate" not in client.asked
     again = Counting(responders=dict(RESPONDERS))
     assert resume_run(conn, cfg, rid, again).status == "completed"
-    assert again.asked.get(stage) and _job(conn, rid, stage)["status"] == "succeeded"
+    assert _job(conn, rid, stage)["status"] == "succeeded"
+    # the answers that came back before the pause are kept: only the other requests are sent again
+    assert again.asked.get(stage) == probe.asked[stage] - client.asked[stage]

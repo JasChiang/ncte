@@ -68,6 +68,9 @@ class OpenRouterConfig(_Strict):
     local_base_url: str = "http://localhost:1234"
     local_models_dir: str | None = None
     local_chat_templates: dict[str, str] = Field(default_factory=dict)
+    # the agy source: each call runs as a custom agent with no tools but `finish` (agy's ~60 tool descriptions cost
+    # about 5,000 input tokens a request, measured 2026-10-21); false = agy's default agent
+    agy_plain_agent: bool = True
 
 
 class TranslationConfig(_Strict):

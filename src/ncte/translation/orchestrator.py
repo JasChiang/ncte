@@ -254,6 +254,16 @@ class DbRecorder:
             self.sizes[rid] = size
             return rid
 
+    def answered(self, req: LLMRequest) -> tuple[int, str] | None:
+        """(request id, answer) of the same request already answered in this run, if any: a post-read step that was
+        stopped part way asks only what it has no answer for when resumed (the same input gives the same request)."""
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT id, response_text FROM llm_requests WHERE run_id=? AND book_id=? AND stage=? AND request_hash=? "
+                "AND status='succeeded' AND response_text IS NOT NULL ORDER BY id DESC LIMIT 1",
+                (self.run_id, self.book_id, req.stage, req.request_hash())).fetchone()
+        return (int(row[0]), str(row[1])) if row is not None else None
+
     def success(self, rid: int, resp: LLMResponse, parse_status: str) -> None:
         cost, status = resp.cost_usd, "reported"
         if cost is None:

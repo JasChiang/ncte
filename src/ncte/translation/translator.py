@@ -169,8 +169,10 @@ COMPACT_JSON = ("\n只輸出一個 JSON 物件（不要說明文字、不要 cod
 def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model: str, prompt: Prompt,
                     payload: dict[str, Any], mode: StructuredMode, cfg: Config, unit_ids: list[str],
                     est_cost: float, correction: str | None = None,
-                    on_downgrade: Callable[[str], None] | None = None) -> tuple[BaseModel, int, StructuredMode]:
-    """One logical LLM call with schema validation. Returns (parsed, request_id, mode_used)."""
+                    on_downgrade: Callable[[str], None] | None = None,
+                    reuse: bool = False) -> tuple[BaseModel, int, StructuredMode]:
+    """One logical LLM call with schema validation. Returns (parsed, request_id, mode_used). ``reuse``: the same
+    request already answered (and valid) in this run is taken from the record instead of asked again."""
     schema_model = output_model(stage, payload)
     assert schema_model is not None, stage
     ids = ShortIds.for_payload(payload)  # the model reads and writes P1/C1… instead of long ids
@@ -199,6 +201,13 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
                          max_tokens=max_tokens, prompt_version=prompt.version_id,
                          extra={"reasoning": rp} if (rp := reasoning_param(reasoning_setting(cfg, stage))) else {},
                          id_codes=ids.to_long, cached_prefix_chars=len(shared))
+        answered = getattr(recorder, "answered", None)  # only the run's own record keeps answers
+        if reuse and answered is not None and (prev := answered(req)) is not None:
+            try:
+                parsed, _status = parse_json_output(prev[1], schema_model, ids.decode)
+                return parsed, prev[0], current
+            except ModelOutputError:
+                pass  # a stored answer that no longer parses is asked again
         rid = recorder.start(req, unit_ids, est_cost)
         try:
             resp = client.complete(req)

@@ -111,7 +111,7 @@ def _agy_client(cfg: Config, log: Callable[[str], None] | None = None) -> Any:
 
     o = cfg.openrouter
     return AgyCLIClient(models=[o.model, *o.stage_models.values(), *([o.review_model] if o.review_model else [])],
-                        log=log)
+                        log=log, plain_agent=o.agy_plain_agent)
 
 
 def _local_client(cfg: Config) -> Any:
