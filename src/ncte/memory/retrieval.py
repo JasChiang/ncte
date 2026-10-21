@@ -103,6 +103,12 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
         participants |= {x for x in (narration.get("narrator"),) if x}
         participants |= {r[0] for r in conn.execute("SELECT DISTINCT speaker_id_nullable FROM utterances WHERE book_id=? "
                                                     "AND scene_id=? AND speaker_id_nullable IS NOT NULL", (book_id, scene["id"]))}
+        # who does or undergoes an action the source leaves out in these paragraphs, present or not (someone quoted
+        # who is not in the scene: 「〜って言われて」): their card (gender) decides 他／她 (ADR-086)
+        batch_ids = {r["id"] for r in batch_rows}
+        for a in state.get("actions", []):
+            if a.get("unit_id") in batch_ids:
+                participants |= {*a.get("subject_candidates", []), *a.get("object_candidates", [])}
     else:  # only who is in the window: speaks there, is spoken to, does or undergoes an action the source leaves out
         participants = {narration["narrator"]} if narration.get("narrator") and narration.get("person") == "first" \
             else set()
@@ -143,6 +149,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             card["readings"] = said[v["name_ja"]]
         if v.get("gender"):
             card["gender"] = v["gender"]
+            if v.get("gender_basis"):
+                card["gender_basis"] = v["gender_basis"]
         if v.get("narrator"):
             card["narrator"] = True
         from .repository import impression_at

@@ -136,13 +136,15 @@ def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
     else:
         g = conn.execute("SELECT target_term FROM glossary WHERE source_term=? LIMIT 1", (head,)).fetchone()
         zh = g[0] if g else None
-    from .repository import gender_view
+    from .repository import gender_basis, gender_view
 
     out: dict[str, Any] = {"name_ja": head, "name_zh": zh, "aliases_ja": [n for n in shown if n != head]}
     if c["is_narrator"] or head.startswith("（敘述者"):  # the unnamed first-person narrator (ADR-045): 「我」 in the text
         out["narrator"] = True
     if g := gender_view(conn, c["id"], hz):
         out["gender"] = g[0] if g[1] == "explicit" else f"{g[0]} (inferred)"
+        if basis := gender_basis(conn, c["id"]):  # shown by the narration or someone's belief: a reveal may overturn it
+            out["gender_basis"] = basis
     return out
 
 

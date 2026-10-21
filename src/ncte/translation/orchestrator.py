@@ -371,6 +371,8 @@ def make_batches(rows: list[sqlite3.Row], target: int, *, by_scene: bool = False
 
 
 class Orchestrator:
+    SCENE_START_CONTEXT = False  # context mode: a scene's request sees the end of the scene before (ADR-085)
+
     def __init__(self, conn: sqlite3.Connection, cfg: Config, client: LLMClient, book: Book, run_id: str,
                  opts: RunOptions, *, log: Callable[[str], None] = print):
         self.conn, self.cfg, self.client, self.book, self.run_id, self.opts = conn, cfg, client, book, run_id, opts
@@ -560,7 +562,8 @@ class Orchestrator:
                                        "note": "These are chapter titles / table-of-contents labels / book title."}
             else:
                 ctx = neighbor_context(self.conn, self.cfg, self.book.id, batch.rows, scene_id=batch.scene_id,
-                                       whole_scene=bool(self.opts.unit_ids) or batch.whole_scene, fix=batch.fix)
+                                       whole_scene=bool(self.opts.unit_ids) or batch.whole_scene, fix=batch.fix,
+                                       scene_start=self.SCENE_START_CONTEXT)
                 text += " " + " ".join(c["source"] for c in shown_context(ctx))
             ctx["glossary"] = glossary_payload(self.glossary, text, upto=(self.volume, batch.rows[-1]["ordinal"]),
                                                revealed=self.link_revealed, readings=True)

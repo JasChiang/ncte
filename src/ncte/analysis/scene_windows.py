@@ -115,14 +115,19 @@ def cut_chapter(rows: list[sqlite3.Row], ask: Callable[[dict[str, Any]], SceneWi
     return out, first_kind
 
 
+CHAPTER_START = {"toc": "章節開頭（目錄）", "model": "章節開頭（模型找到的新章）", "none": "章節開頭（整本沒有目錄）"}
+
+
 def save(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row], breaks: list[tuple[int, WindowBreak]],
-         first_kind: str) -> list[str]:
-    """The chapter's first paragraph marks it decided; each break starts a scene. Returns the first paragraphs of the
+         first_kind: str, chapter_source: str = "toc") -> list[str]:
+    """The chapter's first paragraph marks it decided (``origin='chapter'``; its reason says where the chapter came
+    from — the TOC, or the model in a book without one — never the model's own scene judgement); each break starts a
+    scene. Returns the first paragraphs of the
     chapters the model found (a book without a TOC)."""
     with Transaction(conn):
         conn.executemany("DELETE FROM scene_breaks WHERE book_id=? AND unit_id=?", [(book_id, r["id"]) for r in rows])
         conn.execute("INSERT INTO scene_breaks(book_id, unit_id, reason, origin, created_at, kind, sure) "
-                     "VALUES (?,?,?,?,?,?,?)", (book_id, rows[0]["id"], "chapter cut by the model", "chapter", utcnow(),
+                     "VALUES (?,?,?,?,?,?,?)", (book_id, rows[0]["id"], CHAPTER_START.get(chapter_source, CHAPTER_START["toc"]), "chapter", utcnow(),
                                                 first_kind, 1))
         conn.executemany("INSERT INTO scene_breaks(book_id, unit_id, reason, origin, created_at, kind, sure) "
                          "VALUES (?,?,?,?,?,?,?)",

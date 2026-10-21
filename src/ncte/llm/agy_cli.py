@@ -47,7 +47,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..errors import FatalAPIError, ModelOutputError, RetryableAPIError
+from ..errors import EmptyAnswerError, FatalAPIError, RetryableAPIError
 from .base import LLMRequest, LLMResponse
 from .claude_cli import EFFORTS, LIMIT_MAX, LIMIT_WAIT, RETRY_WAITS, ClaudeCLIClient, effort_of
 from .codex_cli import schema_rule
@@ -321,7 +321,7 @@ class AgyCLIClient:
                     continue
                 result = str(out.get("response") or "").strip()
                 if not result:
-                    raise ModelOutputError("empty answer")
+                    raise EmptyAnswerError("empty answer")
                 raw = out.get("usage")
                 u: dict[str, Any] = raw if isinstance(raw, dict) else {}
                 failed_tries = dict(spent)

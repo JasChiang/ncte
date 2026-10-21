@@ -49,5 +49,11 @@ class ModelOutputError(LLMError):
     """The model replied but the reply failed JSON/Schema/alignment validation."""
 
 
+class EmptyAnswerError(ModelOutputError):
+    """A CLI source's turn ended with no answer at all (e.g. the agent tried a tool it may not use and gave up).
+
+    Nothing in the answer to correct: the same request is simply asked again, a few times (``context_pipeline``)."""
+
+
 class BudgetExceededError(NCTEError):
     """Spending the next request would exceed the configured budget."""

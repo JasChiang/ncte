@@ -244,12 +244,18 @@ class WordplayOut(_M):
     evidence_quote: str
 
 
+# what a gender rests on: the text says so (彼女, 少年), the narration describes it (a uniform skirt, 女子高生, the girls'
+# dorm), a character or the narrator takes them so (思い込み), or it is inferred (speech, first person)
+GenderBasis = Literal["stated", "described", "belief", "inferred"]
+
+
 class GenderOut(_M):
     character_ref: str
     gender: Literal["female", "male"]
     certainty: Literal["explicit", "inferred"] = "explicit"  # inferred: speech style, first person …
     evidence_unit_ids: list[str]
     evidence_quote: str  # verbatim: the words that show it (彼女, 少女, 娘, 少年 …)
+    basis: GenderBasis | None = None  # what kind of evidence it is (the model's reading)
 
 
 class StatedRelation(_M):
@@ -383,6 +389,7 @@ class GenderGap(_M):
     gender: Literal["female", "male", "unknown"]
     certainty: Literal["explicit", "inferred"] = "inferred"
     evidence: list[str] = Field(default_factory=list)  # the codes of the sentences the answer rests on
+    basis: GenderBasis | None = None
     reason: str = ""
 
 
@@ -469,6 +476,8 @@ class RelationOut(_M):
     a_is: str  # what a is to b: 父親
     b_is: str  # what b is to a: 女兒
     facts: list[str]  # evidence refs that show it (n… notes made while reading, f… facts)
+    # the one of ``facts`` from which a reader can know it (with what came before); shown to translation from there
+    known_from: str = ""
     reason: str
     kind: Literal["identity", "feeling", "same_person"] = "identity"
     certainty: Literal["explicit", "inferred"] = "explicit"

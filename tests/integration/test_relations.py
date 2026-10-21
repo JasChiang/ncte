@@ -185,3 +185,39 @@ def test_the_models_replacement_does_not_end_a_persons_relation(conn, cfg, fixtu
          "certainty": "inferred", "facts": [at[9]], "reason": "t", "replaces": "朋友"}]})
     relations.apply(conn, book.id, [(parsed, lk)])
     assert conn.execute("SELECT until_ordinal FROM relations WHERE relation_zh='朋友'").fetchone()[0] is None
+
+
+def _known_from_case(conn, cfg, fixtures, known_from):
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    a, b = _two_characters(conn, book.id)
+    conn.execute("DELETE FROM relations")
+    conn.execute("DELETE FROM relation_notes")
+    p, lk, at = _three_notes(conn, book.id, a, b, [("同住", 5), ("兄妹", 9)])
+    rel = {"a": p["a"], "b": p["b"], "relation": "兄妹", "a_is": "哥哥", "b_is": "妹妹", "kind": "identity",
+           "certainty": "explicit", "facts": [at[5], at[9]], "reason": "t", "replaces": None}
+    if known_from is not None:
+        rel["known_from"] = at[known_from] if isinstance(known_from, int) else known_from
+    stats: dict[str, int] = {}
+    relations.apply(conn, book.id, [(relations.RelationsOutput.model_validate({"relations": [rel]}), lk)], stats=stats)
+    row = conn.execute("SELECT * FROM relations WHERE book_id=?", (book.id,)).fetchone()
+    return row, {x: {r["relation_zh"] for r in relations.visible(conn, book.id, x)} for x in (7, 11)}, stats
+
+
+def test_a_relation_known_only_from_later_evidence_is_not_shown_before_it(conn, cfg, fixtures):
+    """Living together (5) and being siblings (9) cited together: the model says a reader knows they are siblings
+    only at 9, so the translator of paragraph 7 is not given it (it was shown from the earliest evidence, 5)."""
+    row, seen, stats = _known_from_case(conn, cfg, fixtures, 9)
+    assert row["since_ordinal"] == 9 and seen == {7: set(), 11: {"兄妹"}} and not stats.get("known_from_missing")
+
+
+def test_a_relation_stated_early_and_restated_later_is_shown_from_the_early_one(conn, cfg, fixtures):
+    row, seen, _ = _known_from_case(conn, cfg, fixtures, 5)
+    assert row["since_ordinal"] == 5 and seen == {7: {"兄妹"}, 11: {"兄妹"}}
+
+
+def test_without_a_usable_known_from_a_relation_is_shown_from_its_latest_evidence(conn, cfg, fixtures):
+    """No known_from, or one that is not among the relation's own evidence: never earlier than it may be knowable —
+    from the latest cited evidence — and counted."""
+    for bad in (None, "n999"):
+        row, seen, stats = _known_from_case(conn, cfg, fixtures, bad)
+        assert row["since_ordinal"] == 9 and seen[7] == set() and stats["known_from_missing"] == 1

@@ -231,3 +231,34 @@ def test_the_read_pass_s_own_questions_are_answered_and_reach_translation_and_re
     from ncte.analysis import verify as vf
 
     assert not [i for i in vf.collect(conn, book.id) if i["kind"] == "question"]
+
+
+def test_the_asked_paragraph_and_its_evidence_are_sent_whole(conn, cfg, fixtures):
+    """A clue late in a long paragraph decides who speaks: the marked paragraph and the paragraphs the reading cited as
+    evidence go in whole (evidence outside the window too); the paragraphs merely around keep their opening."""
+    import json
+
+    from ncte.analysis import verify as v
+
+    fake = FakeLLM(responders={**RESPONDERS, "scene_analyze": _analyze, "memory_update": _memory,
+                               "verify": lambda p, r: {"items": []}})  # nothing answered: the line stays in doubt
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    line = conn.execute("SELECT ut.id, ut.unit_id, un.ordinal FROM utterances ut JOIN units un ON un.id=ut.unit_id "
+                        "WHERE ut.quote_text LIKE '%カイト、遅いですよ%'").fetchone()
+    tail = "、" + "あ" * 400 + "――と言ったのは〈手がかり〉だった。"
+    rows = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? AND translatable=1 ORDER BY ordinal",
+                        (book.id,)).fetchall()
+    before = next(r for r in rows if r["ordinal"] < line["ordinal"] and r["ordinal"] >= line["ordinal"] - 2)
+    far = rows[-1]
+    assert far["ordinal"] > line["ordinal"] + v.CONTEXT_UNITS  # the fixture has a paragraph well outside the window
+    for unit in (before["id"], far["id"], line["unit_id"]):
+        conn.execute("UPDATE units SET plain_text=plain_text||? WHERE id=?", (tail, unit))
+    for h in conn.execute("SELECT id, evidence_json FROM speaker_hypotheses WHERE utterance_id=?", (line["id"],)):
+        ev = json.loads(h["evidence_json"])  # the reading cited a paragraph well before the window
+        ev["evidence_unit_ids"] = [far["id"], *ev["evidence_unit_ids"]]
+        conn.execute("UPDATE speaker_hypotheses SET evidence_json=? WHERE id=?", (json.dumps(ev), h["id"]))
+    item = next(i for i in v.collect(conn, book.id) if i["ref"] == f"q:{line['id']}")
+    assert "〈手がかり〉" in next(p for p in item["context"] if p.startswith("▶ "))  # the asked paragraph whole
+    around = [p for p in item["context"] if not p.startswith("▶ ") and "あああ" in p]
+    assert around and all("〈手がかり〉" not in p for p in around)  # a paragraph around: its opening only
+    assert any("〈手がかり〉" in p for p in item["evidence_paragraphs"])  # evidence outside the window, whole

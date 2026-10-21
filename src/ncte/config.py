@@ -78,6 +78,10 @@ class TranslationConfig(_Strict):
     scene_max_chars: int = Field(6000, ge=0)
     unit_hard_max_japanese_chars: int = Field(2500, ge=100)
     include_previous_units: int = Field(2, ge=0, le=20)
+    # a request that begins a scene sees the end of the scene before (its source, and its translation when there is
+    # one) up to this many Japanese characters (at least include_previous_units paragraphs): two paragraphs were often
+    # a title page or one line, and the scene goes on from there (a chapter that opens mid-action)
+    scene_start_context_chars: int = Field(600, ge=0, le=5000)
     include_next_units: int = Field(1, ge=0, le=20)
     # retranslating chosen units: the rest of their scene is given as context (not retranslated), up to this many
     # Japanese characters on each side — a lone short sentence otherwise loses the scene it belongs to

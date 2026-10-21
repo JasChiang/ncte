@@ -366,6 +366,6 @@ def apply_genders(conn: sqlite3.Connection, book_id: str, sid: str, text_of: dic
         # goes to the second look
         certainty = "explicit" if gd.certainty == "explicit" else "inferred"
         repo.set_gender(conn, book_id, gd.character_ref, gd.gender, ordinal=min(ordinal[u] for u in ev),
-                        quote=quote, origin="llm", certainty=certainty)
+                        quote=quote, origin="llm", certainty=certainty, basis=gd.basis)
         n += 1
     return n

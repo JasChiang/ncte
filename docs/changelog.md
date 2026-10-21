@@ -1079,3 +1079,17 @@ open workspace/eval/<timestamp>/report.html
 - 敘述片段：`schemas.NarrationSegment`、`analysis.scene.narration_segments`、`split_read` 合併各段的片段、`analysis.narration.for_scene` 帶 `segments`（只給請求看得到的段落）、`analysis.proofread.other_voices`／`told_as`；`context_pipeline` 與 `qa/recheck` 對這幾段不做敘述人稱的程式檢查；`scene_read`、`scene_analyze`、`translate`、`proofread` 提示詞。
 - 兩可的讀法：`proofread` 的 `ambiguity` 分 medium（送修）／low；`FIX_NOTE_AMBIGUITY`；`translate` 的 `review_feedback`、`fix_check` 的不選邊寫法；人物印象 `voice_toward`（migration 34 `character_impressions.voice_toward`、`toward_revealed_ordinal`；`repository.impression_at`、翻譯人物卡與校稿 `characters`）；片段的 `addressee_ref`。
 - 測試：`tests/integration/test_narration_segments.py`（新）、`test_proofread.py`、`test_parallel_passes.py`、`tests/unit/test_prompt_render.py`。730 passed、4 skipped。
+
+## agy 整本實測（2026-10-21～22，main 922da97，Gemini 3.8 Flash；判斷步驟照預設 high）
+- 《超かぐや姫》3,280 段：14 小時 2 分、782 個請求。切場景 22 分、依序讀書 3 小時 37 分、讀後整理 57 分、翻譯約 1 小時 45 分、同形詞約 17 分、兩輪校稿 5 小時 21 分（high，輸出 420 萬 token、幾乎全是推理）、讀者檢查 33 分。Gemini 每週額度用掉約 47 個百分點（含同時段少量分支測試）。
+- 每個請求的推理佔輸出 85–98%；同模型 10/16 在 OpenRouter（medium）每請求推理約 266–1,591 token，這次約 9,700–10,800（覆核 high 32,600）。agy 每請求自帶約 7,600 輸入 token（約 60 個工具說明），沒有快取。
+- 校稿兩輪找到 150 處、驗收後修好 142；讀者檢查 13 處、修好 7；同形詞 98 處、改 73。補問性別兩個請求都回空答案（ADR-088 修正）。可驗收：還不行（待確認 10 段、未解決的嚴重問題 2、1 段保留原文；EPUBCheck 24 個錯）。
+- 和 10/16 OpenRouter 舊版盲評 60 段（評審附前後各五段原文與兩版各自的前後文譯文）：新版較好 9、舊版較好 15、相同 36；判為意思錯：新版 0、舊版 2；新版輸的多是用詞（10）。對照重評 20 段，16 段結論相同、沒有相反的。§224 說書旁白新版譯「叫她彩葉便行囉♪」，敘述者對了。
+
+## 切場景與轉述、四個直接修正（2026-10-22，分支 scene-work-2026-10-21、reported-speech-2026-10-21、fix/relations-known-from-2026-10-21、fix/proofread-accounting-2026-10-21、fix/verify-gender-2026-10-21；ADR-085～089）
+- 切場景各章同時、章節開頭標明來源、場景開頭附上一場結尾（`translation.scene_start_context_chars`）：`context_pipeline.cut_chapters`、`scene_windows.CHAPTER_START`、`context_builder._first_of_scene`／`_before`／`neighbor_context(scene_start=)`。
+- 轉述的動作：`scene_analyze`、`scene_read` 提示詞；`retrieval.memory_context`、`proofread.chunks`。
+- 人物關係 `known_from`：`schemas.RelationOut`、`relations.apply(stats=)`、`relations` 提示詞。
+- 覆核全文、空答案重問（`EmptyAnswerError`、FakeLLM `empty_answer`）、性別依據（migration 35）：`verify.py`、`gender_gaps.py`、`schemas`、`repository.set_gender`、`memory_update`／`scene_read`／`gender_gaps`／`translate`／`proofread` 提示詞。
+- `_shared/told_voice.md`；逐段判定的 `sent`／`checked`／`no_verdict` 與 partial；`cost_report` 兩種 token 欄位。
+- 測試：`tests/integration/test_scene_starts.py`、`test_reported_speech.py`（新）、`test_relations.py`、`test_proofread.py`、`test_cost_report_tokens.py` 等。748 passed、1 skipped；ruff、mypy 通過。

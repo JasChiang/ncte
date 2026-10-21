@@ -20,6 +20,9 @@ from ..memory import repository as repo
 from ..memory.db import utcnow
 
 CONTEXT_UNITS = 4  # paragraphs before and after a disputed line
+AROUND_CHARS = 200  # a paragraph around it: its opening
+FULL_CHARS = 2000  # the asked paragraph and the paragraphs its evidence is in: whole (bounded only against a runaway one)
+MAX_EVIDENCE = 3  # evidence paragraphs outside the window, sent whole
 MAX_ITEMS = 150
 MAX_ADDRESS_ITEMS = 300  # forms found by the program's string match (ADR-037)
 ADDRESS_LINES = 2  # lines shown per form
@@ -32,10 +35,42 @@ def _names(conn: sqlite3.Connection, book_id: str) -> dict[str, str]:
             for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,))}
 
 
-def _window(conn: sqlite3.Connection, book_id: str, ordinal: int, mark: str | None = None) -> list[str]:
+def _window(conn: sqlite3.Connection, book_id: str, ordinal: int, full: set[int] | None = None) -> list[str]:
+    """The paragraphs around ``ordinal``: the marked one (▶) and those in ``full`` (where cited evidence is) whole, the
+    others by their opening — a clue late in a long paragraph is not cut off where the question is decided."""
+    whole = {ordinal} | (full or set())
     rows = conn.execute("SELECT ordinal, plain_text FROM units WHERE book_id=? AND translatable=1 AND ordinal BETWEEN ? "
                         "AND ? ORDER BY ordinal", (book_id, ordinal - CONTEXT_UNITS, ordinal + CONTEXT_UNITS)).fetchall()
-    return [("▶ " if r["ordinal"] == ordinal else "") + match_text(r["plain_text"])[:200] for r in rows]
+    return [("▶ " if r["ordinal"] == ordinal else "")
+            + match_text(r["plain_text"])[:FULL_CHARS if r["ordinal"] in whole else AROUND_CHARS] for r in rows]
+
+
+def _ordinals(conn: sqlite3.Connection, book_id: str, unit_ids: list[str]) -> list[int]:
+    ids = [u for u in unit_ids if u]
+    if not ids:
+        return []
+    return [r[0] for r in conn.execute(f"SELECT ordinal FROM units WHERE book_id=? AND id IN ({','.join('?' * len(ids))}) "
+                                       "ORDER BY ordinal", (book_id, *ids))]
+
+
+def _whole(conn: sqlite3.Connection, book_id: str, ordinals: list[int]) -> list[str]:
+    """Paragraphs given whole (evidence outside the window), in reading order."""
+    if not ordinals:
+        return []
+    marks = ",".join("?" * len(ordinals))
+    return [match_text(r[0])[:FULL_CHARS] for r in conn.execute(
+        f"SELECT plain_text FROM units WHERE book_id=? AND ordinal IN ({marks}) ORDER BY ordinal", (book_id, *ordinals))]
+
+
+def _speaker_evidence(conn: sqlite3.Connection, book_id: str, utterance_id: str) -> list[int]:
+    """Where the reading's evidence for the line's candidates is."""
+    ids: list[str] = []
+    for (ev,) in conn.execute("SELECT evidence_json FROM speaker_hypotheses WHERE utterance_id=?", (utterance_id,)):
+        try:
+            ids += [str(x) for x in (json.loads(ev or "{}").get("evidence_unit_ids") or [])]
+        except (ValueError, AttributeError):
+            continue
+    return _ordinals(conn, book_id, list(dict.fromkeys(ids)))
 
 
 def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
@@ -48,11 +83,16 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
             "ORDER BY un.ordinal", (book_id,)):  # answered by an earlier second look: not asked again (a re-read resets it)
         cands = sorted({h["candidate_character_id"] for h in conn.execute(
             "SELECT candidate_character_id FROM speaker_hypotheses WHERE utterance_id=?", (u["id"],))} & names.keys())
-        items.append({"ref": f"q:{u['id']}", "kind": "speaker", "quote": match_text(u["quote_text"])[:120],
-                      "context": _window(conn, book_id, u["ordinal"]),
-                      "candidates": {c: names[c] for c in cands},
-                      "first_answer": names.get(u["speaker_id_nullable"]) if u["speaker_id_nullable"] else None,
-                      "_ordinal": u["ordinal"]})
+        evidence = _speaker_evidence(conn, book_id, u["id"])
+        near = {o for o in evidence if abs(o - u["ordinal"]) <= CONTEXT_UNITS}
+        item = {"ref": f"q:{u['id']}", "kind": "speaker", "quote": match_text(u["quote_text"])[:120],
+                "context": _window(conn, book_id, u["ordinal"], near),
+                "candidates": {c: names[c] for c in cands},
+                "first_answer": names.get(u["speaker_id_nullable"]) if u["speaker_id_nullable"] else None,
+                "_ordinal": u["ordinal"]}
+        if far := [o for o in evidence if o not in near][:MAX_EVIDENCE]:
+            item["evidence_paragraphs"] = _whole(conn, book_id, far)
+        items.append(item)
     for g in conn.execute("SELECT g.* FROM character_gender g JOIN characters c ON c.id=g.character_id WHERE "
                           "c.book_id=? AND g.certainty='inferred' AND g.origin='llm' AND g.gender IN ('female','male')",
                           (book_id,)):
@@ -63,6 +103,7 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
         spread = hits if len(hits) <= 5 else [hits[i * (len(hits) - 1) // 4] for i in range(5)]
         items.append({"ref": f"g:{c['id']}", "kind": "gender", "character": names.get(c["id"], c["canonical_name"]),
                       "first_answer": g["gender"], "evidence": g["evidence_quote"],
+                      "evidence_paragraph": next(iter(_whole(conn, book_id, [g["ordinal"]])), None),
                       "samples": [match_text(r["plain_text"])[:160] for r in spread],
                       "_version": f"{g['updated_at']}|{g['certainty']}|{g['origin']}"})  # a gender written again is new
     for link in conn.execute("SELECT * FROM entity_links WHERE book_id=? AND origin='scene_analysis' AND "
@@ -205,7 +246,7 @@ def question_items(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any
                 "ORDER BY ordinal", (book_id, *(x.get("unit_ids") or [])))] if x.get("unit_ids") else []
             ordinal = at[0] if at else sc["start_ordinal"]
             out.append({"ref": f"u:{sc['id']}:{i}", "kind": "question", "question": x["question"],
-                        "context": _window(conn, book_id, ordinal), "candidates": cands,
+                        "context": _window(conn, book_id, ordinal, set(at)), "candidates": cands,
                         "_ordinal": ordinal, "_version": str(sc["version"])})
     return out
 

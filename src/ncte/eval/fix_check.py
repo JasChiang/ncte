@@ -24,6 +24,7 @@ from ..llm.base import MODEL_PARAMS, LLMClient, LLMRequest, LLMResponse
 from ..llm.cost import Pricing, estimate_request_cost, estimate_tokens, find_model
 from ..llm.prompt_loader import load_prompt
 from ..llm.schemas import FixCheck, FixCheckOutput
+from ..reports.cost_report import reasoning_tokens
 from ..translation.orchestrator import DEFAULT_STAGE_REASONING
 from ..translation.review import FIX_CHECK_BATCH, fix_outcome
 from ..translation.translator import auto_max_tokens, call_structured
@@ -188,8 +189,8 @@ class _Costs:
         pt, ct = int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
         cost = resp.cost_usd if resp.cost_usd is not None else self.pricing.cost(pt, ct)
         self.requests[rid].update(status=parse_status, cost_usd=cost, prompt_tokens=pt, completion_tokens=ct,
-                                  reasoning_tokens=int((u.get("completion_tokens_details") or {}).get("reasoning_tokens")
-                                                       or 0), latency_ms=resp.latency_ms, provider=resp.provider)
+                                  reasoning_tokens=reasoning_tokens(u), latency_ms=resp.latency_ms,
+                                  provider=resp.provider)
 
     def failure(self, rid: int, exc: Exception) -> None:
         self.requests[rid].update(status="failed", error=str(exc)[:300])

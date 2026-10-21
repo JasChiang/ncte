@@ -1,5 +1,7 @@
 """ADR-051: every paragraph checked against its source; a real error goes back to the translator."""
 
+import json
+
 from ncte.llm.fake import FakeLLM
 
 from ..helpers import run_book
@@ -71,7 +73,8 @@ def test_proofreading_reads_the_stretch_before_and_knows_who_lines_are_said_to(c
 
 
 def test_with_verdicts_every_paragraph_is_answered_for(conn, cfg, fixtures):
-    """Asked for a verdict on each paragraph, the request says so; paragraphs left without one are counted."""
+    """Asked for a verdict on each paragraph, the request says so; paragraphs left without one are sent again alone
+    (once), what still has none is counted and is not checked, and the pass is not complete (ADR-055)."""
     seen = []
 
     def proofread(payload, req):
@@ -83,9 +86,45 @@ def test_with_verdicts_every_paragraph_is_answered_for(conn, cfg, fixtures):
     book, rid, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "proofread": proofread}),
                             mode="context")
     assert seen and all(p.get("verdicts") is True for p in seen)
-    job = conn.execute("SELECT checkpoint_json FROM jobs WHERE run_id=? AND stage='proofread'", (rid,)).fetchone()
-    total = sum(len(p["paragraphs"]) for p in seen)
-    assert f'"no_verdict": {total - len(seen)}' in job["checkpoint_json"]
+    asked_first: list[str] = []
+    agains = []
+    for p in seen:
+        ids = [x["unit_id"] for x in p["paragraphs"]]
+        if set(ids) <= set(asked_first):
+            agains.append(ids)
+        else:
+            asked_first += ids
+    # each stretch is asked again once, with only what its first answer left without a verdict (not its first one)
+    assert agains and len(agains) == len(seen) - len(agains)
+    assert all(len(ids) == len(set(ids)) for ids in agains)
+    job = conn.execute("SELECT status, checkpoint_json FROM jobs WHERE run_id=? AND stage='proofread'",
+                       (rid,)).fetchone()
+    cp = json.loads(job["checkpoint_json"])
+    answered = len(seen)  # each request answered for its first paragraph
+    assert cp["sent"] == len(asked_first) and cp["checked"] == answered
+    assert cp["no_verdict"] == len(asked_first) - answered
+    assert job["status"] == "partial"
+    left = conn.execute("SELECT COUNT(*) FROM qa_findings WHERE run_id=? AND type='proofread_no_verdict'",
+                        (rid,)).fetchone()[0]
+    assert left == cp["no_verdict"]
+
+
+def test_with_verdicts_answered_for_every_paragraph_the_pass_is_complete(conn, cfg, fixtures):
+    seen = []
+
+    def proofread(payload, req):
+        seen.append(payload)
+        return {"checked": [{"unit_id": x["unit_id"], "gist": "g", "ok": True} for x in payload["paragraphs"]],
+                "issues": []}
+
+    cfg.context.proofread_verdicts = True
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "proofread": proofread}),
+                            mode="context")
+    job = conn.execute("SELECT status, checkpoint_json FROM jobs WHERE run_id=? AND stage='proofread'",
+                       (rid,)).fetchone()
+    cp = json.loads(job["checkpoint_json"])
+    assert job["status"] == "succeeded" and cp["no_verdict"] == 0
+    assert cp["checked"] == cp["sent"] == sum(len(p["paragraphs"]) for p in seen)
 
 
 def test_the_commands_record_their_pass_so_a_whole_book_rerun_makes_it_complete(tmp_path, fixtures):

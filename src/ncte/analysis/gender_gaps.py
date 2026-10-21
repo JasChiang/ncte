@@ -108,6 +108,6 @@ def apply(conn: sqlite3.Connection, book_id: str, results: list[tuple[GenderGaps
                     continue
                 first = min((x for x in cited if x is not None), key=lambda x: x[1])
                 repo.set_gender(conn, book_id, cid, a.gender, ordinal=first[1], quote=first[2], origin="llm",
-                                certainty=a.certainty)
+                                certainty=a.certainty, basis=a.basis)
                 stats["genders"] += 1
     return stats

@@ -233,7 +233,8 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
             conn.execute("UPDATE character_gender SET character_id=? WHERE character_id=?", (keep_id, drop_id))
         else:
             set_gender(conn, g_drop["book_id"], keep_id, g_drop["gender"], ordinal=g_drop["ordinal"],
-                       quote=g_drop["evidence_quote"], origin=g_drop["origin"], certainty=g_drop["certainty"])
+                       quote=g_drop["evidence_quote"], origin=g_drop["origin"], certainty=g_drop["certainty"],
+                       basis=g_drop["basis"])
             conn.execute("DELETE FROM character_gender WHERE character_id=?", (drop_id,))
     # scene states and naming proposals refer to characters by id
     for rid, blob in conn.execute("SELECT rowid, state_json FROM scenes WHERE instr(state_json, ?) > 0",
@@ -270,12 +271,13 @@ def drop_aliases(conn: sqlite3.Connection, character_id: str, forms: list[str]) 
 
 
 def set_gender(conn: sqlite3.Connection, book_id: str, character_id: str, gender: str, *, ordinal: int,
-               quote: str | None, origin: str, certainty: str = "explicit") -> str:
+               quote: str | None, origin: str, certainty: str = "explicit", basis: str | None = None) -> str:
     """Record a character's gender. ``explicit``: the text states it (彼女, 少年 …, or the narration places
     them: 女子高生, a uniform skirt, counted among the girls); ``inferred``: speech style or similar. Explicit
     evidence outranks inferred; the earliest evidence of the same rank is kept (visible from there on);
     disagreeing evidence of the same rank makes it 'conflict' (shown to no one). A human setting wins over
-    everything. Returns the stored value."""
+    everything. ``basis`` is what kind of evidence the model read it from (stated, described, belief, inferred),
+    kept with the evidence it describes. Returns the stored value."""
     from ..series import pos
 
     rank = {"inferred": 0, "explicit": 1, "human": 2}
@@ -285,9 +287,9 @@ def set_gender(conn: sqlite3.Connection, book_id: str, character_id: str, gender
 
     def put() -> None:
         conn.execute("INSERT OR REPLACE INTO character_gender(character_id, gender, book_id, ordinal, evidence_quote, "
-                     "origin, updated_at, certainty) VALUES (?,?,?,?,?,?,?,?)",
+                     "origin, updated_at, certainty, basis) VALUES (?,?,?,?,?,?,?,?,?)",
                      (character_id, gender, book_id, ordinal, (quote or "")[:200] or None, origin, utcnow(),
-                      "explicit" if origin == "human" else certainty))
+                      "explicit" if origin == "human" else certainty, None if origin == "human" else basis))
 
     if row is None or new_rank > old_rank or origin == "human":
         put()
@@ -299,8 +301,8 @@ def set_gender(conn: sqlite3.Connection, book_id: str, character_id: str, gender
                      (utcnow(), character_id))
         return "conflict"
     if pos(conn, book_id, ordinal) < pos(conn, row["book_id"], row["ordinal"]):
-        conn.execute("UPDATE character_gender SET book_id=?, ordinal=?, evidence_quote=?, updated_at=? "
-                     "WHERE character_id=?", (book_id, ordinal, (quote or "")[:200] or None, utcnow(), character_id))
+        conn.execute("UPDATE character_gender SET book_id=?, ordinal=?, evidence_quote=?, basis=?, updated_at=? "
+                     "WHERE character_id=?", (book_id, ordinal, (quote or "")[:200] or None, basis, utcnow(), character_id))
     return gender
 
 
@@ -311,13 +313,23 @@ def gender_at(conn: sqlite3.Connection, character_id: str, hz: tuple[float, int]
 
 
 def gender_view(conn: sqlite3.Connection, character_id: str, hz: tuple[float, int]) -> tuple[str, str] | None:
-    """(gender, certainty) visible at ``hz``, or None."""
+    """(gender, certainty) visible at ``hz``, or None. What kind of evidence it rests on: ``gender_basis``."""
     from ..series import pos
 
     row = conn.execute("SELECT * FROM character_gender WHERE character_id=?", (character_id,)).fetchone()
     if row is None or row["gender"] not in ("female", "male") or pos(conn, row["book_id"], row["ordinal"]) > hz:
         return None
     return str(row["gender"]), str(row["certainty"])
+
+
+def gender_basis(conn: sqlite3.Connection, character_id: str) -> str | None:
+    """``described`` (the narration shows it: attire, a gendered role, group or place) or ``belief`` (someone takes
+    them so): kinds of evidence a later scene can overturn (dressed as the other sex, a disguise), so the translation
+    and proofreading cards say so; None for a gender stated outright, inferred (already marked), or set by a person."""
+    row = conn.execute("SELECT basis, origin FROM character_gender WHERE character_id=?", (character_id,)).fetchone()
+    if row is None or row["origin"] == "human" or row["basis"] not in ("described", "belief"):
+        return None
+    return str(row["basis"])
 
 
 def character_basics(conn: sqlite3.Connection, character_id: str, hz: tuple[float, int] | None = None) -> dict[str, Any]:

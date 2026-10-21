@@ -1,5 +1,7 @@
 """Conditional prompt blocks (only rules about data the request carries)."""
 
+from pathlib import Path
+
 from ncte.llm.prompt_loader import load_prompt
 
 
@@ -392,3 +394,13 @@ def test_proofread_asked_for_verdicts_shows_one_output_format_with_them():
     assert '"checked"' in out and "沒有問題就輸出 {\"issues\": []}" not in out  # not a second format without verdicts
     plain = p.render({"paragraphs": []}).split("## 輸出", 1)[1]
     assert '"checked"' not in plain and "沒有問題就輸出" in plain
+
+
+def test_a_teller_not_told_is_judged_by_proofreading_as_the_translation_writes_it():
+    """A stretch told by someone the source does not name: translation keeps the source's own first person as「我」,
+    and proofreading reads the same words (one shared rule), so it does not call that「我」an error."""
+    rule = (Path(__file__).parents[2] / "prompts" / "_shared" / "told_voice.md").read_text(encoding="utf-8").strip()
+    assert "照樣譯成「我」" in rule
+    for task in ("translate", "proofread"):
+        assert rule in load_prompt(task).text
+    assert "譯文卻把他寫成「我」或某個角色，是錯" not in load_prompt("proofread").text

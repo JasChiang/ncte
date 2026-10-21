@@ -4,8 +4,9 @@ A translator notes 「お父様」, 婚約者, 先生と生徒 while reading and
 all those notes together. The engine does the same: the read pass notes relations the text states (``relation_notes``,
 by character id), and here, after reading, each pair with enough material — those notes, the facts about both (by id,
 or naming either by full name, short name or alias), how they address each other, how often they speak in the same
-scene — is put to the model, a few pairs per request. The model may cite only that pair's own evidence; the program
-shows each relation from its earliest evidence and, when the model says a later relation replaces an earlier one
+scene — is put to the model, a few pairs per request. The model may cite only that pair's own evidence and says from
+which of it a reader can know the relation (two passages may be needed together, a later one may only restate it);
+the program shows each relation from there and, when the model says a later relation replaces an earlier one
 (宿敵 → 未婚夫妻), ends the earlier one there. Pairs the material says should be related but came back without a relation
 are asked once more. Relations the model made are replaced by a new run; those set by a person stay.
 """
@@ -298,9 +299,14 @@ def unanswered(pairs: list[dict[str, Any]], results: list[tuple[RelationsOutput,
     return [p for p in pairs if p["should"] and (p["a"], p["b"]) not in got]
 
 
-def apply(conn: sqlite3.Connection, book_id: str, results: list[tuple[RelationsOutput, dict[str, Any]]]) -> int:
-    """Replace the model's relations of the book (a person's stay), each shown from its earliest cited evidence."""
+def apply(conn: sqlite3.Connection, book_id: str, results: list[tuple[RelationsOutput, dict[str, Any]]],
+          stats: dict[str, int] | None = None) -> int:
+    """Replace the model's relations of the book (a person's stay), each shown from where a reader can know it: the
+    evidence the model names in ``known_from`` (one of the relation's own cited evidence). Without a usable one it is
+    shown from its latest cited evidence — never earlier than it may be knowable — and counted in ``stats``
+    (``known_from_missing``)."""
     n = 0
+    stats = stats if stats is not None else {}
     with Transaction(conn):
         manual = {(r["a_id"], r["b_id"], r["relation_zh"]) for r in conn.execute(
             "SELECT * FROM relations WHERE book_id=? AND origin!='llm'", (book_id,))}
@@ -321,7 +327,12 @@ def apply(conn: sqlite3.Connection, book_id: str, results: list[tuple[RelationsO
                 rel = at_period(r.relation.strip()[:20], when)
                 if (a, b, rel) in manual or (b, a, rel) in manual:
                     continue
-                since = min(o for _, _, o in cited)
+                kf = r.known_from.strip()
+                if kf in r.facts and kf in ev and kf in allowed:
+                    since = ev[kf][2]
+                else:  # the model did not say where it can be known: no earlier than every piece of it is there
+                    since = max(o for _, _, o in cited)
+                    stats["known_from_missing"] = stats.get("known_from_missing", 0) + 1
                 conn.execute(
                     "INSERT OR REPLACE INTO relations(book_id, a_id, b_id, relation_zh, a_is, b_is, since_ordinal, "
                     "fact_ids_json, reason, created_at, kind, certainty, origin, evidence_json, period) "

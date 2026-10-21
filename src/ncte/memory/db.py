@@ -713,6 +713,10 @@ ALTER TABLE glossary ADD COLUMN readings_json TEXT NOT NULL DEFAULT '[]';
 ALTER TABLE character_impressions ADD COLUMN voice_toward TEXT NOT NULL DEFAULT '';
 ALTER TABLE character_impressions ADD COLUMN toward_revealed_ordinal INTEGER;
 """),
+    (35, "what kind of evidence a gender rests on: stated, described (attire, a gendered role, group or place), "
+         "someone's belief, inferred — kept with the gender, the model's reading", """
+ALTER TABLE character_gender ADD COLUMN basis TEXT;
+"""),
 ]
 
 

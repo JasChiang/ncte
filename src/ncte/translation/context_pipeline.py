@@ -27,7 +27,7 @@ from ..analysis.memory_update import apply_memory_update, build_memory_payload
 from ..analysis.naming import apply_naming, auto_settle, build_naming_payload, model_view, pending
 from ..analysis.scene import apply_scene_analysis, build_analysis_payload, forget_scene_cards, get_scene
 from ..analysis.split_read import MIN_PART, call_in_parts, even_parts, merge_outputs, subset_payload
-from ..errors import ContentBlockedError, FatalAPIError, LLMError, ModelOutputError
+from ..errors import ContentBlockedError, EmptyAnswerError, FatalAPIError, LLMError, ModelOutputError
 from ..llm.prompt_loader import load_prompt
 from ..llm.schemas import MemoryUpdateOutput, NamingOutput, SceneAnalysisOutput, VerifyOutput
 from ..memory.db import Transaction, utcnow
@@ -45,6 +45,8 @@ PART_BEFORE = 4  # paragraphs of the part before, given to a later part of a lon
 
 
 class ContextOrchestrator(Orchestrator):
+    SCENE_START_CONTEXT = True
+
     def prepare(self) -> None:
         super().prepare()
         self.analyze_prompt = load_prompt("scene_analyze")
@@ -150,6 +152,7 @@ class ContextOrchestrator(Orchestrator):
                 story = story_hrefs(self.conn, self.book.id)
         prompt = load_prompt("scene_windows")
         stats = {"chapters": 0, "windows": 0, "breaks": 0, "unsure": 0, "found_chapters": 0}
+        todo: list[tuple[sqlite3.Row, list[sqlite3.Row]]] = []
         for ch in chapters:
             if end is not None and ch["start_ordinal"] > end:
                 break
@@ -157,9 +160,16 @@ class ContextOrchestrator(Orchestrator):
                 rows = sw.chapter_rows(self.conn, self.book.id, ch)
             if not rows or rows[0]["id"] in decided or (story is not None and not {r["resource_href"] for r in rows} & story):
                 continue
+            todo.append((ch, rows))
+
+        def cut(i: int) -> tuple[list[tuple[int, Any]], str]:
+            """One chapter's windows, in order (each starts from the scene the one before left open). Chapters need
+            nothing from each other — cutting reads only the chapter's own paragraphs — so they run side by side."""
+            ch, rows = todo[i]
 
             def ask(pl: dict[str, Any], label: str = ch["label"]) -> SceneWindowsOutput | None:
-                stats["windows"] += 1
+                with self.lock:
+                    stats["windows"] += 1
                 try:
                     out = self._llm("scene_windows", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]])
                 except FatalAPIError:
@@ -170,21 +180,30 @@ class ContextOrchestrator(Orchestrator):
                 assert isinstance(out, SceneWindowsOutput)
                 return out
 
-            breaks, first_kind = sw.cut_chapter(rows, ask, title=ch["label"], known=ch["source"] == "toc",
-                                                max_units=self.cfg.memory.max_scene_units)
+            return sw.cut_chapter(rows, ask, title=ch["label"], known=ch["source"] == "toc",
+                                  max_units=self.cfg.memory.max_scene_units)
+
+        def keep(i: int, result: tuple[list[tuple[int, Any]], str]) -> None:
+            ch, rows = todo[i]
+            breaks, first_kind = result
             with self.lock:
-                found = sw.save(self.conn, self.book.id, rows, breaks, first_kind)
+                found = sw.save(self.conn, self.book.id, rows, breaks, first_kind, ch["source"])
                 if found and ch["source"] == "none":  # chapters the model found in a book without a TOC
                     starts = [(rows[0]["ordinal"], ch["label"])] + [
                         (r["ordinal"], "") for r in rows if r["id"] in set(found)]
                     with Transaction(self.conn):
                         save_chapters(self.conn, self.book.id, starts, "model")
-                        self.conn.executemany("UPDATE scene_breaks SET origin='chapter' WHERE book_id=? AND unit_id=?",
-                                              [(self.book.id, u) for u in found])
+                        self.conn.executemany("UPDATE scene_breaks SET origin='chapter', reason=? || reason "
+                                              "WHERE book_id=? AND unit_id=?",
+                                              [(sw.CHAPTER_START["model"] + "：", self.book.id, u) for u in found])
             stats["chapters"] += 1
             stats["breaks"] += len(breaks)
             stats["unsure"] += sum(not b.sure for _, b in breaks)
             stats["found_chapters"] += len(found)
+
+        if self._side_by_side(len(todo), cut, keep, "cutting scenes"):
+            self.log(f"scenes cut by chapter (stopped): {stats}")
+            return stats  # the chapters not cut yet are cut on resume
         with self.lock:
             segment_book(self.conn, self.cfg, self.book.id)
         self.log(f"scenes cut by chapter: {stats}")
@@ -550,8 +569,10 @@ class ContextOrchestrator(Orchestrator):
                                        blocked, min_part=1)
             except FatalAPIError:
                 raise
-            except LLMError as exc:  # those characters stay without a gender
-                self._finding(None, "gender_gaps_failed", "low", str(exc)[:300])
+            except LLMError as exc:  # those characters stay without a gender: said in the report, and the step is partial
+                names = "、".join(c["name"] for c in req["characters"])
+                self._finding(None, "gender_gaps_failed", "medium",
+                              f"{len(lk['_chars'])} 個角色沒問到性別（{names[:200]}）：{str(exc)[:200]}")
                 stats["failed"] += len(lk["_chars"])
                 continue
             stats["blocked"] += len(blocked)
@@ -562,8 +583,11 @@ class ContextOrchestrator(Orchestrator):
             with self.lock:
                 stats.update(gender_gaps.apply(self.conn, self.book.id, results))
         if record_job:
-            self._set_job("gender_gaps", self.book.id, "succeeded", None, stats)
+            self._set_job("gender_gaps", self.book.id, "partial" if stats["failed"] or stats["blocked"] else "succeeded",
+                          None, stats)
         self.log(f"genders asked again: {stats}")
+        if stats["failed"]:
+            self.log(f"  {stats['failed']} characters were not asked (the request failed): they stay without a gender")
         return stats
 
     def relations_pass(self, *, record_job: bool = True) -> int:
@@ -615,12 +639,16 @@ class ContextOrchestrator(Orchestrator):
         if cut and self._paused("relations"):  # put together from all pairs at once: asked again on resume
             return 0
         n = 0
+        stats: dict[str, int] = {}
         if results:
             with self.lock:
-                n = relations.apply(self.conn, self.book.id, results)
+                n = relations.apply(self.conn, self.book.id, results, stats=stats)
         if record_job:
-            self._set_job("relations", self.book.id, "succeeded", None, {"relations": n, "pairs": len(pairs)})
-        self.log(f"relations: {n} ({len(pairs)} pairs asked, {len(again)} asked again)")
+            self._set_job("relations", self.book.id, "succeeded", None, {"relations": n, "pairs": len(pairs), **stats})
+        missing = stats.get("known_from_missing", 0)
+        self.log(f"relations: {n} ({len(pairs)} pairs asked, {len(again)} asked again"
+                 + (f"; {missing} without where they can be known: shown from their latest evidence" if missing else "")
+                 + ")")
         return n
 
     def house_style_pass(self, *, record_job: bool = True) -> dict[str, int]:
@@ -831,8 +859,10 @@ class ContextOrchestrator(Orchestrator):
         return story_hrefs(self.conn, self.book.id)
 
     def _pass_status(self, stats: dict[str, int]) -> str:
-        # a stretch refused or failed was not looked at; with chosen paragraphs only, the book was not looked at whole
-        return "partial" if stats["blocked"] or stats["failed"] or self.opts.unit_ids else "succeeded"
+        # a stretch refused or failed was not looked at, nor a paragraph left without the verdict asked for (ADR-055);
+        # with chosen paragraphs only, the book was not looked at whole
+        return "partial" if stats["blocked"] or stats["failed"] or stats.get("no_verdict") or self.opts.unit_ids \
+            else "succeeded"
 
     def _reader_part(self, part: list[dict[str, Any]], prompt: Any, stats: dict[str, int],
                      before: list[dict[str, Any]] | None = None) -> None:
@@ -1048,6 +1078,32 @@ class ContextOrchestrator(Orchestrator):
                                   mark=mark)
         return stats, stopped
 
+    def _verdicts_asked_again(self, parsed: Any, valid: set[str], visible: list[dict[str, Any]],
+                              cast: Any, extra: dict[str, Any], stage: str, prompt: Any) -> Any:
+        """With verdicts asked for: the paragraphs a stretch's answer left without one are sent again, alone (once);
+        the rest is not checked twice. What still has none is counted as not looked at."""
+        from ..llm.schemas import ProofreadOutput
+
+        answered = {c.unit_id for c in parsed.checked} | {it.unit_id for it in parsed.issues}
+        missing = [p for p in visible if p["unit_id"] in valid - answered]
+        if not missing:
+            return parsed
+        blocked: list[str] = []
+        try:
+            again = call_in_parts(lambda pl: self._llm(stage, prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
+                                  {"task": "proofread", "paragraphs": missing, "characters": cast, **extra,
+                                   "verdicts": True}, "paragraphs", blocked)
+        except FatalAPIError:
+            raise
+        except LLMError:
+            return parsed  # counted as without a verdict by the caller
+        if again is None:
+            return parsed
+        assert isinstance(again, ProofreadOutput)
+        asked = {p["unit_id"] for p in missing} - set(blocked)
+        return ProofreadOutput(checked=[*parsed.checked, *(c for c in again.checked if c.unit_id in asked)],
+                               issues=[*parsed.issues, *(it for it in again.issues if it.unit_id in asked)])
+
     def _proofread_part(self, part: list[dict[str, Any]], before: list[dict[str, Any]], prompt: Any,
                         stats: dict[str, int]) -> None:
         from ..analysis import proofread
@@ -1083,11 +1139,17 @@ class ContextOrchestrator(Orchestrator):
             return
         assert isinstance(parsed, ProofreadOutput)
         valid = {p["unit_id"] for p in part} - set(blocked)  # what was really checked against the source
-        stats["checked"] += len(valid)
         looked = valid
-        if self.cfg.context.proofread_verdicts:  # paragraphs the model gave no verdict for were not looked at
-            looked = valid & {c.unit_id for c in parsed.checked}
+        if self.cfg.context.proofread_verdicts:  # paragraphs the model gave no verdict for were not looked at (ADR-055)
+            parsed = self._verdicts_asked_again(parsed, valid, visible, cast, extra, stage, prompt)
+            looked = valid & ({c.unit_id for c in parsed.checked} | {it.unit_id for it in parsed.issues})
+            stats["sent"] = stats.get("sent", 0) + len(valid)
             stats["no_verdict"] = stats.get("no_verdict", 0) + len(valid - looked)
+            for uid in sorted(valid - looked):
+                self._finding(uid, "proofread_no_verdict", "low", "proofreading gave no verdict for this paragraph, "
+                              "asked again on its own", translation_id=tids.get(uid))
+            valid = looked  # only what was answered for counts as checked
+        stats["checked"] += len(valid)
         _outlived(self, stats, {u: tids[u] for u in looked}, parsed.issues, "proofread",
                   ("review:proofread_%", "fix_still_wrong", "fix_undecided", "fix_regressed"))
         conflicts = in_conflict(self, valid)
@@ -1375,7 +1437,8 @@ class ContextOrchestrator(Orchestrator):
         self.check_budget(est)
         correction = None
         model = self.model_for(stage)
-        for attempt in range(2):
+        wrong = empty = 0
+        while True:
             try:
                 parsed, _rid, mode = call_structured(
                     self.client, self.recorder, stage=stage, model=model, prompt=prompt, payload=payload,
@@ -1384,11 +1447,19 @@ class ContextOrchestrator(Orchestrator):
                 if model == self.model:
                     self.translator.mode = mode
                 return parsed
+            except EmptyAnswerError:
+                # no answer at all (a CLI turn that ended empty): nothing to correct, the same request again — two
+                # empty turns in a row happen (2026-10-21: a whole step lost to them), so a few times
+                empty += 1
+                if empty > self.EMPTY_RETRIES:
+                    raise
             except ModelOutputError as exc:
-                if attempt == 1:
+                wrong += 1
+                if wrong == 2:
                     raise
                 correction = str(exc)
-        raise AssertionError("unreachable")
+
+    EMPTY_RETRIES = 3  # empty answers asked again, on top of the one corrected retry of a wrong answer
 
     LONG_SCENE = 1.5  # a scene longer than this many times max_scene_units is read in even parts (it stays one scene)
 

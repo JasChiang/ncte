@@ -22,28 +22,30 @@ FIX_LEAST_UNITS = 2  # a fix sees at least this many paragraphs on each side (wh
 
 
 def neighbor_context(conn: sqlite3.Connection, cfg: Config, book_id: str, rows: list[sqlite3.Row],
-                     *, scene_id: str | None = None, whole_scene: bool = False, fix: bool = False) -> dict[str, Any]:
+                     *, scene_id: str | None = None, whole_scene: bool = False, fix: bool = False,
+                     scene_start: bool = False) -> dict[str, Any]:
     """Previous / next units as context. ``whole_scene`` (retranslating chosen units): the rest of the scene on
     both sides, nearest first, up to ``targeted_scene_context_chars`` Japanese characters per side. ``fix`` (a fix in
     the "window" scope): ``around`` each fixed unit its own window instead (``fix_windows``) — the fixes of one request
-    may be far apart in their scene."""
+    may be far apart in their scene. ``scene_start`` (context mode, a request per scene): a request that begins a scene
+    sees the end of the scene before, up to ``scene_start_context_chars``."""
     first, last = rows[0]["ordinal"], rows[-1]["ordinal"]
     if fix and (scene_id or rows[-1]["scene_id"]) and cfg.translation.fix_context_chars:
         return {"around": fix_windows(conn, cfg, book_id, rows)}
     if whole_scene and (scene_id or rows[-1]["scene_id"]) and cfg.translation.targeted_scene_context_chars:
         return _scene_window(conn, book_id, rows, scene_id or rows[-1]["scene_id"],
-                             budget=cfg.translation.targeted_scene_context_chars)
+                             budget=cfg.translation.targeted_scene_context_chars,
+                             start_chars=cfg.translation.scene_start_context_chars if scene_start else 0)
     # lookahead never crosses the current scene (spec §5.5), in every mode; "none" disables it
     scene_id = scene_id or rows[-1]["scene_id"]
+    starts_scene = scene_start and bool(scene_id) and _first_of_scene(conn, book_id, rows[0], scene_id)
     if cfg.app.lookahead_scope == "none":
         nxt_limit = 0
     else:
         nxt_limit = cfg.translation.include_next_units
     scene_clause = " AND scene_id=?" if scene_id else ""
-    prev = conn.execute(
-        "SELECT * FROM units WHERE book_id=? AND ordinal<? AND translatable=1 AND kind IN ('text','heading') "
-        "AND spine_index IS NOT NULL ORDER BY ordinal DESC LIMIT ?",
-        (book_id, first, cfg.translation.include_previous_units)).fetchall()[::-1]
+    prev = _before(conn, book_id, first, cfg.translation.include_previous_units,
+                   cfg.translation.scene_start_context_chars if starts_scene else 0)
     nxt_params: list[Any] = [book_id, last]
     if scene_clause:
         nxt_params.append(scene_id)
@@ -60,6 +62,29 @@ def neighbor_context(conn: sqlite3.Connection, cfg: Config, book_id: str, rows: 
         before.append(item)
     return {"context_before": before,
             "context_after": [{"unit_id": r["id"], "source": r["source_text"]} for r in nxt]}
+
+
+def _first_of_scene(conn: sqlite3.Connection, book_id: str, row: sqlite3.Row, scene_id: str) -> bool:
+    got = conn.execute("SELECT MIN(ordinal) FROM units WHERE book_id=? AND scene_id=? AND translatable=1 AND kind IN "
+                       "('text','heading') AND spine_index IS NOT NULL", (book_id, scene_id)).fetchone()
+    return got is not None and got[0] == row["ordinal"]
+
+
+def _before(conn: sqlite3.Connection, book_id: str, first: int, least: int, chars: int) -> list[sqlite3.Row]:
+    """The paragraphs just before ``first``, in story order: at least ``least``, and on to ``chars`` Japanese
+    characters (a scene's start: the end of the scene before, whichever chapter it is in)."""
+    out: list[sqlite3.Row] = []
+    used = 0
+    # a paragraph the content filter refused would get this request refused too (reading leaves it out the same way)
+    for r in conn.execute("SELECT * FROM units u WHERE book_id=? AND ordinal<? AND translatable=1 AND kind IN "
+                          "('text','heading') AND spine_index IS NOT NULL AND NOT EXISTS (SELECT 1 FROM qa_findings f "
+                          "WHERE f.unit_id=u.id AND f.type IN ('content_blocked','read_blocked')) "
+                          "ORDER BY ordinal DESC LIMIT 40", (book_id, first)):
+        if len(out) >= least and used >= chars:
+            break
+        out.append(r)
+        used += len(r["plain_text"])
+    return out[::-1]
 
 
 def fix_window_rows(conn: sqlite3.Connection, cfg: Config, book_id: str, row: sqlite3.Row,
@@ -131,8 +156,10 @@ def _with_translation(conn: sqlite3.Connection, rows: list[sqlite3.Row]) -> list
 
 
 def _scene_window(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row],
-                  scene_id: str, *, budget: int, least: int = 1) -> dict[str, Any]:
+                  scene_id: str, *, budget: int, least: int = 1, start_chars: int = 0) -> dict[str, Any]:
     prev, nxt = _window_rows(conn, book_id, rows, scene_id, budget=budget, least=least)
+    if not prev and start_chars and _first_of_scene(conn, book_id, rows[0], scene_id):
+        prev = _before(conn, book_id, rows[0]["ordinal"], 1, start_chars)  # retranslating a scene's start
     return {"context_before": _with_translation(conn, prev),
             "context_after": [{"unit_id": r["id"], "source": r["source_text"]} for r in nxt]}
 

@@ -19,7 +19,13 @@ from collections.abc import Callable
 from typing import Any
 
 from ..epub.units import RUBY_NOTATION
-from ..errors import ContentBlockedError, FatalAPIError, RequestRejectedError, RetryableAPIError
+from ..errors import (
+    ContentBlockedError,
+    EmptyAnswerError,
+    FatalAPIError,
+    RequestRejectedError,
+    RetryableAPIError,
+)
 from .base import LLMRequest, LLMResponse
 from .cost import estimate_tokens
 
@@ -254,6 +260,8 @@ class FakeLLM:
             raise FatalAPIError("HTTP 402 (insufficient credits): fake")
         if fault == "rejected":
             raise RequestRejectedError("HTTP 400: fake rejection")
+        if fault == "empty_answer":  # a CLI source's turn that ended with no answer
+            raise EmptyAnswerError("empty answer")
         data = self.responders[stage](payload, req)
         if stage == "translate" and data.get("translations"):
             tr = data["translations"]

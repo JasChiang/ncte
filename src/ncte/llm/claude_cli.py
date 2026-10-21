@@ -33,7 +33,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ..errors import FatalAPIError, ModelOutputError, RetryableAPIError
+from ..errors import EmptyAnswerError, FatalAPIError, RetryableAPIError
 from .base import LLMRequest, LLMResponse
 
 PREFIX = "claude/"
@@ -175,7 +175,7 @@ class ClaudeCLIClient:
             else:
                 result = str(out.get("result") or "")
             if not result.strip():
-                raise ModelOutputError("empty answer")
+                raise EmptyAnswerError("empty answer")
             u = out.get("usage") or {}
             cache_write = int(u.get("cache_creation_input_tokens") or 0)
             cache_read = int(u.get("cache_read_input_tokens") or 0)

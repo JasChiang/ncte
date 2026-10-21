@@ -45,7 +45,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..errors import FatalAPIError, ModelOutputError, RetryableAPIError
+from ..errors import EmptyAnswerError, FatalAPIError, RetryableAPIError
 from .base import LLMRequest, LLMResponse
 from .claude_cli import EFFORTS, LIMIT_MAX, LIMIT_WAIT, RETRY_WAITS, ClaudeCLIClient, effort_of
 
@@ -362,7 +362,7 @@ class CodexCLIClient:
                 except OSError:
                     result = ""
                 if not result.strip():
-                    raise ModelOutputError("empty answer")
+                    raise EmptyAnswerError("empty answer")
                 u = usage_in or {}
 
                 def n(key: str, u: dict[str, Any] = u) -> int:

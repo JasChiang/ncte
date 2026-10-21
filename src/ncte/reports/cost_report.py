@@ -12,6 +12,20 @@ def _ts(s: str | None) -> datetime | None:
     return datetime.strptime(s, "%Y-%m-%dT%H:%M:%SZ") if s else None
 
 
+def reasoning_tokens(u: dict[str, Any]) -> int:
+    """Reasoning tokens a request's usage reports: OpenRouter nests them (``completion_tokens_details``), the plan
+    sources (claude, codex, agy) write them at the top; one form per request, never both added."""
+    nested = (u.get("completion_tokens_details") or {}).get("reasoning_tokens")
+    return int(nested if nested is not None else u.get("reasoning_tokens") or 0)
+
+
+def cached_tokens(u: dict[str, Any]) -> int:
+    """Input tokens read from the cache, in either form (``prompt_tokens_details.cached_tokens`` or the plan sources'
+    ``cache_read_tokens``)."""
+    nested = (u.get("prompt_tokens_details") or {}).get("cached_tokens")
+    return int(nested if nested is not None else u.get("cache_read_tokens") or 0)
+
+
 def cost_report(conn: sqlite3.Connection, *, run_id: str | None = None, book_id: str | None = None) -> dict[str, Any]:
     where, params = [], []
     if run_id:
@@ -34,10 +48,9 @@ def cost_report(conn: sqlite3.Connection, *, run_id: str | None = None, book_id:
     for r in rows:
         u = json.loads(r["usage_json"] or "{}")
         pt, ct = int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
-        rt = int((u.get("completion_tokens_details") or {}).get("reasoning_tokens") or 0)
-        if ct and "completion_tokens_details" not in u:
+        rt, cached = reasoning_tokens(u), cached_tokens(u)
+        if ct and "completion_tokens_details" not in u and "reasoning_tokens" not in u:
             tot["requests_without_reasoning_detail"] += 1
-        cached = int((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
         tot["prompt_tokens"] += pt
         tot["completion_tokens"] += ct
         tot["reasoning_tokens"] += rt

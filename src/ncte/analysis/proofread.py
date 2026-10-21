@@ -44,6 +44,13 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
 
     best = latest_texts(conn, book_id)
     actions = unit_actions(conn, book_id)  # who does what where the subject is left out, as read (ADR-067)
+    acting: dict[str, set[str]] = {}  # and their ids: their cards go with the stretch, present or not (ADR-086)
+    for (state,) in conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND state_json LIKE '%\"actions\"%'",
+                                 (book_id,)):
+        for a in json.loads(state or "{}").get("actions") or []:
+            if a.get("unit_id"):
+                acting.setdefault(a["unit_id"], set()).update(
+                    x for x in [*a.get("subject_candidates", []), *a.get("object_candidates", [])] if x)
     forms_at = form_positions(conn, book_id)
     names_at: dict[str, dict[str, str]] = {}  # a speaker is named as known there, never by a later reveal
     said: dict[str, set[str]] = {}
@@ -104,6 +111,8 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
             item["_who"] = sorted(said.get(r["id"], set()) | set(told.get(r["id"], {})))
             if rel := line_relations(conn, book_id, r["id"], r["ordinal"], names):  # these two, as of this paragraph
                 item["relation"] = rel
+        if acting.get(r["id"]):
+            item["_who"] = sorted(set(item.get("_who", [])) | acting[r["id"]])
         cur.append(item)
     if cur:
         out.append(cur)
@@ -170,7 +179,7 @@ def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> 
             conn, c["id"], pos(conn, book_id, max(p["_at"] for p in part)) if start is not None else None)
         if said.get(item["ja"]):
             item["readings"] = said[item["ja"]]
-        item.update({k: basics[k] for k in ("gender", "narrator") if k in basics})
+        item.update({k: basics[k] for k in ("gender", "gender_basis", "narrator") if k in basics})
         if imp := impression_at(conn, c["id"], start):  # the way of speaking in force where the stretch begins
             item["voice"] = imp["voice"]
             if imp.get("voice_toward"):
