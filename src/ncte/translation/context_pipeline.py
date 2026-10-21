@@ -987,8 +987,13 @@ class ContextOrchestrator(Orchestrator):
         done: list[dict[str, Any]] = list(saved.pop("passes", []))
         since = saved.get("since_translation_id")  # an earlier whole-book pass: only what is newer (2.11)
         prompt = load_prompt("proofread")
+        from ..config import CROSS_PROOFREAD
+
+        cross = self.cfg.review.cross_proofread_model
         while True:
             mark = {"pass": k, "passes": done} if n > 1 else {}
+            # ADR-082: the last pass reads with another company's eyes when chosen (fixes stay on the run's model)
+            self._proofread_stage = CROSS_PROOFREAD if cross and k == n else "proofread"
             stats, stopped = self._proofread_once(saved, prompt, record_job, mark)
             if stopped:
                 return stats
@@ -1054,7 +1059,8 @@ class ContextOrchestrator(Orchestrator):
         visible = [{k: v for k, v in p.items() if not k.startswith("_")} for p in part]
         blocked: list[str] = []
         try:  # the content filter may refuse a stretch; it is then checked in halves
-            parsed = call_in_parts(lambda pl: self._llm("proofread", prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
+            stage = getattr(self, "_proofread_stage", "proofread")
+            parsed = call_in_parts(lambda pl: self._llm(stage, prompt, pl, [p["unit_id"] for p in pl["paragraphs"]]),
                                    {"task": "proofread", "paragraphs": visible, "characters": cast, **extra,
                                     **({"verdicts": True} if self.cfg.context.proofread_verdicts else {})},
                                    "paragraphs", blocked)

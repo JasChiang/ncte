@@ -1071,3 +1071,7 @@ open workspace/eval/<timestamp>/report.html
 - 提示詞：`scene_read`、`memory_update`、`gender_gaps`（新）的性別依據；`verify` 一詞；`_shared/punctuation.md` 引號依意思、`proofread` 的體例一句、`confirm` 的引號；`false_friends`（新）；`proofread` 逐段判定時只有一種輸出格式。
 - 程式：`analysis/gender_gaps.py`（新；`ContextOrchestrator.gender_gaps_pass` 在第二次確認之後，stage `verify:genders`）、`analysis/false_friends.py`（新；初譯後、校稿前）、`repository.note_false_friend`、`schemas.GenderGapsOutput`／`FalseFriendsOutput`；`qa.rules` 的 `quote_mismatch` 分級並交確認；`context.gender_gaps`、`context.false_friends`；網頁執行步驟名稱。新增相依 `opencc>=1.1`。
 - 抽查數字見 ADR-081。測試：`tests/integration/test_gender_gaps.py`、`test_quote_confirm.py`、`test_false_friends.py`（新）、`tests/unit/test_prompt_render.py`、`test_qa_rules.py`。708 passed、4 skipped。
+
+## Antigravity 來源、交叉校稿（2026-10-21，分支 agy-source-2026-10-21，自 c3d77e6；ADR-082）
+- `llm/agy_cli.py`（新）：`AgyCLIClient`、`_run_turn`（讀 stream-json 的 result 事件後停掉程序）、`plan_usage`（`/quota`）、`family_of`／`newest_of`（系列名稱）、`forget`（刪除那次對話的檔案）。`config`：來源 `agy`、`use_agy_models`、`AGY_MODEL`、`review.cross_proofread_model`／`NCTE_CROSS_PROOFREAD`、`CROSS_PROOFREAD` 步驟名；`cli` 的 `agy/` 路由；校稿最後一輪 `proofread:cross`；`reports/acceptance` 的 `proofread_by`；`cost_report`、`dryrun` 認得 agy；網頁設定頁的 Antigravity 連線與交叉校稿開關（`/api/settings/cross`）。
+- 測試：`tests/unit/test_agy_cli.py`（新）、`tests/integration/test_proofread_passes.py`、`test_gui_manage.py`。725 passed、4 skipped。

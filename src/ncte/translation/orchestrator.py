@@ -468,7 +468,8 @@ class Orchestrator:
         assert self.pricing is not None
         MODEL_PARAMS[self.model] = set(self.pricing.supported_parameters)
         out: dict[str, Pricing] = {}
-        wanted = {*self.cfg.openrouter.stage_models.values(), self.cfg.openrouter.review_model} - {None, self.model}
+        wanted = {*self.cfg.openrouter.stage_models.values(), self.cfg.openrouter.review_model,
+                  self.cfg.review.cross_proofread_model} - {None, self.model}
         for m in sorted(x for x in wanted if x):
             pricing, _src = resolve_pricing(self.conn, self.client, m, log=self.log)
             pin, pout = pricing.per_million()

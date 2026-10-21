@@ -38,7 +38,8 @@ class OpenRouterConfig(_Strict):
     # "agent" (a run answered task by task) is set by `ncte agent` itself, never chosen by NCTE_LLM_PROVIDER
     # "local": a model served on this computer (LM Studio, llama-server, mlx_lm.server), nothing leaves the machine
     # "codex": the user's ChatGPT plan through the Codex CLI (`codex exec`), no key, nothing billed (ADR-071)
-    provider: Literal["openrouter", "fal", "claude", "agent", "local", "codex"] = "claude"
+    # "agy": the user's Antigravity plan through the Antigravity CLI (`agy -p`), no key, nothing billed (ADR-082)
+    provider: Literal["openrouter", "fal", "claude", "agent", "local", "codex", "agy"] = "claude"
     base_url: str = "https://openrouter.ai/api/v1"
     model: str = DEFAULT_MODEL
     review_model: str | None = None
@@ -109,6 +110,10 @@ class ReviewConfig(_Strict):
     # a fix made after review / proofreading / the reader's look is checked against the source and the issue it was
     # meant to fix; off: a fix is kept but stays unverified (never counted as fixed)
     fix_check: bool = True
+    # ADR-082: the last proofreading pass on another company's model (``agy/gemini-flash``), whatever the run's
+    # source; off unless chosen (it spends another plan's quota and sends the book to that company). Fixes and their
+    # checks stay on the run's own model. Also NCTE_CROSS_PROOFREAD (empty or "off": none)
+    cross_proofread_model: str | None = None
 
 
 class MemoryConfig(_Strict):
@@ -188,7 +193,7 @@ class Config(_Strict):
         return "sha256:" + hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
-PROVIDERS = ("openrouter", "fal", "claude", "codex", "local")  # what NCTE_LLM_PROVIDER and the settings page choose
+PROVIDERS = ("openrouter", "fal", "claude", "codex", "agy", "local")  # what NCTE_LLM_PROVIDER and the settings page choose
 
 
 def load_config(path: str | Path | None = None, *, workspace: str | None = None) -> Config:
@@ -221,15 +226,22 @@ def load_config(path: str | Path | None = None, *, workspace: str | None = None)
     provider = os.environ.get("NCTE_LLM_PROVIDER") or _read_dotenv(Path(".env")).get("NCTE_LLM_PROVIDER")
     if provider:
         if provider not in PROVIDERS:
-            raise ConfigError("NCTE_LLM_PROVIDER must be openrouter, fal, claude, codex or local "
+            raise ConfigError("NCTE_LLM_PROVIDER must be openrouter, fal, claude, codex, agy or local "
                               "(agent is set by `ncte agent` itself for the runs it starts)")
         cfg.openrouter.provider = provider  # type: ignore[assignment]
+    cross = os.environ.get("NCTE_CROSS_PROOFREAD")
+    if cross is None:
+        cross = _read_dotenv(Path(".env")).get("NCTE_CROSS_PROOFREAD")
+    if cross is not None:
+        cfg.review.cross_proofread_model = cross.strip() if cross.strip() not in ("", "off") else None
     if cfg.openrouter.provider == "claude":
         use_claude_models(cfg)
     elif cfg.openrouter.provider == "local":
         use_local_models(cfg)
     elif cfg.openrouter.provider == "codex":
         use_codex_models(cfg)
+    elif cfg.openrouter.provider == "agy":
+        use_agy_models(cfg)
     return cfg
 
 
@@ -245,7 +257,7 @@ CLAUDE_READ_STAGES = ("scene_windows", "scene_analyze", "memory_update", "impres
 
 # A model id with one of these prefixes names its own source, whatever the run's source is: a step may run on the
 # Claude plan while the rest runs locally, or the other way round (the client routes by prefix)
-ROUTED_PREFIXES = ("claude/", "local/", "codex/")
+ROUTED_PREFIXES = ("claude/", "local/", "codex/", "agy/")
 LOCAL_MODEL = "local/default"  # the model the local server has loaded (else the first it lists)
 
 
@@ -287,6 +299,26 @@ def use_codex_models(cfg: Config) -> None:
     o.stage_models = {k: v for k, v in o.stage_models.items() if codex(v)}
     o.review_model = o.review_model if codex(o.review_model) else None
     o.fallback_models = [m for m in o.fallback_models if codex(m)]
+    o.temperature = None
+    o.reasoning_effort = o.reasoning_effort or "medium"
+
+
+AGY_MODEL = "agy/gemini-flash"  # the newest Gemini Flash agy lists (a family name survives a model retiring)
+
+
+def use_agy_models(cfg: Config) -> None:
+    """Models for the Antigravity provider (ADR-082): a configured ``agy/…`` model is kept; any other model id is
+    replaced or dropped. agy takes no temperature; a step's level picks the listed model of that level."""
+    o = cfg.openrouter
+
+    def agy(m: str | None) -> bool:
+        return bool(m) and str(m).startswith("agy/")
+
+    if not agy(o.model):
+        o.model = AGY_MODEL
+    o.stage_models = {k: v for k, v in o.stage_models.items() if agy(v)}
+    o.review_model = o.review_model if agy(o.review_model) else None
+    o.fallback_models = [m for m in o.fallback_models if agy(m)]
     o.temperature = None
     o.reasoning_effort = o.reasoning_effort or "medium"
 
@@ -348,7 +380,7 @@ def proofread_passes(cfg: Config) -> int:
     n = cfg.context.proofread_passes
     if n is not None:
         return n
-    return CLAUDE_PROOFREAD_PASSES if cfg.openrouter.provider in ("claude", "codex") else 1
+    return CLAUDE_PROOFREAD_PASSES if cfg.openrouter.provider in ("claude", "codex", "agy") else 1
 
 
 def reasoning_setting(cfg: Config, stage: str) -> str | None:
@@ -364,9 +396,14 @@ def reasoning_setting(cfg: Config, stage: str) -> str | None:
 JUDGING_STAGES = ("fix_check", "review", "proofread", "reader", "confirm", "verify")
 
 
+CROSS_PROOFREAD = "proofread:cross"  # the step name of a proofreading pass on another company's model (ADR-082)
+
+
 def stage_model(cfg: Config, stage: str, default: str) -> str:
     """The model a step's requests use: ``stage_models``, else ``review_model`` for review and its fix check, else the
     run's model."""
+    if stage == CROSS_PROOFREAD and cfg.review.cross_proofread_model:
+        return cfg.review.cross_proofread_model
     stage = stage.split(":")[0]
     if m := cfg.openrouter.stage_models.get(stage):
         return m

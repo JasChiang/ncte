@@ -51,7 +51,8 @@ class App:
         if parts == ["library"]:
             return data.library(self.ws)
         if parts == ["settings"]:
-            return manage.key_status(self.env_path, self.ws.cfg.openrouter.provider)
+            return {**manage.key_status(self.env_path, self.ws.cfg.openrouter.provider),
+                    "cross": manage.cross_status(self.ws.cfg)}
         if parts == ["balance"]:
             return manage.balance(self.runner.client_factory(self.ws.cfg))
         if len(parts) >= 3 and parts[0] == "book":
@@ -96,6 +97,10 @@ class App:
             if self.runner.busy:
                 raise NCTEError("請先暫停翻譯再切換連線方式")
             return manage.set_provider(self.env_path, self.ws.cfg, str(body.get("provider", "")))
+        if parts == ["settings", "cross"]:
+            if self.runner.busy:
+                raise NCTEError("請先暫停翻譯再更改交叉校稿")
+            return manage.set_cross(self.env_path, self.ws.cfg, body.get("model"))
         if parts == ["settings", "key"]:
             if self.runner.busy:
                 raise NCTEError("請先暫停翻譯再更換金鑰")

@@ -75,7 +75,12 @@ def acceptance(conn: sqlite3.Connection, book_id: str, *, proofread: bool = True
     if validation_ok is not None:
         checks["epub_valid"] = {"ok": validation_ok, "count": 0 if validation_ok else 1, "units": []}
     conflicts = {f["unit_id"] for f in open_rows if f["type"] == CONFLICT and is_current(f, best)}
+    # whose eyes proofread it (ADR-082): the run's own model only, or also another company's
+    cross = [r[0] for r in conn.execute("SELECT DISTINCT model FROM llm_requests WHERE book_id=? AND stage=? AND "
+                                        "status='succeeded'", (book_id, "proofread:cross"))]
     return {"acceptable": all(c["ok"] for c in checks.values()), "checks": checks,
+            "proofread_by": {"cross": cross} if cross else {"cross": [], "note": "proofread by the translating "
+                                                                       "company's own model only"},
             "conflicts": {"count": len(conflicts), "units": sorted(conflicts)[:SAMPLE]},
             "note": "Acceptable means the pipeline finished every step and nothing failed silently; it is not a "
                     "judgement of translation quality."}

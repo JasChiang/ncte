@@ -241,3 +241,32 @@ def test_the_codex_plan_needs_no_key_and_finds_the_codex_command(site, monkeypat
     assert call("/api/settings/key", {"key": "sk-or-v1-" + "d" * 40})[0] == 400  # no key on the plan
     assert call("/api/settings/provider", {"provider": "openrouter"})[0] == 200  # back: an API model again
     assert app.ws.cfg.openrouter.model == DEFAULT_MODEL and not app.ws.cfg.openrouter.stage_models
+
+
+def test_cross_proofreading_is_off_until_chosen_and_offers_only_tools_found_here(site, monkeypatch, tmp_path):
+    call, app, _, _ = site
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "openrouter")
+    monkeypatch.setenv("NCTE_CROSS_PROOFREAD", "off")  # restored after the test (the server writes it)
+    fake_agy = tmp_path / "agy"
+    fake_agy.write_text("#!/bin/sh\n", encoding="utf-8")
+    fake_agy.chmod(0o755)
+    monkeypatch.setenv("NCTE_AGY_BIN", str(fake_agy))
+    monkeypatch.setenv("NCTE_CODEX_BIN", str(tmp_path / "no-codex"))
+    monkeypatch.setenv("NCTE_CLAUDE_BIN", str(tmp_path / "no-claude"))
+    app.ws.cfg.review.cross_proofread_model = None
+    cross = call("/api/settings")[1]["cross"]
+    assert cross["model"] is None and [o["model"] for o in cross["options"]] == ["agy/gemini-flash"]
+    assert call("/api/settings/cross", {"model": "codex/gpt-6.1-sol"})[0] == 400  # not found here
+    assert call("/api/settings/cross", {"model": "agy/gemini-flash"})[1]["model"] == "agy/gemini-flash"
+    assert app.ws.cfg.review.cross_proofread_model == "agy/gemini-flash"
+    assert call("/api/settings/cross", {"model": ""})[1]["model"] is None
+
+
+def test_the_cross_setting_is_read_from_the_environment(monkeypatch, tmp_path):
+    from ncte.config import load_config
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("NCTE_CROSS_PROOFREAD", "agy/gemini-flash")
+    assert load_config().review.cross_proofread_model == "agy/gemini-flash"
+    monkeypatch.setenv("NCTE_CROSS_PROOFREAD", "off")
+    assert load_config().review.cross_proofread_model is None

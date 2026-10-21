@@ -305,3 +305,29 @@ def test_a_later_pass_does_not_polish_a_paragraph_polished_already_but_still_fix
     status, cp = _job(conn, rid)
     assert [p.get("expression_skipped", 0) for p in cp["passes"]] == [0, total]
     assert [p["retranslated"] for p in cp["passes"]] == [total, total]
+
+
+def test_the_last_pass_runs_on_the_cross_model_when_chosen_and_the_report_says_so(conn, cfg, fixtures):
+    """ADR-082: with a cross-proofreading model the last pass is its own step on that model; fixes and their checks
+    stay on the run's model. Off (the default), the report says the book was proofread by one company's model."""
+    from ncte.reports.acceptance import acceptance
+
+    cfg.context.proofread_passes = 2
+    cfg.review.cross_proofread_model = "fake/model"
+    fake = FakeLLM(responders={**RESPONDERS, "proofread": TwoPasses()})
+    book, _, s = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    assert s.status == "completed"
+    proof = [(c.stage, c.model) for c in fake.calls if c.stage.startswith("proofread")]
+    first = [m for st, m in proof if st == "proofread"]
+    cross = [m for st, m in proof if st == "proofread:cross"]
+    assert first and cross and set(first) == {cfg.openrouter.model} and set(cross) == {"fake/model"}
+    assert {c.model for c in fake.calls if c.stage in ("fix_check", "translate")} == {cfg.openrouter.model}
+    assert acceptance(conn, book.id)["proofread_by"] == {"cross": ["fake/model"]}
+
+
+def test_no_cross_model_by_default(conn, cfg, fixtures):
+    from ncte.reports.acceptance import acceptance
+
+    assert cfg.review.cross_proofread_model is None
+    book, _, s = run_book(conn, cfg, fixtures["basic"], FakeLLM(), mode="context")
+    assert acceptance(conn, book.id)["proofread_by"]["cross"] == []

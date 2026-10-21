@@ -110,7 +110,7 @@ def plan_usage(rows: list[Any]) -> dict[str, Any]:
     for r in rows:
         u = json.loads(r["usage_json"] or "{}")
         plan = u.get("plan")
-        source = (plan or {}).get("source") or (r["provider"] if r["provider"] in ("claude", "codex") else None)
+        source = (plan or {}).get("source") or (r["provider"] if r["provider"] in ("claude", "codex", "agy") else None)
         if not source:
             continue
         s = out.setdefault(source, {"requests": 0, "tokens": {"input": 0, "output": 0, "cache_read": 0,

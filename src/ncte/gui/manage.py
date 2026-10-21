@@ -89,6 +89,11 @@ def key_status(env_path: Path, provider: str = "openrouter") -> dict[str, Any]:
 
         found = codex_found()
         return {"provider": provider, "set": bool(found), "hint": None, "file": str(env_path.resolve()), "codex": found}
+    if provider == "agy":  # no key: the Antigravity CLI's own sign-in on this computer
+        from ..llm.agy_cli import found as agy_found
+
+        found = agy_found()
+        return {"provider": provider, "set": bool(found), "hint": None, "file": str(env_path.resolve()), "agy": found}
     if provider == "local":  # no key: is a model server answering, and which model has it loaded?
         return {"provider": provider, **local_status(), "hint": None, "file": str(env_path.resolve())}
     key = get_api_key(provider)
@@ -132,7 +137,14 @@ def _save_env(env_path: Path, name: str, value: str) -> None:
 
 
 def set_provider(env_path: Path, cfg: Any, provider: str) -> dict[str, Any]:
-    from ..config import DEFAULT_MODEL, PROVIDERS, use_claude_models, use_codex_models, use_local_models
+    from ..config import (
+        DEFAULT_MODEL,
+        PROVIDERS,
+        use_agy_models,
+        use_claude_models,
+        use_codex_models,
+        use_local_models,
+    )
 
     if provider not in PROVIDERS:
         raise NCTEError("未知的連線方式")
@@ -145,11 +157,43 @@ def set_provider(env_path: Path, cfg: Any, provider: str) -> dict[str, Any]:
         use_local_models(cfg)
     elif provider == "codex":
         use_codex_models(cfg)
-    elif was in ("claude", "local", "codex"):  # back to an API: its default model, not another source's alias
+    elif provider == "agy":
+        use_agy_models(cfg)
+    elif was in ("claude", "local", "codex", "agy"):  # back to an API: its default model, not another source's alias
         cfg.openrouter.model = DEFAULT_MODEL
         cfg.openrouter.stage_models = {}
         cfg.openrouter.temperature = type(cfg.openrouter)().temperature
     return key_status(env_path, provider)
+
+
+# another company's model a proofreading pass can use (ADR-082), by the command line tool found on this computer
+CROSS_CHOICES = (("agy", "agy/gemini-flash", "Gemini Flash（Antigravity 方案）", "Google"),
+                 ("codex", "codex/gpt-6.1-sol", "GPT（Codex，ChatGPT 方案）", "OpenAI"),
+                 ("claude", "claude/opus", "Claude Opus（Claude 方案）", "Anthropic"))
+
+
+def cross_status(cfg: Any) -> dict[str, Any]:
+    """The cross-proofreading choice (off by default) and what can be chosen here: the tools found on this computer,
+    other than the run's own source."""
+    import shutil
+
+    from ..llm.agy_cli import found as agy_found
+    from ..llm.codex_cli import found as codex_found
+
+    found = {"agy": agy_found(), "codex": codex_found(),
+             "claude": shutil.which(os.environ.get("NCTE_CLAUDE_BIN") or "claude")}
+    options = [{"model": m, "label": label, "company": who} for src, m, label, who in CROSS_CHOICES
+               if found.get(src) and src != cfg.openrouter.provider]
+    return {"model": cfg.review.cross_proofread_model, "options": options}
+
+
+def set_cross(env_path: Path, cfg: Any, model: str | None) -> dict[str, Any]:
+    model = (model or "").strip() or None
+    if model is not None and model not in {o["model"] for o in cross_status(cfg)["options"]}:
+        raise NCTEError("這個模型目前不能用來交叉校稿")
+    _save_env(env_path, "NCTE_CROSS_PROOFREAD", model or "off")
+    cfg.review.cross_proofread_model = model
+    return cross_status(cfg)
 
 
 def balance(client: Any) -> dict[str, Any]:
