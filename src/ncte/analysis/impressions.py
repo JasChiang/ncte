@@ -94,12 +94,16 @@ def apply(conn: sqlite3.Connection, book_id: str, results: list[tuple[Impression
                 for imp, cited in got[cid]:
                     at = [lk["_ev"][x][1] for x in cited]
                     since = lk["_ev"][imp.since][1] if imp.since in lk["_ev"] else min(at)
+                    # how they talk to some people differently: kept only with evidence of its own, and shown from the
+                    # first of it (it may show a relation the story has not reached yet)
+                    toward = [lk["_ev"][x][1] for x in imp.toward_evidence if x in lk["_ev"]]
+                    shown = imp.voice_toward.strip()[:80] if toward else ""
                     conn.execute("INSERT INTO character_impressions(character_id, book_id, since_ordinal, period, "
-                                 "personality, voice, role, evidence_json, revealed_ordinal, run_id, updated_at) "
-                                 "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                                 "personality, voice, role, evidence_json, revealed_ordinal, run_id, updated_at, "
+                                 "voice_toward, toward_revealed_ordinal) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                                  (cid, book_id, since, imp.period.strip()[:20] or None, imp.personality.strip()[:200],
                                   imp.voice.strip()[:120], imp.role.strip()[:120],
                                   json.dumps([{"kind": lk["_ev"][x][0], "at": lk["_ev"][x][1]} for x in cited]),
-                                  max(at), run_id, utcnow()))
+                                  max(at), run_id, utcnow(), shown, min(toward) if shown else None))
                     n += 1
     return n

@@ -28,7 +28,7 @@ def _flag(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     out = [{"unit_id": ps[0]["unit_id"], "kind": "meaning", "severity": "high", "problem": "原文是否定",
             "quote": ps[0]["zh"][:2], "fix": "改成否定"}]
     if len(ps) > 1:
-        out.append({"unit_id": ps[1]["unit_id"], "kind": "ambiguity", "severity": "medium", "problem": "兩可",
+        out.append({"unit_id": ps[1]["unit_id"], "kind": "ambiguity", "severity": "low", "problem": "兩可",
                     "quote": ps[1]["zh"][:2], "fix": "另一讀法"})
     return {"issues": out}
 

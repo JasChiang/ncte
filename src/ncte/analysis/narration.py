@@ -90,6 +90,16 @@ def for_scene(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row,
 
     st = json.loads(scene["state_json"] or "{}").get("narration") or {}
     out: dict[str, Any] = {}
+    def named(x: str | None) -> str | None:  # a person not yet known by any name here: left out
+        if not x or (names is not None and x not in names):
+            return None
+        return names.get(x, x) if names is not None else x
+
+    if segments := [{"units": g["units"], "voice": g["voice"], "person": g.get("person") or "unclear",
+                     **({"teller": t} if (t := named(g.get("teller"))) else {}),
+                     **({"to": t} if (t := named(g.get("to"))) else {})}
+                    for g in st.get("segments") or []]:
+        out["segments"] = segments  # stretches in another voice (ADR-083); a teller not yet known by name: left out
     if st.get("person") in ("first", "third") and st.get("check") != "conflict":
         out["person"] = st["person"]
         for key in ("narrator", "focal"):
@@ -100,7 +110,7 @@ def for_scene(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row,
     else:
         whole = person(conn, book_id)
         if whole is None:
-            return None
+            return out or None
         out["person"] = whole
     return out
 

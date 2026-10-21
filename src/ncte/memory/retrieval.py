@@ -151,6 +151,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
         # inside the scene is not given to the lines before it; never the place in the story — no reveals)
         if imp := impression_at(conn, c["id"], scene["start_ordinal"]):
             card["voice"] = imp["voice"]
+            if imp.get("voice_toward"):
+                card["voice_toward"] = imp["voice_toward"]
             if imp.get("other_times"):
                 card["voice_other_times"] = imp["other_times"]
         present.append(card)

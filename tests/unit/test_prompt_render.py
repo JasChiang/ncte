@@ -317,7 +317,8 @@ def test_proofreading_lists_the_readings_before_calling_a_meaning_error():
     for word in ("先列出", "容許的讀法", "其中一種讀法", "`ambiguity`", "多斷定", "`fix`", "不帶這些斷定",
                  "`problem` 要寫出列出的讀法"):
         assert word in meaning, word
-    assert "列出的讀法" in _bullet(pr, "ambiguity")
+    amb = _bullet(pr, "ambiguity")
+    assert "兩種讀法各自根據" in amb and "不選邊的譯法" in amb and "`severity: medium`" in amb and "`severity: low`" in amb
     assert not any(w in meaning + _bullet(pr, "ambiguity") for w in BOOK_WORDS)  # the ruby example elsewhere is older
 
 

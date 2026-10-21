@@ -709,6 +709,10 @@ ALTER TABLE term_definitions_by_stage RENAME TO term_definitions;
     (33, "the readings the source annotates on a glossary term (強敵《とも》), collected by the program", """
 ALTER TABLE glossary ADD COLUMN readings_json TEXT NOT NULL DEFAULT '[]';
 """),
+    (34, "how a character talks differently to some people, shown from the first evidence of it (ADR-084)", """
+ALTER TABLE character_impressions ADD COLUMN voice_toward TEXT NOT NULL DEFAULT '';
+ALTER TABLE character_impressions ADD COLUMN toward_revealed_ordinal INTEGER;
+"""),
 ]
 
 

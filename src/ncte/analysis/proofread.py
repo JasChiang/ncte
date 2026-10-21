@@ -59,6 +59,7 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
         said.setdefault(u["unit_id"], set()).add(u["sp"])
         if u["status"] == "inferred":
             guessed.add((u["unit_id"], u["sp"]))
+    voices = other_voices(conn, book_id)
     out: list[list[dict[str, Any]]] = []
     cur: list[dict[str, Any]] = []
     href = None
@@ -79,6 +80,13 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
                                 "_tid": t["id"], "_at": r["ordinal"], "_href": r["resource_href"]}  # program only
         if r["id"] in actions:
             item["actions"] = actions[r["id"]]
+        if r["id"] in voices:  # told in another voice than the scene's narration (ADR-083)
+            voice, teller, person, listener = voices[r["id"]]
+            seen = visible_names(conn, book_id, r["ordinal"], forms_at)
+            name, whom = seen.get(teller) if teller else None, seen.get(listener) if listener else None
+            item["told_as"] = voice + (f"（說的人：{name}" if name else "（說的人原文沒交代") + \
+                (f"，對{whom}說）" if whom else "，對誰說原文沒交代）") + \
+                {"first": "，段裡的「我」是說的人", "third": "，在講別人"}.get(person, "")
         if said_by_translator := json.loads(t["notes_json"] or "[]"):  # what it left for whoever checks (ADR-067)
             item["translator_notes"] = said_by_translator
         if r["id"] in said or r["id"] in told:
@@ -99,6 +107,18 @@ def chunks(conn: sqlite3.Connection, book_id: str, unit_ids: set[str] | None = N
         cur.append(item)
     if cur:
         out.append(cur)
+    return out
+
+
+def other_voices(conn: sqlite3.Connection, book_id: str) -> dict[str, tuple[str, str | None, str, str | None]]:
+    """unit id → (kind of telling, teller id or None, person) for the paragraphs the reading found told in another
+    voice than their scene's narration (``narration.segments``, ADR-083)."""
+    out: dict[str, tuple[str, str | None, str, str | None]] = {}
+    for (state,) in conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND state_json LIKE '%\"segments\"%'",
+                                 (book_id,)):
+        for g in (json.loads(state or "{}").get("narration") or {}).get("segments") or []:
+            for u in g.get("units") or []:
+                out.setdefault(u, (g["voice"], g.get("teller"), g.get("person") or "unclear", g.get("to")))
     return out
 
 
@@ -153,6 +173,8 @@ def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> 
         item.update({k: basics[k] for k in ("gender", "narrator") if k in basics})
         if imp := impression_at(conn, c["id"], start):  # the way of speaking in force where the stretch begins
             item["voice"] = imp["voice"]
+            if imp.get("voice_toward"):
+                item["voice_toward"] = imp["voice_toward"]
         if habits.get(c["canonical_name"]):
             item["habits"] = habits[c["canonical_name"]]
         out.append(item)
@@ -217,6 +239,10 @@ def notes(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]], be
 
 FIX_NOTE = ("對照校稿認為這段譯文有誤（見說明）。請對照原文與前後文判斷：說明正確就改正，只改那個錯，其他照舊；"
             "說明不對（原文其實就是這個意思），就維持原譯。")
+# two readings the source allows and the translation chose one (ADR-084): written so both hold, or left as it is
+FIX_NOTE_AMBIGUITY = ("對照校稿認為原文容得下兩種讀法、目前的譯文選了其中一種（見說明）。請對照原文與前後文判斷：說明正確、"
+                      "而中文寫得出兩種讀法都成立又一樣自然的譯法，就改成那樣（不是換成另一種讀法），原文的意思與語氣都不能少；"
+                      "其實前後文已經確定、或寫不出自然的譯法，就維持原譯，並在 notes 說明。")
 # an issue of how the Chinese reads, not of what it says: polished with the meaning kept, or left as it is
 FIX_NOTE_EXPRESSION = ("對照校稿認為這段意思沒錯、但中文讀起來不順（見說明）。在意思、視角、語氣與角色口吻都不變、"
                        "也不增不減的前提下，改寫成自然的臺灣中文；說明不成立（其實讀得順），就維持原譯。")

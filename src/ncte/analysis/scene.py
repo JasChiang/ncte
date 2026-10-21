@@ -678,6 +678,8 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             repo.add_speech_example(conn, res.speaker_id, q.unit_id, utt_id, q.text, "explicit")
             stats["examples"] += 1
     narration: dict[str, Any] | None = None
+    segments = (narration_segments(parsed.narration.segments, rows, ref_map)
+                if parsed is not None and parsed.narration is not None else [])
     if parsed is not None and parsed.narration is not None and parsed.narration.person in ("first", "third"):
         from .narration import established_self_forms, judged, settle_self_forms
 
@@ -690,6 +692,8 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 [f.model_dump() for f in n.self_forms], narration.get("narrator"),
                 established_self_forms(conn, book_id, scene["seq"]), rows)):
             narration["self_forms"] = forms
+    if segments:  # stretches in another voice are kept even when the scene's own narration is unclear
+        narration = {**(narration or {"person": "unclear", "source": "llm"}), "segments": segments}
     state = {"narration": narration, "pov": parsed.pov if parsed else None, "location": parsed.location if parsed else None,
              "time": parsed.time if parsed else None, "participants": participants, "actions": actions,
              "props": props, "uncertainties": uncertainties, "analysis": "llm" if parsed else "program_only",
@@ -700,6 +704,27 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     if refs is not None:
         refs.update(ref_map)
     return stats
+
+
+MAX_SEGMENTS = 6
+
+
+def narration_segments(segments: list[Any], rows: list[sqlite3.Row], ref_map: dict[str, str]) -> list[dict[str, Any]]:
+    """The read pass's stretches told in another voice (ADR-083), as stored: the paragraphs from the first to the last
+    it named (in story order, inside the scene), its kind of telling, its teller when that is a known card, and the
+    evidence paragraphs of the scene it cited. A stretch citing no paragraph of the scene is not kept."""
+    pos = {r["id"]: i for i, r in enumerate(rows)}
+    out: list[dict[str, Any]] = []
+    for seg in segments[:MAX_SEGMENTS]:
+        at = sorted(pos[u] for u in seg.unit_ids if u in pos)
+        evidence = [u for u in seg.evidence_unit_ids if u in pos]
+        if not at or not evidence or not seg.voice.strip():
+            continue
+        teller, to = ref_map.get(seg.teller_ref or ""), ref_map.get(seg.addressee_ref or "")
+        out.append({"units": [rows[i]["id"] for i in range(at[0], at[-1] + 1)], "voice": seg.voice.strip()[:40],
+                    "person": seg.person, **({"teller": teller} if teller else {}), **({"to": to} if to else {}),
+                    "evidence": evidence})
+    return out
 
 
 def quotes_for_scene(conn: sqlite3.Connection, book_id: str, scene_id: str) -> list[Quote]:

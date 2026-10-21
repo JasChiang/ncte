@@ -149,7 +149,7 @@ def test_a_second_reading_is_recorded_for_a_person_and_not_retranslated(conn, cf
     def proofread(payload, req):
         seen.append(payload)
         p = payload["paragraphs"][0]
-        return {"issues": [{"unit_id": p["unit_id"], "kind": "ambiguity", "severity": "medium", "quote": p["zh"][:4],
+        return {"issues": [{"unit_id": p["unit_id"], "kind": "ambiguity", "severity": "low", "quote": p["zh"][:4],
                             "problem": "原文也可以讀成在比年紀", "fix": "另一種讀法：比年紀"}]}
 
     assert "ambiguity" in ProofreadIssue.model_fields["kind"].annotation.__args__
@@ -169,6 +169,35 @@ def test_a_second_reading_is_recorded_for_a_person_and_not_retranslated(conn, cf
     shown = [u for u in data.units(conn, book)["units"] if u["readings"]]
     assert {u["id"] for u in shown} == {f["unit_id"] for f in found}
     assert "比年紀" in shown[0]["readings"][0]
+
+
+def test_a_reading_chosen_where_chinese_can_keep_both_goes_back_to_the_translator(conn, cfg, fixtures):
+    """ADR-084: when Chinese can keep both readings and the translation chose one, the finding (medium) goes back to
+    the translator with its own note (write it so both hold, not the other reading), and the fix is checked."""
+    from ncte.analysis.proofread import FIX_NOTE_AMBIGUITY
+    from ncte.llm.fake import DEFAULTS
+
+    asked: list = []
+
+    def proofread(payload, req):
+        p = payload["paragraphs"][0]
+        if p["zh"].endswith("（改）"):
+            return {"issues": []}
+        return {"issues": [{"unit_id": p["unit_id"], "kind": "ambiguity", "severity": "medium", "quote": p["zh"][:4],
+                            "problem": "對誰說原文沒交代", "fix": "不選邊的寫法"}]}
+
+    def translate(payload, req):
+        asked.extend(i for f in payload.get("review_feedback", []) for i in f["issues"])
+        return (RESPONDERS.get("translate") or DEFAULTS["translate"])(payload, req)
+
+    fake = FakeLLM(responders={**RESPONDERS, "proofread": proofread, "translate": translate})
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    sent = [f for f in asked if f["issue_type"] == "proofread_ambiguity"]
+    assert sent and all(FIX_NOTE_AMBIGUITY in f["suggestion"] for f in sent)
+    assert any(c.stage == "fix_check" for c in fake.calls)
+    rows = conn.execute("SELECT severity FROM qa_findings WHERE run_id=? AND type='review:proofread_ambiguity'",
+                        (rid,)).fetchall()
+    assert rows and all(r["severity"] == "medium" for r in rows)
 
 
 def test_proofreading_and_the_readers_look_leave_book_matter_out(conn, cfg, fixtures, monkeypatch):

@@ -146,20 +146,36 @@ class ImpressionOut(_M):
     evidence: list[str]  # refs of the lines / facts it rests on
     since: str = Field(default="", alias="from")  # the line / fact ref from which this stretch holds (empty: the first)
     period: str = ""  # another time of their life this describes (前世, 三年前); empty: the story's present
+    # ADR-084: how they talk differently to some people (to whom, how), with the refs that show it
+    voice_toward: str = ""
+    toward_evidence: list[str] = Field(default_factory=list)
 
 
 class ImpressionsOutput(_M):
     impressions: list[ImpressionOut]
 
 
+class NarrationSegment(_M):
+    """A stretch of the scene told in another voice than the scene's narration (ADR-083): a storyteller's frame, a
+    letter, a diary, a mock-classical passage, someone else's account. ``teller_ref`` only when the text says who tells
+    it; ``person`` says whether the stretch's own 「我」 is its teller (first) or it tells of others (third)."""
+    unit_ids: list[str]  # the stretch's paragraphs, in order
+    voice: str  # what kind of telling it is
+    teller_ref: str | None = None
+    addressee_ref: str | None = None  # whom it is told to, only when the text says
+    person: Literal["first", "third", "unclear"] = "unclear"
+    evidence_unit_ids: list[str] = Field(default_factory=list)
+
+
 class NarrationOut(_M):
     """Whose voice tells this scene (ADR-040): first person (``narrator_ref`` is the 「私」) or third person following
-    ``focal_ref``."""
+    ``focal_ref``; ``segments``: stretches told in another voice (ADR-083)."""
     person: Literal["first", "third", "unclear"]
     narrator_ref: str | None = None
     focal_ref: str | None = None
     evidence_unit_ids: list[str] = Field(default_factory=list)
     self_forms: list[SelfForm] = Field(default_factory=list)
+    segments: list[NarrationSegment] = Field(default_factory=list)
 
 
 class SceneAnalysisOutput(_M):

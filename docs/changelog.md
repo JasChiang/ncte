@@ -1075,3 +1075,7 @@ open workspace/eval/<timestamp>/report.html
 ## Antigravity 來源、交叉校稿（2026-10-21，分支 agy-source-2026-10-21，自 c3d77e6；ADR-082）
 - `llm/agy_cli.py`（新）：`AgyCLIClient`、`_run_turn`（讀 stream-json 的 result 事件後停掉程序）、`plan_usage`（`/quota`）、`family_of`／`newest_of`（系列名稱）、`forget`（刪除那次對話的檔案）。`config`：來源 `agy`、`use_agy_models`、`AGY_MODEL`、`review.cross_proofread_model`／`NCTE_CROSS_PROOFREAD`、`CROSS_PROOFREAD` 步驟名；`cli` 的 `agy/` 路由；校稿最後一輪 `proofread:cross`；`reports/acceptance` 的 `proofread_by`；`cost_report`、`dryrun` 認得 agy；網頁設定頁的 Antigravity 連線與交叉校稿開關（`/api/settings/cross`）。
 - 測試：`tests/unit/test_agy_cli.py`（新）、`tests/integration/test_proofread_passes.py`、`test_gui_manage.py`。725 passed、4 skipped。
+## 敘述片段、兩可的讀法（2026-10-21，分支 narration-segments-2026-10-21、ambiguity-rules-2026-10-21；ADR-083、ADR-084）
+- 敘述片段：`schemas.NarrationSegment`、`analysis.scene.narration_segments`、`split_read` 合併各段的片段、`analysis.narration.for_scene` 帶 `segments`（只給請求看得到的段落）、`analysis.proofread.other_voices`／`told_as`；`context_pipeline` 與 `qa/recheck` 對這幾段不做敘述人稱的程式檢查；`scene_read`、`scene_analyze`、`translate`、`proofread` 提示詞。
+- 兩可的讀法：`proofread` 的 `ambiguity` 分 medium（送修）／low；`FIX_NOTE_AMBIGUITY`；`translate` 的 `review_feedback`、`fix_check` 的不選邊寫法；人物印象 `voice_toward`（migration 34 `character_impressions.voice_toward`、`toward_revealed_ordinal`；`repository.impression_at`、翻譯人物卡與校稿 `characters`）；片段的 `addressee_ref`。
+- 測試：`tests/integration/test_narration_segments.py`（新）、`test_proofread.py`、`test_parallel_passes.py`、`tests/unit/test_prompt_render.py`。730 passed、4 skipped。

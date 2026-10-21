@@ -28,8 +28,13 @@ def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
     from ..epub.matter import story_hrefs
 
     story = story_hrefs(conn, book_id)
-    third_scenes = {sc["id"] for sc in conn.execute("SELECT * FROM scenes WHERE book_id=?", (book_id,))
-                    if (w := for_scene(conn, book_id, sc)) is not None and w["person"] == "third"}
+    third_scenes: set[str] = set()
+    other_voice: set[str] = set()  # stretches told in another voice (ADR-083)
+    for sc in conn.execute("SELECT * FROM scenes WHERE book_id=?", (book_id,)):
+        if (w := for_scene(conn, book_id, sc)) is not None:
+            if w.get("person") == "third":
+                third_scenes.add(sc["id"])
+            other_voice |= {u for g in w.get("segments") or [] for u in g["units"]}
     units = {r["id"]: r for r in conn.execute("SELECT * FROM units WHERE book_id=?", (book_id,))}
     ph = ",".join("?" * len(QA_TYPES))
     with Transaction(conn):
@@ -50,7 +55,7 @@ def recheck_book(conn: sqlite3.Connection, book_id: str) -> dict[str, int]:
                 "'dismissed_by_check')", (uid,))]
             if (ev := second_person.check(conn, book_id, units[uid], t["text"])):
                 f.append(Finding("second_person_gender", "high", ev, uid))
-            if units[uid]["scene_id"] in third_scenes and units[uid]["resource_href"] in story \
+            if units[uid]["scene_id"] in third_scenes and uid not in other_voice and units[uid]["resource_href"] in story \
                     and first_person_slip(units[uid]["plain_text"], t["text"]):
                 f.append(Finding("narration_first_person", "high", "third-person narration says 我 outside quotes", uid))
             f = [x for x in f if not any(x.type == ty and ev.startswith(x.evidence) for ty, ev in settled)]

@@ -128,7 +128,10 @@ def merge_outputs[M: BaseModel](parts: list[M]) -> M:
             out[key] = "\n".join(v for v in values if v)
         elif key == "narration":
             told = [v for v in values if v and v.get("person") != "unclear"]
-            out[key] = told[0] if told else next((v for v in values if v), None)
+            first = told[0] if told else next((v for v in values if v), None)
+            # each part's stretches in another voice are its own (ADR-083)
+            out[key] = {**first, "segments": [g for v in values if v for g in v.get("segments") or []]} \
+                if first is not None else None
         else:
             out[key] = next((v for v in values if v is not None), None)
     return cls.model_validate(out)

@@ -393,6 +393,8 @@ def impression_at(conn: sqlite3.Connection, character_id: str, upto: int | None)
     out: dict[str, Any] = {"voice": r["voice"]}
     if upto is None or r["revealed_ordinal"] <= upto:
         out.update(personality=r["personality"], role=r["role"])
+    if r["voice_toward"] and (upto is None or (r["toward_revealed_ordinal"] or 0) <= upto):
+        out["voice_toward"] = r["voice_toward"]  # ADR-084: once its first evidence is reached
     other = [x for x in rows if x["period"] and (upto is None or x["since_ordinal"] <= upto)]
     if other:
         out["other_times"] = [f"〔{x['period']}〕{x['voice']}" for x in other]

@@ -59,14 +59,17 @@ class ContextOrchestrator(Orchestrator):
 
         third = False
         self_forms: dict[str, str] = {}
+        other_voice: set[str] = set()
         if not batch.meta and batch.scene_id:
             from ..analysis.narration import for_scene
 
             with self.lock:
                 who = for_scene(self.conn, self.book.id, get_scene(self.conn, self.book.id, batch.scene_id))
-            third = who is not None and who["person"] == "third"
-            if who is not None and who["person"] == "first":
+            third = who is not None and who.get("person") == "third"
+            if who is not None and who.get("person") == "first":
                 self_forms = {f["ja"]: f["zh"] for f in who.get("self_forms") or []}
+            # a stretch the reading found told in another voice (a storyteller, a letter) is not the scene's narration
+            other_voice = {u for g in (who or {}).get("segments") or [] for u in g["units"]}
 
         with self.lock, Transaction(self.conn):
             for r in batch.rows:
@@ -77,10 +80,11 @@ class ContextOrchestrator(Orchestrator):
                 found = []
                 if ev := second_person.check(self.conn, self.book.id, r, t["text"]):
                     found.append(("second_person_gender", ev))
-                if third and first_person_slip(r["plain_text"], t["text"]):
+                if third and r["id"] not in other_voice and first_person_slip(r["plain_text"], t["text"]):
                     found.append(("narration_first_person", "the narration is third person, but this paragraph says 我 "
                                   "outside quotes: use the focal character's name, 他／她, or leave the subject out"))
-                if self_forms and (ev := self_form_slip(r["plain_text"], t["text"], self_forms)):
+                if self_forms and r["id"] not in other_voice and \
+                        (ev := self_form_slip(r["plain_text"], t["text"], self_forms)):
                     found.append(("narrator_self_form", ev))
                 if "敘述者" in t["text"] and not any(w in r["plain_text"] for w in ("語り手", "ナレーター", "叙述")):
                     found.append(("narrator_name_leak", "「敘述者」 is the card's placeholder for the unnamed narrator; "
@@ -1099,8 +1103,9 @@ class ContextOrchestrator(Orchestrator):
                     f"NULL AND unit_id IN ({','.join('?' * len(asked))})", [self.run_id, *asked])
                     if r["translation_id"] != tids[r["unit_id"]]}
         for it in parsed.issues:
-            if it.unit_id in valid and it.kind == "ambiguity" and it.problem.strip():
-                # two readings the source allows (ADR-063): kept for a person to look at, never retranslated
+            if it.unit_id in valid and it.kind == "ambiguity" and it.problem.strip() and it.severity == "low":
+                # two readings the source allows (ADR-063), and Chinese cannot keep both: kept for a person to look at
+                # (one the Chinese can keep open goes back to the translator, ADR-084)
                 stats["ambiguities"] = stats.get("ambiguities", 0) + 1
                 self._finding(it.unit_id, "review:proofread_ambiguity", "low",
                               f"{it.problem[:300]}" + (f" → {it.fix[:160]}" if it.fix.strip() else ""),
@@ -1121,7 +1126,8 @@ class ContextOrchestrator(Orchestrator):
             fid = self._finding(it.unit_id, f"review:proofread_{it.kind}", it.severity,
                                 f"{it.problem[:300]}" + (f" → {it.fix[:160]}" if it.fix.strip() else ""),
                                 translation_id=tids[it.unit_id])
-            note = proofread.FIX_NOTE_EXPRESSION if it.kind == "expression" else proofread.FIX_NOTE
+            note = proofread.FIX_NOTE_EXPRESSION if it.kind == "expression" else \
+                proofread.FIX_NOTE_AMBIGUITY if it.kind == "ambiguity" else proofread.FIX_NOTE
             feedback.setdefault(it.unit_id, []).append(
                 {"issue_type": f"proofread_{it.kind}", "evidence": f"{it.problem}（譯文：{it.quote}）",
                  "suggestion": f"{it.fix}\n{note}", "finding_id": fid})
@@ -1581,7 +1587,13 @@ class ContextOrchestrator(Orchestrator):
             # named as known at this point of the story (the focal 「神祕少女」 is not called by a name revealed later)
             zh_names = visible_names(self.conn, self.book.id, batch.rows[-1]["ordinal"])
             who = for_scene(self.conn, self.book.id, scene, zh_names)
-        if who is not None:
+        if who is not None and who.get("segments"):  # only the paragraphs this request shows (ADR-083)
+            shown = {r["id"] for r in batch.rows} | {c["unit_id"] for c in shown_context(ctx)}
+            segs = [{**g, "units": [u for u in g["units"] if u in shown]} for g in who["segments"]]
+            who = {**who, "segments": [g for g in segs if g["units"]]}
+            if not who["segments"]:
+                del who["segments"]
+        if who:
             ctx["narration"] = who
         if ctx.get("address_terms") and ctx.get("glossary"):
             ctx["glossary"] = drop_address_forms(ctx["glossary"], ctx["address_terms"])
