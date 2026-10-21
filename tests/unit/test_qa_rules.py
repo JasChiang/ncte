@@ -35,8 +35,9 @@ def test_warnings():
     assert "foreign_script" not in {t for t, _ in run("「Спасибо」と彼は言った", "他說：「Спасибо」")}  # in the source
     assert run("ＭＭＯのカイルボス", "MMO的團隊副本首領") == set()  # in the source (full width) too
     assert ("non_taiwan_glyph", "error") in run("武装竜", "武裝竜")
-    assert ("quote_mismatch", "medium") in run("「あいうえお、かきくけこ」", "啊咿嗚欸喔，咖嘰咕")
-    assert ("quote_mismatch", "low") in run("アルテインという国", "「阿爾汀」這個國家")  # a pair added for emphasis
+    # a pair missing or added: right or wrong by what it marks, for the model to judge with the text around (confirm)
+    assert ("quote_mismatch", "high") in run("「あいうえお、かきくけこ」", "啊咿嗚欸喔，咖嘰咕")
+    assert ("quote_mismatch", "high") in run("アルテインという国", "「阿爾汀」這個國家")
     assert ("quote_mismatch", "low") in run("『ＫＡＳＳＥＮ』という遊戲", "「KASSEN」這款遊戲")  # 『』 written 「」: not the source's kind, a slip
     assert ("quote_mismatch", "medium") in run("「行くぞ」と『彼』は言った", "他說：「走吧")  # a quote lost or left open
     assert ("non_taiwan_glyph", "error") in run("これは国です", "这是国家")  # slid into Simplified: retried

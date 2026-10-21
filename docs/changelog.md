@@ -1066,3 +1066,8 @@ open workspace/eval/<timestamp>/report.html
 - 讀音：`epub/units.term_readings`、`shown_excerpt`；`repository.refresh_readings`、`readings_of`；migration 33 `glossary.readings_json`；定名例句帶讀音、定名與翻譯的譯名、人物卡、校稿人物卡附 `readings`；網頁顯示。
 - 測試：`tests/integration/test_readings.py`（新）、`tests/unit/test_prompt_render.py`。696 passed、4 skipped。
 
+
+## 性別、引號、同形詞（2026-10-21，分支 gender-quotes-falsefriends-2026-10-21，自 0ca8cb7；ADR-081）
+- 提示詞：`scene_read`、`memory_update`、`gender_gaps`（新）的性別依據；`verify` 一詞；`_shared/punctuation.md` 引號依意思、`proofread` 的體例一句、`confirm` 的引號；`false_friends`（新）；`proofread` 逐段判定時只有一種輸出格式。
+- 程式：`analysis/gender_gaps.py`（新；`ContextOrchestrator.gender_gaps_pass` 在第二次確認之後，stage `verify:genders`）、`analysis/false_friends.py`（新；初譯後、校稿前）、`repository.note_false_friend`、`schemas.GenderGapsOutput`／`FalseFriendsOutput`；`qa.rules` 的 `quote_mismatch` 分級並交確認；`context.gender_gaps`、`context.false_friends`；網頁執行步驟名稱。新增相依 `opencc>=1.1`。
+- 抽查數字見 ADR-081。測試：`tests/integration/test_gender_gaps.py`、`test_quote_confirm.py`、`test_false_friends.py`（新）、`tests/unit/test_prompt_render.py`、`test_qa_rules.py`。708 passed、4 skipped。

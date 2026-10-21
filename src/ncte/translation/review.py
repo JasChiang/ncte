@@ -664,14 +664,14 @@ def _claim(x: dict[str, Any]) -> str:
     """An issue as the fix check reads it: the kind only for a claim about the source; otherwise what the finder
     said and suggested (``proofread_expression`` too: how the Chinese reads is not a claim about the source) — without
     the instructions written for the translator (``proofread.FIX_NOTE``, ``proofread.FIX_NOTE_EXPRESSION``,
-    ``reader.FIX_NOTE``), which are not a suggestion."""
-    from ..analysis import proofread, reader
+    ``reader.FIX_NOTE``, ``false_friends.FIX_NOTE``), which are not a suggestion."""
+    from ..analysis import false_friends, proofread, reader
 
     kind = str(x.get("issue_type", ""))
     if kind in SOURCE_CLAIMS:
         return f"{kind}（只給類別；請自己對照原文判斷）"
     suggestion = str(x.get("suggestion", ""))
-    for note in (proofread.FIX_NOTE, proofread.FIX_NOTE_EXPRESSION, reader.FIX_NOTE):
+    for note in (proofread.FIX_NOTE, proofread.FIX_NOTE_EXPRESSION, reader.FIX_NOTE, false_friends.FIX_NOTE):
         suggestion = suggestion.replace(note, "")
     suggestion = suggestion.strip()
     return (f"{kind}: {x.get('evidence', '')}" + (f" → {suggestion}" if suggestion else ""))[:500]

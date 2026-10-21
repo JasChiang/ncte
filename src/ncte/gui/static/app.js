@@ -200,6 +200,7 @@ const TFLAG = {ruby_meaning_kept: "讀音另有含義，譯文保留了兩層意
 FINDING["model_flag:subject_omitted_kept"] = "譯者保留了省略的主詞（待確認讀者不會讀錯）";
 FINDING["model_flag:speaker_uncertain"] = "譯者不確定說話者"; FINDING["model_flag:term_uncertain"] = "譯者自取的譯名";
 FINDING["model_flag:possible_source_error"] = "譯者認為原文可能有誤";
+FINDING["review:false_friend"] = "照搬了原文的漢字詞，臺灣中文的意思或用法不同";
 function findingLabel(t) {
   if (FINDING[t]) return FINDING[t];
   if (t.startsWith("after_review:")) return "審稿後仍有：" + findingLabel(t.slice(13));
@@ -237,11 +238,11 @@ async function runCard(id, o) {
   const exportBtns = o.translated ? `<button class="btn ${r && r.status === "completed" ? "primary big" : ""}" id="exp">匯出並下載 EPUB</button> <span id="expres" class="small"></span>` : "";
   // where the run is, in words, and about how long is left (from the share of the work done so far)
   // shares of a whole book's time (2026-10-18: read 56 min, check/cast/naming 12, translate 43, proofread 77, reader 5)
-  const WEIGHT = {read: .29, verify: .02, cast: .03, terms: .01, naming: .01, translate: .22, review: .01, proofread: .39, reader: .03};
+  const WEIGHT = {read: .29, verify: .02, cast: .03, terms: .01, naming: .01, translate: .22, review: .01, false_friends: .01, proofread: .39, reader: .03};
   const stages = p.stages || [], cur = stages.find(s => s.done < s.total);
   const SAY = {read: s => `讀全書：第 ${s.done + 1} / ${s.total} 項（先讀完整本，這時還看不到譯文）`, verify: () => "讀完了，正在覆核有疑點的地方",
     cast: () => "整理人物關係與角色印象", terms: () => "整理書中術語的意思", naming: () => "決定名字與稱呼的譯法", translate: s => `翻譯：${s.done} / ${s.total} 批`,
-    review: () => "審稿：重看被標出問題的段落", proofread: s => `對照校稿：逐段對照原文找誤譯（${s.done} / ${s.total}）`, reader: () => "像讀者一樣把譯文讀一遍，修正讀不順的地方"};
+    review: () => "審稿：重看被標出問題的段落", false_friends: () => "檢查照搬原文的漢字詞在臺灣中文裡是否同義", proofread: s => `對照校稿：逐段對照原文找誤譯（${s.done} / ${s.total}）`, reader: () => "像讀者一樣把譯文讀一遍，修正讀不順的地方"};
   const share = stages.reduce((n, s) => n + (WEIGHT[s.key] || 0) * s.done / s.total, 0) / Math.max(.01, stages.reduce((n, s) => n + (WEIGHT[s.key] || 0), 0));
   const elapsed = r && r.started_at ? (Date.now() - Date.parse(r.started_at)) / 60000 : 0;
   const left = share > .03 && elapsed > 1 ? Math.max(1, Math.round(elapsed / share - elapsed)) : null;

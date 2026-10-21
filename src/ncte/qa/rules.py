@@ -51,7 +51,7 @@ FOREIGN_SCRIPT_RE = re.compile("[\u0370-\u03FF\u0400-\u052F\u0530-\u058F\u0590-\
 SEVERITY_ORDER = {"error": 5, "high": 4, "medium": 3, "low": 2, "info": 1}
 # rules that read words, not meaning: what they find is checked by the model with context before it counts
 CONFIRM_RULES = ("offensive_term", "narration_first_person", "narrator_self_form", "latin_word", "possible_added_name",
-                 "second_person_gender", "narrator_name_leak")
+                 "second_person_gender", "narrator_name_leak", "quote_mismatch")
 CONFIRMED = " | confirmed: "  # appended to a word-rule finding the model checked with context and found real
 
 
@@ -129,10 +129,10 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
         elif ratio > 2.5:
             add("too_long", "medium", f"length ratio {ratio:.2f} (possible addition)")
 
-    # quotes follow the source (「」 for 「」, 『』 for 『』, none added; prompts/_shared/punctuation.md): a kind changed
-    # (『』 → 「」, a title in 《》) or a pair added (「諾爾登」) keeps the line whole, a slip shown for proofreading to
-    # judge with the source (low); what may drop a line is a translation with unpaired quotes, or with fewer quotes
-    # than the source
+    # quotes follow the source by default (prompts/_shared/punctuation.md). A kind changed (『』 → 「」, a title in 《》)
+    # is a slip shown for proofreading to judge with the source (low); unpaired quotes may drop a line (medium). A pair
+    # added or missing may be right or wrong by what it marks — 「阿爾汀」 for the source's アルテインという is fine,
+    # quotes put around narration or an unquoted thought are not: the model decides with the text around (confirm)
     pairs = (("「", "」"), ("『", "』"), ("《", "》"), ("〈", "〉"))
     src_q = sum(source_text.count(o) for o, _ in pairs[:2])
     out_q = sum(text.count(o) for o, _ in pairs)
@@ -140,8 +140,9 @@ def check_translation(*, unit_id: str, kind: str, source_text: str, plain_text: 
     for o, c in pairs[:2]:
         so, sc, to, tc = source_text.count(o), source_text.count(c), text.count(o), text.count(c)
         if (so, sc) != (to, tc):
-            style = balanced and out_q >= src_q
-            add("quote_mismatch", "low" if style else "medium", f"{o}{c}: source {so}/{sc} → {to}/{tc}")
+            sev = "medium" if not balanced else "low" if out_q == src_q else "high"
+            what = "" if sev != "high" else " (a pair added)" if out_q > src_q else " (a pair missing)"
+            add("quote_mismatch", sev, f"{o}{c}: source {so}/{sc} → {to}/{tc}{what}")
             break
 
     nums_src = set(NUM_RE.findall(unicodedata.normalize("NFKC", PH_RE.sub("", plain_text))))

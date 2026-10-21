@@ -139,7 +139,7 @@ def test_checking_steps_share_the_translators_rules():
 def test_quotes_follow_the_source_for_the_translator_and_the_proofreader():
     """The source's marks are kept (「」 as 「」, 『』 as 『』, none added); proofreading reports a quote only when it
     does not correspond to the source, never the Taiwan convention of 「」 outside 『』 inside."""
-    rule = "原文的「」譯成「」、『』譯成『』，不因臺灣出版慣例改成另一種；原文沒有的引號不要加"
+    rule = "原文的「」譯成「」、『』譯成『』，不因臺灣出版慣例改成另一種；原文有引號的地方不要拿掉"
     static, _ = load_prompt("translate").render_parts({"units": []})
     assert rule in _rules(static)["2"] and "對話引號「」『』" not in static
     pr = load_prompt("proofread").render({"paragraphs": []})
@@ -382,3 +382,12 @@ def test_a_house_rule_about_a_form_of_address_says_whom_it_is_about():
     assert rules.count("由譯者逐句") == 2  # the per-sentence judgement stays one principle, extended, not repeated
     style = load_prompt("translate").render({"style": {"rules": ["…"]}}).split("- `style`：")[1].split("\n")[0]
     assert "只適用於規則寫明的那個人" in style and "以 `address_terms` 為準" in style and "依這句台詞" in style
+
+
+def test_proofread_asked_for_verdicts_shows_one_output_format_with_them():
+    p = load_prompt("proofread")
+    asked = p.render({"verdicts": True, "paragraphs": []})
+    out = asked.split("## 輸出", 1)[1]
+    assert '"checked"' in out and "沒有問題就輸出 {\"issues\": []}" not in out  # not a second format without verdicts
+    plain = p.render({"paragraphs": []}).split("## 輸出", 1)[1]
+    assert '"checked"' not in plain and "沒有問題就輸出" in plain

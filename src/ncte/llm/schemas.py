@@ -361,6 +361,19 @@ class VerifyOutput(_M):
     items: list[VerifyItem]
 
 
+# characters still without a gender after reading, asked with sentences spread over the book (stage verify:genders)
+class GenderGap(_M):
+    ref: str
+    gender: Literal["female", "male", "unknown"]
+    certainty: Literal["explicit", "inferred"] = "inferred"
+    evidence: list[str] = Field(default_factory=list)  # the codes of the sentences the answer rests on
+    reason: str = ""
+
+
+class GenderGapsOutput(_M):
+    characters: list[GenderGap]
+
+
 # ------------------------------------------------------------------ scene windows (ADR-057)
 # present: the story's now · flashback: a remembered past told as scenes · parallel: elsewhere at the same time ·
 # summary: time passing told in brief (「それから数週間、」) · other: a dream, a letter, an in-story text
@@ -480,6 +493,20 @@ class FixCheckOutput(_M):
     checks: list[FixCheck]
 
 
+# ------------------------------------------------------------------ same-form words (false friends)
+class FalseFriend(_M):
+    ref: str
+    # same: Taiwan Chinese uses the word with this meaning and register here · differs: it reads otherwise
+    verdict: Literal["same", "differs"]
+    suggestion: str = ""  # for differs: how to say it here
+    reason: str
+    evidence: list[str] = Field(default_factory=list)  # the codes of the examples the answer rests on
+
+
+class FalseFriendsOutput(_M):
+    words: list[FalseFriend]
+
+
 SCHEMAS: dict[str, type[BaseModel]] = {
     "translate": TranslationBatchOutput,
     "scene_analyze": SceneAnalysisOutput,
@@ -497,6 +524,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "impressions": ImpressionsOutput,
     "fix_check": FixCheckOutput,
     "terms": TermsOutput,
+    "false_friends": FalseFriendsOutput,
 }
 
 
@@ -508,6 +536,8 @@ def output_model(stage: str, payload: Any = None) -> type[BaseModel] | None:
         return TranslationReadThroughOutput
     if base == "terms" and isinstance(payload, dict) and payload.get("task") == "term_candidates":
         return TermCandidatesOutput
+    if base == "verify" and isinstance(payload, dict) and payload.get("task") == "gender_gaps":
+        return GenderGapsOutput
     return SCHEMAS.get(base)
 
 

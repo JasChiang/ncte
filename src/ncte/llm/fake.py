@@ -110,6 +110,11 @@ def default_verify(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     return {"items": []}
 
 
+def default_gender_gaps(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+    """Finds no gender for anyone."""
+    return {"characters": []}
+
+
 def default_scene_windows(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     """The author's separators and blank lines, as the program cut before."""
     return {"first_kind": "present", "breaks": [
@@ -153,6 +158,12 @@ def default_fix_check(payload: dict[str, Any], req: Any) -> dict[str, Any]:
                         "new_error": "", "reason": "fake"} for i in payload.get("items", [])]}
 
 
+def default_false_friends(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+    """Every word carried over reads the same in Taiwan Chinese."""
+    return {"words": [{"ref": w["ref"], "verdict": "same", "reason": "fake", "evidence": [w["examples"][0]["ref"]]}
+                      for w in payload.get("words", []) if w.get("examples")]}
+
+
 def default_terms(payload: dict[str, Any], req: Any) -> dict[str, Any]:
     """Defines nothing (a term without enough material may be left out) and names no further term."""
     return {"candidates": []} if payload.get("task") == "term_candidates" else {"terms": []}
@@ -171,6 +182,7 @@ DEFAULTS: dict[str, Responder] = {
     "naming": default_naming,
     "review": default_review,
     "verify": default_verify,
+    "verify:genders": default_gender_gaps,  # a request of the second look's model, answered on its own
     "scene_windows": default_scene_windows,
     "reader": default_reader,
     "proofread": default_proofread,
@@ -180,6 +192,7 @@ DEFAULTS: dict[str, Responder] = {
     "impressions": default_impressions,
     "fix_check": default_fix_check,
     "terms": default_terms,
+    "false_friends": default_false_friends,
 }
 
 

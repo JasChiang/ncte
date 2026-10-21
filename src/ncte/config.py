@@ -151,6 +151,13 @@ class ContextConfig(_Strict):
     term_definitions: bool = True
     # ADR-073: before defining, the model names terms the reading left out of the glossary (from facts and summaries)
     term_candidates: bool = True
+    # after the second look: characters who matter and still have no gender are asked once more, with sentences
+    # spread over the book where they speak, are named or are spoken to; an answer counts only with the sentences cited
+    gender_gaps: bool = True
+    # after the first translation of the book, before proofreading: kanji words carried over unchanged into the Chinese
+    # (found by string match) are put to the model, which says which ones read otherwise in Taiwan Chinese; those get
+    # a glossary entry and their paragraphs go back to the translator
+    false_friends: bool = True
     # facts given with a fix in the "window" scope (``translation.fix_scope``): chosen for the fixed paragraphs and the
     # window around them
     fix_fact_quota: int = Field(4, ge=0, le=50)

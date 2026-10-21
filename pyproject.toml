@@ -16,6 +16,7 @@ dependencies = [
   "httpx>=0.27,<1.0",
   "pyyaml>=6.0",
   "jinja2>=3.1",  # the local source renders the model's chat template (thinking on/off)
+  "opencc>=1.1",  # Japanese kanji forms → Taiwan forms, to find same-form words carried over (analysis.false_friends)
 ]
 
 [project.optional-dependencies]

@@ -224,7 +224,7 @@ class ContextOrchestrator(Orchestrator):
                 done = self.conn.execute("SELECT updated_at, checkpoint_json FROM jobs WHERE book_id=? AND stage=? AND "
                                          "target_id=? AND status='succeeded' ORDER BY id DESC LIMIT 1",
                                          (self.book.id, stage, self.book.id)).fetchone()
-                if done is not None and stage in ("proofread", "reader"):
+                if done is not None and stage in ("proofread", "reader", "false_friends"):
                     # only what was translated since the book was last gone over whole
                     upto = json.loads(done["checkpoint_json"] or "{}").get("upto_translation_id")
                     if upto is not None:
@@ -241,6 +241,10 @@ class ContextOrchestrator(Orchestrator):
                 add(stage, len(scene_ids))
             if self.cfg.context.term_definitions:
                 add("terms", len(scene_ids))
+            if self.cfg.context.gender_gaps:
+                add("gender_gaps", len(scene_ids))
+        if self.cfg.context.false_friends and not self.opts.unit_ids:
+            add("false_friends", len(scene_ids) + 1)
         if self.cfg.context.proofread and not self.opts.unit_ids:
             add("proofread", len(scene_ids) + 1)
         if self.cfg.context.reader_pass and not self.opts.unit_ids:
@@ -375,6 +379,8 @@ class ContextOrchestrator(Orchestrator):
             if not self._stop_reason:
                 self.verify_pass()
             if not self._stop_reason:
+                self.gender_gaps_pass()  # after the second look has dropped the doubtful inferences
+            if not self._stop_reason:
                 self.relations_pass()
             if not self._stop_reason:
                 self.impressions_pass()
@@ -390,6 +396,8 @@ class ContextOrchestrator(Orchestrator):
             self.interleaved(scenes)
         if not self._stop_reason:
             self.review_leftovers()
+        if not self._stop_reason:
+            self.false_friends_pass()  # the book's first translation is done: its same-form words, before proofreading
         if not self._stop_reason:
             self.proofread_pass()  # against the source first; the reader then reads the corrected Chinese
         if not self._stop_reason:
@@ -509,6 +517,50 @@ class ContextOrchestrator(Orchestrator):
         if record_job:
             self._set_job("verify", self.book.id, "succeeded", None, stats)
         self.log(f"second look: {stats}")
+
+    def gender_gaps_pass(self, *, record_job: bool = True) -> dict[str, int]:
+        """After the second look: characters who matter and still have no gender, asked with sentences spread over
+        the book (``analysis.gender_gaps``), on the second look's model. A request the content filter refuses is
+        asked in halves, down to one character."""
+        from ..analysis import gender_gaps
+        from ..llm.schemas import GenderGapsOutput
+
+        if not self.cfg.context.gender_gaps:
+            return {}
+        job = self._job("gender_gaps", self.book.id)
+        if record_job and (job is None or job["status"] not in ("pending", "running")):
+            return {}
+        if record_job:
+            self._begin_job("gender_gaps")
+        with self.lock:
+            groups = gender_gaps.requests(self.conn, self.book.id)
+        prompt = load_prompt("gender_gaps")
+        stats: dict[str, int] = {"asked": sum(len(lk["_chars"]) for _, lk in groups), "blocked": 0, "failed": 0}
+        results: list[tuple[GenderGapsOutput, dict[str, Any]]] = []
+        for req, lk in groups:
+            if self._paused("genders"):  # kept all at once: asked again on resume
+                return stats
+            blocked: list[str] = []
+            try:
+                parsed = call_in_parts(lambda pl: self._llm("verify:genders", prompt, pl, []), req, "characters",
+                                       blocked, min_part=1)
+            except FatalAPIError:
+                raise
+            except LLMError as exc:  # those characters stay without a gender
+                self._finding(None, "gender_gaps_failed", "low", str(exc)[:300])
+                stats["failed"] += len(lk["_chars"])
+                continue
+            stats["blocked"] += len(blocked)
+            if parsed is not None:
+                assert isinstance(parsed, GenderGapsOutput)
+                results.append((parsed, lk))
+        if results:
+            with self.lock:
+                stats.update(gender_gaps.apply(self.conn, self.book.id, results))
+        if record_job:
+            self._set_job("gender_gaps", self.book.id, "succeeded", None, stats)
+        self.log(f"genders asked again: {stats}")
+        return stats
 
     def relations_pass(self, *, record_job: bool = True) -> int:
         """After reading (ADR-039, ADR-045): each pair of characters with enough material is put to the model, a few
@@ -835,6 +887,84 @@ class ContextOrchestrator(Orchestrator):
                 by_scene.setdefault(rows[uid]["scene_id"] or "", []).append(rows[uid])
         for group in by_scene.values():  # one scene at a time: the translation keeps that scene's memory
             _retranslate_with_feedback(self, group, {r["id"]: feedback[r["id"]] for r in group}, stats)
+
+    def false_friends_pass(self, *, record_job: bool = True) -> dict[str, int]:
+        """After the first translation of the book (``analysis.false_friends``): kanji words carried over unchanged are
+        put to the translating model; one that reads otherwise in Taiwan Chinese gets a glossary entry and every
+        paragraph that carried it goes back to the translator with the suggestion, a scene at a time, each fix checked
+        against the source. Recorded as a job, a later run looks only at what was translated since (2.11)."""
+        from ..analysis import false_friends as ff
+        from ..llm.schemas import FalseFriendsOutput
+        from .review import _retranslate_with_feedback, in_conflict, new_stats
+
+        if not self.cfg.context.false_friends:
+            return {}
+        job = self._job("false_friends", self.book.id)
+        if record_job and (job is None or job["status"] not in ("pending", "running")):
+            return {}
+        saved = self._begin_job("false_friends") if record_job else {}
+        since = saved.get("since_translation_id")
+        with self.lock:
+            words = ff.collect(self.conn, self.book.id, self._story_files(), since)
+        prompt = load_prompt("false_friends")
+        stats: dict[str, int] = {**new_stats(words=len(words), blocked=0, failed=0)}
+        results: list[tuple[FalseFriendsOutput, dict[str, Any]]] = []
+        for req, lk in ff.requests(words):
+            if self._paused("same-form words"):  # nothing kept yet: asked again on resume
+                return stats
+            blocked: list[str] = []
+            try:
+                parsed = call_in_parts(lambda pl: self._llm("false_friends", prompt, pl, []), req, "words", blocked,
+                                       min_part=1)
+            except FatalAPIError:
+                raise
+            except LLMError as exc:  # those words stay as translated; proofreading still reads them
+                self._finding(None, "false_friends_failed", "low", str(exc)[:300])
+                stats["failed"] += len(lk["_words"])
+                continue
+            stats["blocked"] += len(blocked)
+            if parsed is not None:
+                assert isinstance(parsed, FalseFriendsOutput)
+                results.append((parsed, lk))
+        differs: list[dict[str, Any]] = []
+        if results:
+            with self.lock:
+                got, differs = ff.apply(self.conn, self.book.id, results)
+            stats.update(got)
+            self.reload_glossary()  # the fixes are translated with the new entries
+        feedback: dict[str, list[dict[str, Any]]] = {}
+        hits = {h["unit_id"] for w in differs for h in w["hits"]}
+        conflicts = in_conflict(self, hits)
+        for w in differs:
+            for h in w["hits"]:
+                if (h["unit_id"], "review:false_friend") in conflicts:  # came back unchanged earlier in this run
+                    stats["conflict_skipped"] = stats.get("conflict_skipped", 0) + 1
+                    continue
+                stats["issues"] += 1
+                fid = self._finding(h["unit_id"], "review:false_friend", "medium",
+                                    f"「{w['zh']}」({w['ja']}): {w['reason'][:240]} → {w['suggestion']}",
+                                    translation_id=h["tid"])
+                feedback.setdefault(h["unit_id"], []).append(
+                    {"issue_type": "false_friend",
+                     "evidence": f"譯文照搬了原文的「{w['ja']}」，寫成「{w['zh']}」：{w['reason']}",
+                     "suggestion": f"{w['suggestion']}\n{ff.FIX_NOTE}", "finding_id": fid})
+        if feedback:
+            with self.lock:
+                rows = {r["id"]: r for r in self.conn.execute(
+                    f"SELECT * FROM units WHERE id IN ({','.join('?' * len(feedback))})", list(feedback))}
+            by_scene: dict[str, list[sqlite3.Row]] = {}
+            for uid in sorted(feedback, key=lambda u: rows[u]["ordinal"] if u in rows else 0):
+                if uid in rows:
+                    by_scene.setdefault(rows[uid]["scene_id"] or "", []).append(rows[uid])
+            for group in by_scene.values():  # one scene at a time: the translation keeps that scene's memory
+                if self._paused("same-form words"):  # the words fixed so far are no longer carried over on resume
+                    return stats
+                _retranslate_with_feedback(self, group, {r["id"]: feedback[r["id"]] for r in group}, stats)
+        if record_job:
+            self._set_job("false_friends", self.book.id, "succeeded", None,
+                          {**stats, "upto_translation_id": self._last_translation_id()})
+        self.log(f"same-form words: {stats}")
+        return stats
 
     def proofread_pass(self, *, record_job: bool = True) -> dict[str, Any]:
         """Pass 3b (ADR-051): every paragraph against its source; real errors go back to the translator. Recorded as

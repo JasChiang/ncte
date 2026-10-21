@@ -129,6 +129,27 @@ def set_glossary(conn: sqlite3.Connection, book_id: str, source: str, target: st
     return {"previous": None, "version": 1}
 
 
+def note_false_friend(conn: sqlite3.Connection, book_id: str, source: str, target: str, note: str, *,
+                      first_unit_id: str | None = None) -> bool:
+    """A kanji word the model found to read otherwise in Taiwan Chinese: its rendering as a glossary term, unverified
+    and marked as the model's, with why. A person's entry and a name are left as they are. True when written."""
+    row = conn.execute(f"SELECT * FROM glossary WHERE {SERIES_SCOPE} AND source_term=?", (book_id, source)).fetchone()
+    if row is not None and (row["verified"] or row["category"] == "character"):
+        return False
+    if row is not None:
+        conn.execute("UPDATE glossary SET target_term=?, note=?, origin='model', version=version+1, updated_at=? "
+                     "WHERE id=?", (target, note, utcnow(), row["id"]))
+        return True
+    conn.execute("INSERT INTO glossary(book_id, source_term, target_term, category, verified, origin, first_unit_id, "
+                 "note, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                 (book_id, source, target, "term", 0, "model", first_unit_id, note, utcnow()))
+    from .entities import ensure_entity
+
+    ensure_entity(conn, book_id, source)
+    refresh_readings(conn, book_id, [source])
+    return True
+
+
 def add_speech_example(conn: sqlite3.Connection, character_id: str, unit_id: str, utterance_id: str, raw: str,
                        status: str) -> None:
     conn.execute("INSERT OR IGNORE INTO speech_examples(character_id, unit_id, utterance_id, raw_text, "
@@ -250,10 +271,11 @@ def drop_aliases(conn: sqlite3.Connection, character_id: str, forms: list[str]) 
 
 def set_gender(conn: sqlite3.Connection, book_id: str, character_id: str, gender: str, *, ordinal: int,
                quote: str | None, origin: str, certainty: str = "explicit") -> str:
-    """Record a character's gender. ``explicit``: a word in the text states it (彼女, 少年 …); ``inferred``: speech
-    style or similar. Explicit evidence outranks inferred; the earliest evidence of the same rank is kept (visible
-    from there on); disagreeing evidence of the same rank makes it 'conflict' (shown to no one). A human setting
-    wins over everything. Returns the stored value."""
+    """Record a character's gender. ``explicit``: the text states it (彼女, 少年 …, or the narration places
+    them: 女子高生, a uniform skirt, counted among the girls); ``inferred``: speech style or similar. Explicit
+    evidence outranks inferred; the earliest evidence of the same rank is kept (visible from there on);
+    disagreeing evidence of the same rank makes it 'conflict' (shown to no one). A human setting wins over
+    everything. Returns the stored value."""
     from ..series import pos
 
     rank = {"inferred": 0, "explicit": 1, "human": 2}

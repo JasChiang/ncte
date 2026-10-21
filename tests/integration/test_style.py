@@ -105,7 +105,9 @@ def test_wordplay_found_while_reading_reaches_translation(conn, cfg, fixtures):
 
     def tr(payload, req):
         seen.extend(payload.get("wordplay", []))
-        return {"translations": [{"unit_id": u["unit_id"], "translated_text": "譯", "flags": [], "notes": [],
+        # the source's quotes kept (a pair lost would go to the rule check and on to a fix)
+        return {"translations": [{"unit_id": u["unit_id"], "translated_text": "譯" + "".join(
+                                      c for c in u["source"] if c in "「」『』"), "flags": [], "notes": [],
                                   "translator_note": ""} for u in payload["units"]]}
 
     run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "memory_update": mem, "translate": tr}),

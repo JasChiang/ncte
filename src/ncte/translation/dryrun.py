@@ -57,16 +57,17 @@ class DryRunPlan:
 # the fix check and the review follow how many fixes the run makes, which grows with the book).
 PER_CHAR_STAGES = ("translate", "scene_analyze", "memory_update", "scene_windows", "proofread", "reader")
 PER_RUN_STAGES = ("verify", "relations", "impressions", "house_style", "terms", "naming", "confirm", "fix_check",
-                  "review")
+                  "review", "false_friends")
 HIGH_MARGIN = 1.2
 # A step with no history of its own: its cost as a share of translating + reading (scene analysis and memory) in a
 # whole-book run (3,689 paragraphs, 2026-10-18; proofreading at medium from two 300-paragraph samples). Proofreading
 # depends on its reasoning setting.
 # The terms step (ADR-069) has not been run on a whole book yet: its share is a guess from its size (up to 60 terms,
 # three requests of a few thousand characters each, about as much as the house style).
+# The same-form words step (false_friends) has not been run on a whole book yet either: a guess of the same size.
 SAMPLE_SHARE = {"scene_windows": 0.06, "proofread": 0.17, "proofread:high": 0.55, "reader": 0.04, "verify": 0.04,
                 "relations": 0.05, "impressions": 0.01, "house_style": 0.01, "terms": 0.01, "naming": 0.02,
-                "confirm": 0.01, "fix_check": 0.05, "review": 0.01}
+                "confirm": 0.01, "fix_check": 0.05, "review": 0.01, "false_friends": 0.01}
 UNCALIBRATED_HIGH = 2.0  # a step counted by its sample share may cost this many times as much
 
 
@@ -218,7 +219,7 @@ def _full_estimate(cfg: Config, opts: RunOptions, conns: list[sqlite3.Connection
         if cfg.context.reader_pass:
             want["reader"] = chars
         for st in PER_RUN_STAGES:
-            if st != "terms" or cfg.context.term_definitions:
+            if (st != "terms" or cfg.context.term_definitions) and (st != "false_friends" or cfg.context.false_friends):
                 want[st] = chars
     effort = {st: reasoning_label(reasoning_param(reasoning_setting(cfg, st))) for st in want}
     rates = run_rates(conns, opts.model, cfg.openrouter.reasoning_effort, provider=cfg.openrouter.provider,
