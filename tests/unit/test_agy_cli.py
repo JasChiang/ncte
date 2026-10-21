@@ -290,3 +290,13 @@ def test_the_cost_report_shows_the_level_each_step_really_ran_at(tmp_path):
     assert st["fix_check"]["efforts"] == {"high": 2} and st["fix_check"]["models_used"] == ["gemini-3.8-flash-high"]
     assert st["translate"]["efforts"] == {"medium": 1} and st["review"]["efforts"] == {"low": 1}
     assert "models_used" not in st["review"]
+
+
+def test_the_plain_agent_is_used_only_by_the_listed_steps(monkeypatch, tmp_path):
+    fake = Fake([ok(), ok()])
+    client = _client(monkeypatch, tmp_path, fake)
+    client.complete(_req(stage="scene_analyze"))
+    client.complete(_req(stage="translate"))
+    reading, translating = fake.turns_sent()
+    assert "--agent" not in reading["args"] and reading["agent"] is None
+    assert "--agent" in translating["args"]

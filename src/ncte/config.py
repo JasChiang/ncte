@@ -71,6 +71,8 @@ class OpenRouterConfig(_Strict):
     # the agy source: each call runs as a custom agent with no tools but `finish` (agy's ~60 tool descriptions cost
     # about 5,000 input tokens a request, measured 2026-10-21); false = agy's default agent
     agy_plain_agent: bool = True
+    # the steps that use it: translation only (2026-10-22 step tests: reading lost facts and address terms with it)
+    agy_plain_agent_stages: list[str] = Field(default_factory=lambda: ["translate"])
 
 
 class TranslationConfig(_Strict):

@@ -1099,3 +1099,7 @@ open workspace/eval/<timestamp>/report.html
 - `agy_cli`：`ncte-plain` agent、`--agent`、不認得時退回；`openrouter.agy_plain_agent`；usage `effort`／`effort_asked`／`agy_agent`；`cost_report` 每一步的推理等級與模型 id。
 - 分步實測結果見 ADR-091（暫存資料：scratchpad agytest）。
 - 測試：`tests/integration/test_post_read_parallel.py`（新）、`test_pause_checkpoint.py`、`tests/unit/test_agy_cli.py`。757 passed、2 skipped；ruff、mypy 通過。
+
+## 有條件才做的規則、精簡 agent 只用在翻譯（2026-10-22，分支 conditional-rules-2026-10-22；ADR-092）
+- `translate`、`proofread`、`review`、`fix_check`、`scene_analyze`、`scene_read`、`memory_update` 提示詞；`prompt_loader._applies` 只認有內容的值；`openrouter.agy_plain_agent_stages`（`AgyCLIClient(plain_agent_stages=)`）。
+- 測試：`tests/unit/test_prompt_render.py`、`test_read_through.py`、`test_agy_cli.py`。759 passed、2 skipped；ruff、mypy 通過。

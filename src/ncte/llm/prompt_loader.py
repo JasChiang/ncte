@@ -48,9 +48,10 @@ class Prompt:
         if payload is None:
             return _BLOCK.sub(lambda m: m.group(2), self.text)
         blob = json.dumps(payload, ensure_ascii=False)
+        keys = _filled_keys(payload)
 
         def keep(m: re.Match[str]) -> str:
-            return m.group(2) if _applies(m.group(1), blob) else ""
+            return m.group(2) if _applies(m.group(1), blob, keys) else ""
 
         out = _BLOCK.sub(keep, self.text)
         return re.sub(r"\n{3,}", "\n\n", out)
@@ -63,9 +64,10 @@ class Prompt:
         if whole.strip() == static.strip():
             return static, ""
         blob = json.dumps(payload, ensure_ascii=False)
+        keys = _filled_keys(payload)
         kept = []
         for m in _BLOCK.finditer(self.text):
-            if _applies(m.group(1), blob):
+            if _applies(m.group(1), blob, keys):
                 body = m.group(2).strip("\n")
                 if not body.startswith("## "):  # a section heading of its own is folded into the one below
                     kept.append(body)
@@ -83,14 +85,38 @@ def prompts_dirs() -> list[Path]:
     return dirs
 
 
-def _applies(conditions: str, blob: str) -> bool:
-    """Whether a block's ``a|b|text:⟦`` (any of them holds) or ``!a`` (key ``a`` absent) applies to the payload."""
+def _filled_keys(payload: Any) -> set[str]:
+    """The keys anywhere in the payload whose value carries something: an empty or missing value (null, "", [],
+    {}, false) does not switch a block on — a request that sends an empty field has none of that data."""
+    out: set[str] = set()
+
+    def walk(v: Any) -> None:
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if x is not None and x is not False and x != "" and x != [] and x != {}:
+                    out.add(str(k))
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+
+    walk(payload)
+    return out
+
+
+def _applies(conditions: str, blob: str, keys: set[str]) -> bool:
+    """Whether a block's ``a|b|text:⟦`` (any of them holds) or ``!a`` (key ``a`` absent or empty) applies to the
+    payload. ``a`` holds when some key ``a`` in the payload has a value (``keys``, see ``_filled_keys``);
+    ``text:⟦`` when the payload's text contains it."""
     for cond in conditions.split("|"):
         cond = cond.strip()
         if cond.startswith("!"):
-            if f'"{cond[1:]}"' not in blob:
+            if cond[1:] not in keys:
                 return True
-        elif cond.startswith("text:") and cond[5:] in blob or f'"{cond}"' in blob:
+        elif cond.startswith("text:"):
+            if cond[5:] in blob:
+                return True
+        elif cond in keys:
             return True
     return False
 

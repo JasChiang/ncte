@@ -44,18 +44,18 @@ def test_on_the_list_comes_before_the_translations_in_the_schema():
     assert props == ["read_through", "translations"]
     assert "read_through" in req.json_schema["required"]
     assert req.json_schema["properties"]["read_through"]["type"] == "array"
-    assert "先通讀整批" in req.messages[0]["content"]
+    assert "讀整批時找到的地方寫出來" in req.messages[0]["content"]
 
 
 def test_the_prompt_block_is_kept_only_when_asked():
     p = load_prompt("translate")
     base = {"units": [{"unit_id": "u", "source": "こんにちは"}], "glossary": []}
     off, on = p.render(base), p.render({**base, "read_through": True})
-    assert "先通讀整批" not in off and "<!--" not in off
-    assert "先通讀整批" in on and "<!--" not in on
-    assert on.index("先通讀整批") > on.index("## 輸出格式")
+    assert "讀整批時找到的地方寫出來" not in off and "<!--" not in off
+    assert "讀整批時找到的地方寫出來" in on and "<!--" not in on
+    assert on.index("讀整批時找到的地方寫出來") > on.index("## 輸出格式")
     static, own = p.render_parts({**base, "read_through": True})
-    assert "先通讀整批" not in static and "先通讀整批" in own  # not in the cached part of the prompt
+    assert "讀整批時找到的地方寫出來" not in static and "讀整批時找到的地方寫出來" in own  # not in the cached part of the prompt
     assert p.render_parts(base)[0] == static  # the shared rules do not change with the switch
 
 

@@ -16,7 +16,10 @@ web search, subagents). A custom agent can name the tools it has (``tools`` in `
 the working directory); each call writes ``PLAIN_AGENT`` there, with only ``finish`` (and ``view_file`` when the
 request is in ``request.md``), and passes ``--agent``: the same one-sentence request then carried about 2,400 input
 tokens; the model's thinking did not change. The agent's body is a one-line instruction to answer directly; NCTE's
-rules stay in the prompt. ``openrouter.agy_plain_agent: false`` turns it off; when agy does not know the agent (a
+rules stay in the prompt. Only the steps in ``PLAIN_AGENT_STAGES`` (``openrouter.agy_plain_agent_stages``) use it:
+step-level tests on 2026-10-22 found translation as good with it and about 30% faster, while the reading steps lost
+facts and address terms (evidence quotes that no longer matched the source) and failed the schema more often.
+``openrouter.agy_plain_agent: false`` turns it off; when agy does not know the agent (a
 CLI update), the call says so once in the log and goes on without it. The user's own rules (``~/.gemini/GEMINI.md``)
 are read by agy too; NCTE cannot turn that off.
 
@@ -75,6 +78,7 @@ BAD_COMMAND = ("flag provided but not defined", "unknown flag", "flag needs an a
 PLAIN_AGENT_NAME = "ncte-plain"
 # tool names must be agy's own (a name agy does not have may hang the agent, per its docs)
 PLAIN_AGENT_TOOLS = ("finish",)
+PLAIN_AGENT_STAGES = ("translate",)  # the steps measured as good with it (2026-10-22)
 FILE_AGENT_TOOLS = ("view_file", "finish")  # the request is in request.md: the model has to read it
 PLAIN_AGENT = ("---\nname: {name}\ndescription: Answers one request with one JSON object; uses no tools.\n"
                "tools:\n{tools}mainAgent: true\nsubagent: false\n---\n"
@@ -144,7 +148,8 @@ class AgyCLIClient:
     def __init__(self, *, models: list[str] | None = None, timeout: float = 1800,
                  waits: tuple[float, ...] = RETRY_WAITS, binary: str | None = None, sleep: Any = time.sleep,
                  log: Callable[[str], None] | None = None, limit_wait: float = LIMIT_WAIT,
-                 limit_max: float = LIMIT_MAX, home: str | Path | None = None, plain_agent: bool = True):
+                 limit_max: float = LIMIT_MAX, home: str | Path | None = None, plain_agent: bool = True,
+                 plain_agent_stages: tuple[str, ...] | list[str] = PLAIN_AGENT_STAGES):
         self.extra_models = [m for m in models or [] if m and m.startswith(PREFIX)]
         self.log = log
         self.timeout = timeout
@@ -157,6 +162,7 @@ class AgyCLIClient:
         self._quota: tuple[float, dict[str, Any] | None] = (0.0, None)
         self._lock = threading.Lock()
         self.plain_agent = plain_agent  # set off for the client's life when agy does not know the agent
+        self.plain_agent_stages = tuple(plain_agent_stages)
 
     # ------------------------------------------------------------ catalog
     def listed(self) -> list[str]:
@@ -324,7 +330,8 @@ class AgyCLIClient:
                 prompt = READ_FILE.format(n=len(prompt))
             while True:
                 attempt += 1
-                agent = self.write_agent(work, reads_file=reads_file) if self.plain_agent else None
+                agent = (self.write_agent(work, reads_file=reads_file)
+                         if self.plain_agent and req.stage.split(":")[0] in self.plain_agent_stages else None)
                 try:
                     proc = _run_turn(self.args(model, prompt, agent=agent), timeout=self.timeout, cwd=str(work))
                 except subprocess.TimeoutExpired:

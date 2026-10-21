@@ -10,10 +10,27 @@ def test_rules_follow_the_payload():
     plain = p.render({"units": [{"unit_id": "u", "source": "こんにちは"}], "glossary": []})
     assert "address_terms" not in plain and "may_refer_to" not in plain and "《" not in plain.split("## 翻譯規則")[1]
     assert "<!--" not in plain and "只輸出指定 JSON" in plain
-    full = p.render({"units": [{"unit_id": "u", "source": "⟦1⟧強敵《とも》⟦/1⟧"}], "address_terms": [{}],
-                     "glossary": [{"ja": "a", "may_refer_to": []}]})
+    full = p.render({"units": [{"unit_id": "u", "source": "⟦1⟧強敵《とも》⟦/1⟧"}], "address_terms": [{"speaker": "C1"}],
+                     "glossary": [{"ja": "a", "may_refer_to": ["b"]}]})
     assert "`address_terms`：" in full and "may_refer_to" in full and "受保護的排版標記" in full and "ruby" in full
     assert "<!--" not in p.render()  # without a payload every block is kept
+
+
+def test_an_empty_field_does_not_switch_its_rules_on():
+    """A request that sends a field with nothing in it (null, "", [], {}, false) carries none of that data."""
+    p = load_prompt("translate")
+    base = {"units": [{"unit_id": "u", "source": "こんにちは"}]}
+    for empty in (None, "", [], {}, False):
+        out = p.render({**base, "address_terms": empty, "glossary": [{"ja": "a", "may_refer_to": empty}]})
+        assert "`address_terms`：" not in out and "may_refer_to" not in out, empty
+    assert "`address_terms`：" in p.render({**base, "address_terms": [{"speaker": "C1"}]})
+    # a key's name appearing as a value is not the key
+    assert "`address_terms`：" not in p.render({**base, "notes": ["address_terms"]})
+    # the "otherwise" block (key absent) is kept when the key is missing or empty, left out when it has a value
+    assert '{"translations": [' in p.render({**base, "read_through": False})
+    assert '{"read_through": ["…"]' in p.render({**base, "read_through": True})
+    # `text:` conditions still look at the payload's text
+    assert "受保護的排版標記" in p.render({"units": [{"unit_id": "u", "source": "⟦1⟧a⟦/1⟧"}]})
 
 
 def _rules(text: str) -> dict[str, str]:
@@ -311,12 +328,14 @@ def test_a_subordinate_part_stays_subordinate():
 
 
 def test_proofreading_lists_the_readings_before_calling_a_meaning_error():
-    """ADR-070: before judging the meaning of a line, list the readings grammar and context allow; a translation in
-    one of them is not a meaning error; when every reading asserts more than the source, the fix is the wording that
-    asserts none of it; `problem` writes the readings out."""
+    """ADR-070: a translation in one of the readings grammar and context allow is not a meaning error; when every
+    reading asserts more than the source, the fix is the wording that asserts none of it; `problem` writes the readings
+    out. Readings are listed only when source and translation show a concrete mismatch, and only those with a basis
+    (2026-10-22: listing every imagined reading for every paragraph is reasoning spent where nothing is wrong)."""
     pr = load_prompt("proofread").render({"paragraphs": []})
     meaning = _bullet(pr, "meaning")
-    for word in ("先列出", "容許的讀法", "其中一種讀法", "`ambiguity`", "多斷定", "`fix`", "不帶這些斷定",
+    for word in ("先對照原文與目前的譯文", "看不出具體的落差", "不必再找其他讀法", "看得出具體落差時，才列出",
+                 "**有根據**的讀法", "只是想像得到", "其中一種讀法", "`ambiguity`", "多斷定", "`fix`", "不帶這些斷定",
                  "`problem` 要寫出列出的讀法"):
         assert word in meaning, word
     amb = _bullet(pr, "ambiguity")
@@ -340,10 +359,11 @@ def test_the_fix_check_weighs_before_and_after_against_the_readings_the_source_a
 
 
 def test_review_lists_the_readings_before_calling_a_mistranslation():
-    """ADR-070: review's two-readings test starts from the readings grammar and context allow, as proofreading does."""
+    """ADR-070: review's two-readings test is the same as proofreading's: readings with a basis, listed only when
+    source and translation show a concrete mismatch."""
     rv = load_prompt("review").render({"items": []})
     rule = _bullet(rv, "mistranslation")
-    for word in ("先列出", "容許的讀法", "其中一種讀法", "多斷定", "不帶這些斷定", "`evidence` 寫出列出的讀法"):
+    for word in ("先對照原文與目前的譯文", "看得出具體落差時，才列出", "**有根據**的讀法", "其中一種讀法", "多斷定", "不帶這些斷定", "`evidence` 寫出列出的讀法"):
         assert word in rule, word
     assert not any(w in rv for w in BOOK_WORDS)
 
