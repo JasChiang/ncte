@@ -150,6 +150,23 @@ def tail(conn: sqlite3.Connection, book_id: str, upto: int, unit_ids: set[str] |
     return out[::-1]
 
 
+def head(conn: sqlite3.Connection, book_id: str, after: int, n: int = BEFORE_UNITS,
+         story: set[str] | None = None) -> list[dict[str, Any]]:
+    """The first ``n`` translated paragraphs after ``after`` (of the ``story`` files, when given): what follows a
+    stretch sent on its own (paragraphs asked again, ADR-098), to read, not to check."""
+    best = latest_texts(conn, book_id)
+    out: list[dict[str, Any]] = []
+    for r in conn.execute(_UNITS + " AND ordinal>? ORDER BY ordinal", (book_id, after)):
+        t = best.get(r["id"])
+        if t is None or (story is not None and r["resource_href"] not in story):
+            continue
+        out.append({"unit_id": r["id"], "ja": r["plain_text"], "zh": as_exported(t), "_tid": t["id"],
+                    "_at": r["ordinal"], "_href": r["resource_href"]})
+        if len(out) >= n:
+            break
+    return out
+
+
 def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> list[dict[str, str]]:
     """The people who speak in this stretch (and anyone named in it): name, gender, way of speaking."""
     from ..memory.style import load_style

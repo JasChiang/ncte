@@ -1129,6 +1129,6 @@ open workspace/eval/<timestamp>/report.html
 - 測試：`tests/unit/test_agy_cli.py`。771 passed、2 skipped；ruff、mypy 通過。
 
 ## 校稿 partial 續跑只補沒判定的段落（2026-10-22，分支 partial-proofread-resume-2026-10-22；ADR-098）
-- `context_pipeline.proofread_pass` 遇到 partial 時改走 `_fill_unanswered`／`_gap_stretches`；每一輪計數的 `no_verdict_ids`、`verdicts_filled`；`_stretches` 合併清單；`_unanswered`、`_counts`（紀錄行不列 id）。
+- `context_pipeline.proofread_pass` 遇到 partial 時改走 `_fill_unanswered`／`_gap_stretches`（前後各附同一章的段落：`proofread.head`、`proofread` 提示詞的 `context_after`）；每一輪計數的 `no_verdict_ids`、`verdicts_filled`；`_stretches` 合併清單；`_unanswered`、`_counts`（紀錄行不列 id）。
 - 網頁：`Runner.progress` 的 `unanswered`；執行已結束時的「補問沒判定的段落」。
 - 測試：`tests/integration/test_proofread_fill.py`（新）。773 passed、5 skipped；ruff、mypy 通過。

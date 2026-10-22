@@ -21,10 +21,12 @@ class Proofreader:
         self.mode = mode
         self.flag: set[str] = set()
         self.asked: list[tuple[str, list[str]]] = []  # (step, paragraphs)
+        self.payloads: list[dict[str, Any]] = []
 
     def __call__(self, payload: dict[str, Any], req: Any) -> dict[str, Any]:
         paras = payload["paragraphs"]
         self.asked.append((req.stage, [p["unit_id"] for p in paras]))
+        self.payloads.append(payload)
         # "first2": the first pass leaves gaps, the second (on the cross model) answers for every paragraph
         first = self.mode == "first" or (self.mode == "first2" and req.stage == "proofread")
         given = paras[:1] if first else paras
@@ -58,7 +60,9 @@ def _partial_run(conn, cfg, fixtures) -> tuple[str, Proofreader, set[str], dict[
 
 
 def test_resume_asks_only_the_paragraphs_without_a_verdict_and_completes_the_pass(conn, cfg, fixtures):
-    rid, _, gaps, before = _partial_run(conn, cfg, fixtures)
+    cfg.context.proofread_chunk_units = 3  # small stretches: gaps in the middle of a chapter, with text after them
+    rid, first, gaps, before = _partial_run(conn, cfg, fixtures)
+    assert not any("context_after" in p for p in first.payloads)  # a whole pass: the stretches follow each other
     pr = Proofreader("all")
     flagged = sorted(gaps)[0]
     pr.flag = {flagged}  # an error found now goes back to the translator and its fix is checked (ADR-055)
@@ -73,6 +77,11 @@ def test_resume_asks_only_the_paragraphs_without_a_verdict_and_completes_the_pas
     assert s.status == "completed"
     sent = [u for _, ids in pr.asked for u in ids]
     assert sent and set(sent) == gaps and len(sent) == len(gaps)  # each once; none of those with a verdict
+    # each stretch comes with the paragraphs before and after it in its chapter, to read (only source and translation)
+    shown = [p for p in pr.payloads if "context_after" in p]
+    assert shown and all(1 <= len(p["context_after"]) <= 6 and all(set(a) == {"ja", "zh"} for a in p["context_after"])
+                         for p in shown)
+    assert any("context_before" in p for p in pr.payloads)
     status, cp = _job(conn, rid)
     assert status == "succeeded" and cp["no_verdict"] == 0 and "no_verdict_ids" not in cp
     assert cp["checked"] == before["checked"] + len(gaps) and cp["verdicts_filled"] == len(gaps)

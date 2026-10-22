@@ -1079,7 +1079,7 @@ class ContextOrchestrator(Orchestrator):
         a verdict (``no_verdict_ids``), each pass's own on that pass's step (the last on the cross model when chosen),
         in pass order, against the current translation; the paragraphs with a verdict are not asked again. They go
         through the same flow as a stretch (asked again alone once, fixes retranslated and checked against the source,
-        ADR-055). What comes back with a verdict is added to its pass; what still has none stays listed with a record
+        ADR-055), with the paragraphs before and after them to read. What comes back with a verdict is added to its pass; what still has none stays listed with a record
         of its own (one more try on each resume, never a loop in one run); a request that failed or was not sent
         because of a stop leaves its paragraphs listed. The pass is complete when nothing is left (nor refused or
         failed before). The later passes' counts and ``upto_translation_id`` stay as they were."""
@@ -1103,12 +1103,13 @@ class ContextOrchestrator(Orchestrator):
                 continue
             self._proofread_stage = CROSS_PROOFREAD if cross and k == len(passes) else "proofread"
             with self.lock:
-                parts, befores = self._gap_stretches(proofread, gaps, story)
+                parts, befores, afters = self._gap_stretches(proofread, gaps, story)
             came: set[str] = set()
+            following = {id(part): a for part, a in zip(parts, afters, strict=True)}
 
             def one(part: list[dict[str, Any]], before: list[dict[str, Any]], counts: dict[str, Any],
-                    came: set[str] = came) -> None:
-                self._proofread_part(part, before, prompt, counts)
+                    came: set[str] = came, following: dict[int, Any] = following) -> None:
+                self._proofread_part(part, before, prompt, counts, following[id(part)])
                 if counts["failed"]:  # not looked at: still without a verdict, asked on the next resume
                     counts["failed"] = 0
                     return
@@ -1146,9 +1147,10 @@ class ContextOrchestrator(Orchestrator):
         return stats
 
     def _gap_stretches(self, proofread: Any, gaps: set[str], story: set[str] | None
-                       ) -> tuple[list[list[dict[str, Any]]], list[list[dict[str, Any]]]]:
+                       ) -> tuple[list[list[dict[str, Any]]], list[list[dict[str, Any]]], list[list[dict[str, Any]]]]:
         """The paragraphs without a verdict as stretches: ones next to each other go together (up to the stretch
-        size), each stretch with the paragraphs just before it in the same chapter to read (not checked)."""
+        size), each stretch with the paragraphs just before and just after it in the same chapter to read (not
+        checked; as many as a stretch gets before it)."""
         size = self.cfg.context.proofread_chunk_units
         parts: list[list[dict[str, Any]]] = []
         befores: list[list[dict[str, Any]]] = []
@@ -1161,7 +1163,9 @@ class ContextOrchestrator(Orchestrator):
             else:
                 parts.append([x])
                 befores.append(prev)
-        return parts, befores
+        afters = [[a for a in proofread.head(self.conn, self.book.id, part[-1]["_at"], story=story)
+                   if a["_href"] == part[-1]["_href"]] for part in parts]
+        return parts, befores, afters
 
     def _proofread_once(self, saved: dict[str, Any], prompt: Any, record_job: bool,
                         mark: dict[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -1218,7 +1222,7 @@ class ContextOrchestrator(Orchestrator):
                                issues=[*parsed.issues, *(it for it in again.issues if it.unit_id in asked)])
 
     def _proofread_part(self, part: list[dict[str, Any]], before: list[dict[str, Any]], prompt: Any,
-                        stats: dict[str, Any]) -> None:
+                        stats: dict[str, Any], after: list[dict[str, Any]] | None = None) -> None:
         from ..analysis import proofread
         from ..llm.schemas import ProofreadOutput
         from .review import _retranslate_with_feedback, in_conflict
@@ -1229,6 +1233,8 @@ class ContextOrchestrator(Orchestrator):
                                     volume=self.volume, revealed=self.link_revealed,
                                     definitions=self.cfg.context.term_definitions,
                                     compact=self.cfg.translation.compact_payload)
+        if after:  # what follows, to read and not to check (a stretch of paragraphs asked again, ADR-098)
+            extra["context_after"] = [{"ja": a["ja"], "zh": a["zh"]} for a in after]
         visible = [{k: v for k, v in p.items() if not k.startswith("_")} for p in part]
         blocked: list[str] = []
         try:  # the content filter may refuse a stretch; it is then checked in halves
