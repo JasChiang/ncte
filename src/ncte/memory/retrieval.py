@@ -202,7 +202,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             if (u["addressee_status"] if "addressee_status" in u.keys() else None) != "explicit":
                 item["to_certainty"] = "inferred"  # read from the scene, not stated
         utts.append(item)
-    actions = [a for a in state.get("actions", []) if a.get("unit_id") in batch_ids]
+    actions = [{k: v for k, v in a.items() if k not in ("verify", "verified")}  # the second look's notes stay home
+               for a in state.get("actions", []) if a.get("unit_id") in batch_ids]
     for a in actions:
         a["subject_candidates"] = [names.get(x, x) for x in a.get("subject_candidates", [])]
         a["object_candidates"] = [names.get(x, x) for x in a.get("object_candidates", [])]

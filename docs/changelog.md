@@ -1103,3 +1103,8 @@ open workspace/eval/<timestamp>/report.html
 ## 有條件才做的規則、精簡 agent 只用在翻譯（2026-10-22，分支 conditional-rules-2026-10-22；ADR-092）
 - `translate`、`proofread`、`review`、`fix_check`、`scene_analyze`、`scene_read`、`memory_update` 提示詞；`prompt_loader._applies` 只認有內容的值；`openrouter.agy_plain_agent_stages`（`AgyCLIClient(plain_agent_stages=)`）。
 - 測試：`tests/unit/test_prompt_render.py`、`test_read_through.py`、`test_agy_cli.py`。759 passed、2 skipped；ruff、mypy 通過。
+
+## 覆核推測的動作（2026-10-22，分支 verify-actions-2026-10-22；ADR-093）
+- `verify.action_items`、`a:` 參照、`context.verify_action_items`；`verify` 提示詞的 `action` 類；`schemas.VerifyItem.evidence`／`summary`；`retrieval` 不把覆核紀錄放進翻譯請求。
+- 讀書機制的診斷（§3211）：證據與人物卡都在請求裡仍 6 次讀錯、單獨問就答對；三方顧問的改善建議見 docs/todo.md。
+- 測試：`tests/integration/test_verify_actions.py`（新）。763 passed、2 skipped；ruff、mypy 通過。

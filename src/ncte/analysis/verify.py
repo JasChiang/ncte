@@ -3,7 +3,8 @@
 Only what the first pass left in doubt is asked again, with the surrounding text: lines the model was unsure of
 (it named candidates but no speaker, its evidence for a stated speaker did not check, or it read another speaker for
 the rest of a speech), genders known only by inference, and characters merged when a name was
-revealed. The answers never become facts: a speaker stays ``inferred``; a doubtful inferred gender is dropped (the
+revealed, and actions the reading inferred and gave to someone absent from the scene (a quoted line: who said it).
+The answers never become facts: a speaker stays ``inferred``; a doubtful inferred gender is dropped (the
 translation then uses 你); a merge judged "different" stops counting the merged description as this character
 (its forms leave the aliases) and becomes a finding for the user — lines moved by the merge are not moved back.
 """
@@ -24,6 +25,8 @@ AROUND_CHARS = 200  # a paragraph around it: its opening
 FULL_CHARS = 2000  # the asked paragraph and the paragraphs its evidence is in: whole (bounded only against a runaway one)
 MAX_EVIDENCE = 3  # evidence paragraphs outside the window, sent whole
 MAX_ITEMS = 150
+MAX_ACTION_ITEMS = 40  # default for ``context.verify_action_items``
+ACTION_CHARS = 8000  # an action's passage: from a little before it to the end of its scene, at most this much
 MAX_ADDRESS_ITEMS = 300  # forms found by the program's string match (ADR-037)
 ADDRESS_LINES = 2  # lines shown per form
 
@@ -73,7 +76,7 @@ def _speaker_evidence(conn: sqlite3.Connection, book_id: str, utterance_id: str)
     return _ordinals(conn, book_id, list(dict.fromkeys(ids)))
 
 
-def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
+def collect(conn: sqlite3.Connection, book_id: str, max_actions: int = MAX_ACTION_ITEMS) -> list[dict[str, Any]]:
     """Items to look at again. Keys starting with ``_`` stay out of the request."""
     names = _names(conn, book_id)
     items: list[dict[str, Any]] = []
@@ -132,6 +135,7 @@ def collect(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
         items.append({"ref": f"n:{sc['id']}", "kind": "narration", "first_answer": narr["person"], "paragraphs": paras,
                       "_version": str(sc["version"])})  # a scene read again is asked again
     items += question_items(conn, book_id)
+    items += action_items(conn, book_id)[:max_actions]
     # an item answered before with the same content and the same version of its data is not asked again (asking until
     # the model agrees adds nothing); a gender written again, a scene read again, a changed card are asked again
     answered = {r[0]: r[1] for r in conn.execute("SELECT ref, fingerprint FROM verify_answers WHERE book_id=?", (book_id,))}
@@ -169,8 +173,10 @@ def answer_valid(item: dict[str, Any], answer: str) -> bool:
         return answer in ("first", "third", "unclear")
     if kind == "question":
         return bool(answer)
-    if kind == "group":
-        return (answer.startswith("same:") and answer[5:] in cands) or all(x.strip() in cands for x in answer.split(","))
+    if kind in ("group", "action"):
+        if kind == "group" and answer.startswith("same:"):
+            return answer[5:] in cands
+        return all(x.strip() in cands for x in answer.split(","))
     return answer in cands  # speaker, identity, narrator
 
 
@@ -248,6 +254,57 @@ def question_items(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any
             out.append({"ref": f"u:{sc['id']}:{i}", "kind": "question", "question": x["question"],
                         "context": _window(conn, book_id, ordinal, set(at)), "candidates": cands,
                         "_ordinal": ordinal, "_version": str(sc["version"])})
+    return out
+
+
+def action_items(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
+    """Actions the reading only inferred (or could not place) and gave to someone who is not in the scene — no
+    participant, speaker or narrator there: typically a line quoted from someone absent (「〜って言われて」). Inside the
+    scene's reading this is one small part of a long request; asked alone, with the scene's text from a little before
+    it to its end (where the evidence often is), the same model reads it with care. The question shows neither the
+    reading's answer nor its summary of the action (which names that answer): the model reads the passage fresh and the
+    program compares. The passage runs from the scene's start (or a few paragraphs before the action when the scene is
+    long) through the end of the scene — never past it. Who did it stays the model's call, and stays ``inferred``; an
+    action the second look answered is not asked again until the scene is read again."""
+    from ..memory.visibility import visible_names
+
+    out = []
+    for sc in conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq", (book_id,)):
+        state = json.loads(sc["state_json"] or "{}")
+        acts = [(i, a) for i, a in enumerate(state.get("actions") or [])
+                if a.get("status") in ("inferred", "unknown") and not a.get("verified") and a.get("subject_candidates")]
+        if not acts:
+            continue
+        present = {p.get("character_id") for p in state.get("participants") or []}
+        present |= {(state.get("narration") or {}).get("narrator")}
+        present |= {r[0] for r in conn.execute("SELECT DISTINCT speaker_id_nullable FROM utterances WHERE book_id=? AND "
+                                               "scene_id=? AND speaker_id_nullable IS NOT NULL", (book_id, sc["id"]))}
+        rows = conn.execute("SELECT id, ordinal, plain_text FROM units WHERE book_id=? AND scene_id=? AND translatable=1 "
+                            "ORDER BY ordinal", (book_id, sc["id"])).fetchall()
+        at = {r["id"]: k for k, r in enumerate(rows)}
+        names: dict[str, str] | None = None
+        for i, a in acts:
+            if not set(a["subject_candidates"]) - present or a.get("unit_id") not in at:
+                continue
+            names = names if names is not None else visible_names(conn, book_id, sc["end_ordinal"])
+            k0 = at[a["unit_id"]]
+            paras: list[dict[str, str]] = []
+            codes: dict[str, str] = {}
+            used = 0
+            lead = sum(len(match_text(r["plain_text"])[:FULL_CHARS]) for r in rows[:k0 + 1])
+            for k in range(0 if lead <= ACTION_CHARS // 2 else max(0, k0 - CONTEXT_UNITS), len(rows)):
+                text = match_text(rows[k]["plain_text"])[:FULL_CHARS]
+                if used + len(text) > ACTION_CHARS and k > k0:
+                    break
+                code = f"a{len(paras) + 1}"
+                codes[code] = rows[k]["id"]
+                paras.append({"p": code, "text": ("▶ " if k == k0 else "") + text})
+                used += len(text)
+            out.append({"ref": f"a:{sc['id']}:{i}", "kind": "action",
+                        "done_to": [names.get(x, x) for x in a.get("object_candidates") or []],
+                        "paragraphs": paras, "candidates": dict(sorted(names.items())),
+                        "_summary": a.get("summary", ""), "_first": list(a["subject_candidates"]),
+                        "_codes": codes, "_version": f"{sc['version']}|{','.join(a['subject_candidates'])}"})
     return out
 
 
@@ -365,6 +422,31 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             conn.execute("UPDATE scenes SET state_json=? WHERE book_id=? AND id=?",
                          (json.dumps(state, ensure_ascii=False), book_id, sid))
             stats["questions_answered"] = stats.get("questions_answered", 0) + 1
+        elif kind == "a":  # who did an action the reading inferred and gave to someone absent
+            sid, _, idx = key.rpartition(":")
+            sc = conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND id=?", (book_id, sid)).fetchone()
+            state = json.loads(sc[0] or "{}") if sc is not None else {}
+            acts = state.get("actions") or []
+            who = [x.strip() for x in answer.split(",") if x.strip()] if answer != "unknown" else []
+            cited = [c for c in a.evidence if c in item["_codes"]]
+            if not idx.isdigit() or int(idx) >= len(acts) or acts[int(idx)].get("summary", "") != item["_summary"] \
+                    or not answer_valid(item, answer) or (who and not cited):
+                stats["ignored"] += 1  # an answer without the passage it rests on changes nothing
+                continue
+            act = acts[int(idx)]
+            before = act.get("subject_candidates") or []
+            act["verified"] = True
+            act["verify"] = {"before": before, "reason": a.reason[:200], "evidence": [item["_codes"][c] for c in cited]}
+            if who == before:
+                stats["actions_kept"] = stats.get("actions_kept", 0) + 1
+            else:  # the reading's one-line summary names the one it guessed: replaced by the second look's own
+                act["verify"]["summary_before"] = act.get("summary", "")
+                act["summary"] = a.summary.strip()[:200]
+                act["subject_candidates"] = who
+                act["status"] = "inferred" if who else "unknown"
+                stats["actions_changed"] = stats.get("actions_changed", 0) + 1
+            conn.execute("UPDATE scenes SET state_json=? WHERE book_id=? AND id=?",
+                         (json.dumps(state, ensure_ascii=False), book_id, sid))
         elif kind == "i":
             if answer in item["candidates"] and answer != key:  # 「姉ちゃん」 in the sister's story is 高木
                 _narrator_is(conn, book_id, key, answer)

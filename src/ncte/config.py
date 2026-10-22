@@ -168,6 +168,9 @@ class ContextConfig(_Strict):
     # after the second look: characters who matter and still have no gender are asked once more, with sentences
     # spread over the book where they speak, are named or are spoken to; an answer counts only with the sentences cited
     gender_gaps: bool = True
+    # the second look also asks who did an action the reading only inferred and gave to someone not in the scene
+    # (a quoted line: 「〜って言われて」), with the scene's text after it; at most this many per book (0: none)
+    verify_action_items: int = Field(40, ge=0, le=500)
     # after the first translation of the book, before proofreading: kanji words carried over unchanged into the Chinese
     # (found by string match) are put to the model, which says which ones read otherwise in Taiwan Chinese; those get
     # a glossary entry and their paragraphs go back to the translator

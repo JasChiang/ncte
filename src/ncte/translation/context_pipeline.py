@@ -540,7 +540,7 @@ class ContextOrchestrator(Orchestrator):
         if record_job:
             self._begin_job("verify")
         with self.lock:
-            items = verify.collect(self.conn, self.book.id)
+            items = verify.collect(self.conn, self.book.id, max_actions=self.cfg.context.verify_action_items)
         stats: dict[str, int] = {"items": len(items)}
         prompt = load_prompt("verify")
         chunks = [items[i:i + VERIFY_BATCH] for i in range(0, len(items), VERIFY_BATCH)]
