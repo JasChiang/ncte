@@ -197,9 +197,15 @@ class Runner:
                     self._left[row["id"]] = 0.0
             left = self._left[row["id"]]
         provider = (json.loads(row["config_json"]).get("_run_options") or {}).get("client")
+        unanswered = 0  # paragraphs proofreading left without a verdict: continuing asks only them (ADR-098)
+        if (pj := conn.execute("SELECT checkpoint_json FROM jobs WHERE run_id=? AND stage='proofread' AND "
+                               "status='partial'", (row["id"],)).fetchone()) is not None:
+            from ..translation.context_pipeline import _unanswered
+
+            unanswered = sum(map(len, _unanswered(json.loads(pj["checkpoint_json"] or "{}"))))
         return {"run": {"id": row["id"], "status": status, "budget_usd": row["budget_usd"], "spent_usd": round(spent, 4),
                         "left_usd": left, "model": row["model"], "started_at": row["started_at"], "provider": provider,
-                        "plan_usd": round(run_plan_usd(conn, [row["id"]]), 2)},
+                        "plan_usd": round(run_plan_usd(conn, [row["id"]]), 2), "unanswered": unanswered},
                 "stages": stages, "busy": live, "other_busy": (self.busy and not live) or elsewhere is not None,
                 "elsewhere": elsewhere,
                 "log": list(self.log)[-8:] if live or self.run_id == row["id"] else [],

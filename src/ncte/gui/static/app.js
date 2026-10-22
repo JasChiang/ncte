@@ -286,6 +286,7 @@ async function runCard(id, o) {
         <button class="btn primary" data-go data-budget="${Math.max(more, r.budget_usd + 1)}">把上限提高到 ${money(Math.max(more, r.budget_usd + 1))} 並繼續</button>`; }
     else if (r.status === "running_elsewhere") action = `<p class="small">${esc(p.elsewhere.source)}（pid ${esc(p.elsewhere.pid)}）正在翻譯這本書；這裡不能同時繼續，等它結束或在那邊暫停後再回來。</p>`;
     else if (r.status !== "completed") action = `<button class="btn primary" data-go>繼續翻譯</button>`;
+    else if (r.unanswered) action = `<p class="small">對照校稿有 ${r.unanswered} 段沒拿到判定，還不算看過。繼續只會補問這些段落。</p><button class="btn primary" data-go>補問沒判定的段落</button>`;
     body = `<div class="run-now"><strong>${esc(st)}</strong><span class="muted small">最近一次執行：${cost(r)}</span></div>
       ${p.error ? `<p class="issue">${esc(p.error)}</p>` : ""}${r.status === "stopped_fatal" ? `<p class="small">如果是餘額不足，儲值後按繼續即可。</p>` : ""}
       ${bars}<div style="margin-top:10px">${action} ${exportBtns}</div>`;

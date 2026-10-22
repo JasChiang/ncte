@@ -392,7 +392,8 @@ class ContextOrchestrator(Orchestrator):
         stretch with its retranslations and their checks into counts of its own, added to ``stats`` when it is done.
         The checkpoint's ``done_until_ordinal`` moves only as far as the stretches done without a gap; a stretch done
         past a gap is kept in ``done_beyond`` (its paragraphs) and not done again on resume; ``mark`` is kept in the
-        checkpoint as it is (proofreading's pass, ADR-066). Returns True when stopped (paused) before the end."""
+        checkpoint as it is (proofreading's pass, ADR-066); a list in the counts (the paragraphs left without a verdict,
+        ADR-098) is joined, not added. Returns True when stopped (paused) before the end."""
         beyond = set(done_beyond)  # paragraphs of stretches done past the gap by an earlier attempt
         todo = [k for k, p in enumerate(parts) if not {x["unit_id"] for x in p} <= beyond]
         finished: set[int] = set()
@@ -400,16 +401,16 @@ class ContextOrchestrator(Orchestrator):
         until = after
         frontier = 0  # todo[:frontier] are done
 
-        def work(i: int) -> dict[str, int]:
-            counts = fresh()
+        def work(i: int) -> dict[str, Any]:
+            counts: dict[str, Any] = dict(fresh())
             k = todo[i]
             one(parts[k], befores[k], counts)
             return counts
 
-        def done(i: int, counts: dict[str, int]) -> None:
+        def done(i: int, counts: dict[str, Any]) -> None:
             nonlocal frontier, until
             for key, v in counts.items():
-                stats[key] = stats.get(key, 0) + v
+                stats[key] = [*stats.get(key, []), *v] if isinstance(v, list) else stats.get(key, 0) + v
             finished.add(i)
             beyond.update(x["unit_id"] for x in parts[todo[i]])
             while frontier in finished:
@@ -1030,6 +1031,8 @@ class ContextOrchestrator(Orchestrator):
         from .review import new_stats
 
         job = self._job("proofread", self.book.id)
+        if record_job and job is not None and job["status"] == "partial":  # resumed: only what had no verdict (ADR-098)
+            return self._fill_unanswered(json.loads(job["checkpoint_json"] or "{}"))
         if record_job and (job is None or job["status"] not in ("pending", "running")):
             return {}
         from ..config import proofread_passes
@@ -1066,8 +1069,99 @@ class ContextOrchestrator(Orchestrator):
         if record_job:  # a stretch refused or failed was not checked: the pass is partial, not done
             self._set_job("proofread", self.book.id, self._pass_status(stats), None,
                           {**stats, "upto_translation_id": self._last_translation_id()})
-        self.log(f"proofreading: {stats}")
+        self.log(f"proofreading: {_counts(stats)}")
+        if record_job and (left := sum(map(len, _unanswered(stats)))):
+            self.log(f"  {left} paragraph(s) without a verdict: ncte resume --run-id {self.run_id} asks only them again")
         return stats
+
+    def _fill_unanswered(self, cp: dict[str, Any]) -> dict[str, Any]:
+        """ADR-098: a resumed run whose proofreading ended partial sends again only the paragraphs a pass left without
+        a verdict (``no_verdict_ids``), each pass's own on that pass's step (the last on the cross model when chosen),
+        in pass order, against the current translation; the paragraphs with a verdict are not asked again. They go
+        through the same flow as a stretch (asked again alone once, fixes retranslated and checked against the source,
+        ADR-055). What comes back with a verdict is added to its pass; what still has none stays listed with a record
+        of its own (one more try on each resume, never a loop in one run); a request that failed or was not sent
+        because of a stop leaves its paragraphs listed. The pass is complete when nothing is left (nor refused or
+        failed before). The later passes' counts and ``upto_translation_id`` stay as they were."""
+        from ..analysis import proofread
+        from ..config import CROSS_PROOFREAD
+        from .review import new_stats
+
+        passes = [dict(p) for p in cp["passes"]] if "passes" in cp else [dict(cp)]
+        if not any(p.get("no_verdict_ids") for p in passes):
+            return {}
+        prompt = load_prompt("proofread")
+        cross = self.cfg.review.cross_proofread_model
+        with self.lock:
+            story = self._story_files()
+            before_max = self.conn.execute("SELECT COALESCE(MAX(id), 0) FROM qa_findings").fetchone()[0]
+        asked: set[str] = set()  # sent again and answered for (a verdict, a refusal, or still none: a new record)
+        stopped = False
+        for k, p in enumerate(passes, 1):
+            gaps = set(p.get("no_verdict_ids") or [])
+            if not gaps or stopped:
+                continue
+            self._proofread_stage = CROSS_PROOFREAD if cross and k == len(passes) else "proofread"
+            with self.lock:
+                parts, befores = self._gap_stretches(proofread, gaps, story)
+            came: set[str] = set()
+
+            def one(part: list[dict[str, Any]], before: list[dict[str, Any]], counts: dict[str, Any],
+                    came: set[str] = came) -> None:
+                self._proofread_part(part, before, prompt, counts)
+                if counts["failed"]:  # not looked at: still without a verdict, asked on the next resume
+                    counts["failed"] = 0
+                    return
+                with self.lock:
+                    came.update(x["unit_id"] for x in part)
+
+            got: dict[str, Any] = new_stats(checked=0, blocked=0, failed=0)
+            stopped = self._stretches("proofread", "proofreading (paragraphs without a verdict)", parts, befores, one,
+                                      got, None, [], False, lambda: new_stats(checked=0, blocked=0, failed=0))
+            left = (gaps - came) | set(got.get("no_verdict_ids", []))
+            for key, v in got.items():  # sent already in this pass: only what came back is added
+                if isinstance(v, int) and key not in ("sent", "no_verdict", "failed"):
+                    p[key] = p.get(key, 0) + v
+            p["verdicts_filled"] = p.get("verdicts_filled", 0) + got["checked"]
+            p["no_verdict"] = len(left)
+            if left:
+                p["no_verdict_ids"] = sorted(left)
+            else:
+                p.pop("no_verdict_ids", None)
+            asked |= came
+            self.log(f"proofreading pass {k}: {len(gaps)} paragraph(s) without a verdict asked again; "
+                     f"{got['checked']} answered, {len(left)} still without one")
+        if asked:  # the record of the earlier try is replaced by what this one found (a verdict, or a new record)
+            with self.lock, Transaction(self.conn):
+                for uid in sorted(asked):
+                    self.conn.execute("UPDATE qa_findings SET status='superseded' WHERE book_id=? AND unit_id=? AND "
+                                      "type='proofread_no_verdict' AND status='open' AND id<=?",
+                                      (self.book.id, uid, before_max))
+        stats = {**_added_up(passes), **({"since_translation_id": cp["since_translation_id"]}
+                                         if "since_translation_id" in cp else {}), "passes": passes} \
+            if "passes" in cp else passes[0]
+        self._set_job("proofread", self.book.id, self._pass_status(stats), None,
+                      {**stats, "upto_translation_id": cp.get("upto_translation_id", self._last_translation_id())})
+        self.log(f"proofreading (paragraphs without a verdict): {_counts(stats)}")
+        return stats
+
+    def _gap_stretches(self, proofread: Any, gaps: set[str], story: set[str] | None
+                       ) -> tuple[list[list[dict[str, Any]]], list[list[dict[str, Any]]]]:
+        """The paragraphs without a verdict as stretches: ones next to each other go together (up to the stretch
+        size), each stretch with the paragraphs just before it in the same chapter to read (not checked)."""
+        size = self.cfg.context.proofread_chunk_units
+        parts: list[list[dict[str, Any]]] = []
+        befores: list[list[dict[str, Any]]] = []
+        for x in [x for part in proofread.chunks(self.conn, self.book.id, gaps, size=1 << 30, story=story)
+                  for x in part]:
+            prev = [b for b in proofread.tail(self.conn, self.book.id, x["_at"] - 1, story=story)
+                    if b["_href"] == x["_href"]]
+            if parts and len(parts[-1]) < size and prev and prev[-1]["unit_id"] == parts[-1][-1]["unit_id"]:
+                parts[-1].append(x)
+            else:
+                parts.append([x])
+                befores.append(prev)
+        return parts, befores
 
     def _proofread_once(self, saved: dict[str, Any], prompt: Any, record_job: bool,
                         mark: dict[str, Any]) -> tuple[dict[str, Any], bool]:
@@ -1124,7 +1218,7 @@ class ContextOrchestrator(Orchestrator):
                                issues=[*parsed.issues, *(it for it in again.issues if it.unit_id in asked)])
 
     def _proofread_part(self, part: list[dict[str, Any]], before: list[dict[str, Any]], prompt: Any,
-                        stats: dict[str, int]) -> None:
+                        stats: dict[str, Any]) -> None:
         from ..analysis import proofread
         from ..llm.schemas import ProofreadOutput
         from .review import _retranslate_with_feedback, in_conflict
@@ -1167,6 +1261,8 @@ class ContextOrchestrator(Orchestrator):
             for uid in sorted(valid - looked):
                 self._finding(uid, "proofread_no_verdict", "low", "proofreading gave no verdict for this paragraph, "
                               "asked again on its own", translation_id=tids.get(uid))
+            if valid - looked:  # kept with the pass: a resumed run asks them again (ADR-098)
+                stats["no_verdict_ids"] = sorted(valid - looked)
             valid = looked  # only what was answered for counts as checked
         stats["checked"] += len(valid)
         _outlived(self, stats, {u: tids[u] for u in looked}, parsed.issues, "proofread",
@@ -1756,6 +1852,16 @@ def _outlived(orch: Any, stats: dict[str, Any], checked: dict[str, int], issues:
         reported.setdefault(it.unit_id, set()).add(f"review:{stage}_{it.kind}")
     if n := supersede(orch, checked, reported, kinds):
         stats["superseded"] = stats.get("superseded", 0) + n
+
+
+def _unanswered(stats: dict[str, Any]) -> list[list[str]]:
+    """Each proofreading pass's paragraphs left without a verdict (ADR-098)."""
+    return [p.get("no_verdict_ids", []) for p in stats.get("passes") or [stats]]
+
+
+def _counts(stats: dict[str, Any]) -> dict[str, Any]:
+    """The counts for the log line, without the lists of paragraphs."""
+    return {k: ([_counts(p) for p in v] if k == "passes" else v) for k, v in stats.items() if k != "no_verdict_ids"}
 
 
 def _one_pass(stats: dict[str, Any]) -> dict[str, Any]:
