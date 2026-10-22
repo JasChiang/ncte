@@ -18,13 +18,14 @@ import json
 import sqlite3
 from typing import Any
 
-from ..memory.repository import character_basics, line_relations
+from ..memory.repository import character_basics, line_relations, pair_relations
 from ..series import pos
 from ..translation.cache import latest_texts
 from .reader import as_exported
 
 CHUNK_UNITS = 60  # paragraphs per request: source and translation side by side (config: proofread_chunk_units)
 BEFORE_UNITS = 6  # paragraphs before the stretch, given to read (not checked)
+CAST_RELATIONS = 4  # relations a person of the stretch gets with the others in it
 
 
 _UNITS = ("SELECT * FROM units WHERE book_id=? AND translatable=1 AND kind IN ('text','heading') AND "
@@ -186,8 +187,22 @@ def cast(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]]) -> 
                 item["voice_toward"] = imp["voice_toward"]
         if habits.get(c["canonical_name"]):
             item["habits"] = habits[c["canonical_name"]]
+        item["_id"] = c["id"]
         out.append(item)
-    return out[:30]
+    out = out[:30]
+    # how the people of this stretch are related, as read by where it begins: a kin word's side or age in Chinese
+    # (爺爺 or 外公) is judged against what the reading recorded, not guessed (ADR-094)
+    if start is not None:
+        names = {it["_id"]: it["name"] for it in out}
+        for it in out:
+            rel = [x for o in out if o["_id"] != it["_id"]
+                   for x in pair_relations(conn, book_id, it["_id"], o["_id"], names, at=start)
+                   if x.startswith(it["name"] + "是")]
+            if rel:
+                it["relations"] = list(dict.fromkeys(rel))[:CAST_RELATIONS]
+    for it in out:
+        del it["_id"]
+    return out
 
 
 def renderings(conn: sqlite3.Connection, book_id: str, part: list[dict[str, Any]], *,

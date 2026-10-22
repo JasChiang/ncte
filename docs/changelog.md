@@ -1113,3 +1113,7 @@ open workspace/eval/<timestamp>/report.html
 - `DbRecorder.answered`／`took`；`context.reuse_answers`；`ncte translate`／`resume` 的 `--fresh`。
 - 正常流程重讀 §3211 那一場（agy，整本副本）：讀書仍記成爺爺，覆核改成紅葉（ADR-093），翻譯五個「他」都變「她」；補問性別 8 人無失敗（ADR-088）；75 個請求、1 小時 21 分，讀後整理對整本重跑占大半。新譯把「お祖父ちゃんお祖母ちゃん」譯成「外公外婆」，但書中 §979 寫明是父方的祖父母（另案處理）。
 - 測試：`tests/integration/test_reuse_answers.py`（新）、`test_rerun_steps.py`。767 passed、2 skipped；ruff、mypy 通過。
+
+## 親屬詞（2026-10-22，分支 kinship-terms-2026-10-22；ADR-095）
+- `relations`、`translate`、`proofread` 提示詞；`_shared/addition.md`；校稿人物卡的 `relations`。
+- 測試：`tests/integration/test_kinship.py`（新）。769 passed、2 skipped；ruff、mypy 通過。
