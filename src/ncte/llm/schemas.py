@@ -109,6 +109,11 @@ class UtteranceAnalysis(_M):
     # for an explicit speaker: the words of the text that say who speaks (「とミナは言った」), checked verbatim
     speech_tag: str = Field(default="", alias="tag")
 
+    @field_validator("speech_tag", mode="before")
+    @classmethod
+    def _no_tag(cls, v: object) -> object:
+        return "" if v is None else v  # a line without a tag is sometimes answered null rather than left out
+
 
 class ActionAnalysis(_M):
     unit_id: str

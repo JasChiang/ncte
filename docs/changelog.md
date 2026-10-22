@@ -1117,3 +1117,8 @@ open workspace/eval/<timestamp>/report.html
 ## 親屬詞（2026-10-22，分支 kinship-terms-2026-10-22；ADR-095）
 - `relations`、`translate`、`proofread` 提示詞；`_shared/addition.md`；校稿人物卡的 `relations`。
 - 測試：`tests/integration/test_kinship.py`（新）。769 passed、2 skipped；ruff、mypy 通過。
+
+## 動作表一筆一個動作（2026-10-22，分支 action-records-2026-10-22；ADR-096）
+- `scene_analyze`、`scene_read` 提示詞的 `actions` 規則；`schemas.UtteranceAnalysis.speech_tag` 接受 null。
+- 抽驗暫存資料：scratchpad actrec（`build.py` 從書的資料庫重建請求、`run.py` 舊／新提示詞各跑一次、`judge.py` 盲評、`tally.py` 統計）。
+- 測試：`tests/unit/test_schemas.py`（新）。770 passed、2 skipped；ruff、mypy 通過。
