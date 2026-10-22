@@ -172,7 +172,8 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
                     on_downgrade: Callable[[str], None] | None = None,
                     reuse: bool = False) -> tuple[BaseModel, int, StructuredMode]:
     """One logical LLM call with schema validation. Returns (parsed, request_id, mode_used). ``reuse``: the same
-    request already answered (and valid) in this run is taken from the record instead of asked again."""
+    request already answered (and valid) in this run — or, with the recorder's ``reuse``, in an earlier run of the book
+    (ADR-094) — is taken from the record instead of asked again."""
     schema_model = output_model(stage, payload)
     assert schema_model is not None, stage
     ids = ShortIds.for_payload(payload)  # the model reads and writes P1/C1… instead of long ids
@@ -201,10 +202,12 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
                          max_tokens=max_tokens, prompt_version=prompt.version_id,
                          extra={"reasoning": rp} if (rp := reasoning_param(reasoning_setting(cfg, stage))) else {},
                          id_codes=ids.to_long, cached_prefix_chars=len(shared))
-        answered = getattr(recorder, "answered", None)  # only the run's own record keeps answers
+        answered = getattr(recorder, "answered", None)  # only the run's record (the database) keeps answers
         if reuse and answered is not None and (prev := answered(req)) is not None:
             try:
                 parsed, _status = parse_json_output(prev[1], schema_model, ids.decode)
+                if (took := getattr(recorder, "took", None)) is not None:
+                    took(bool(prev[2]) if len(prev) > 2 else False)
                 return parsed, prev[0], current
             except ModelOutputError:
                 pass  # a stored answer that no longer parses is asked again

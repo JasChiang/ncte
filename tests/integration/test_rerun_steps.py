@@ -72,8 +72,17 @@ def test_force_or_reading_since_the_step_runs_it_again(conn, cfg, fixtures):
     conn.execute("UPDATE jobs SET updated_at='2999-01-01T00:00:00Z' WHERE id=(SELECT MAX(id) FROM jobs WHERE "
                  "book_id=? AND stage='scene_analyze' AND status='succeeded')", (book.id,))
     later = Seen()
-    run_book(conn, cfg, fixtures["basic"], later, mode="context")
-    assert {"verify", "relations"} <= later.stages()
+    _, rid3, _ = run_book(conn, cfg, fixtures["basic"], later, mode="context")
+    jobs = _jobs(conn, rid3)
+    assert all(jobs[st][0] == "succeeded" for st in ("verify", "relations"))
+    # the notes did not change, so the requests are the ones answered before: taken from the record (ADR-094)
+    assert not ({"verify", "relations"} & later.stages())
+    cfg.context.reuse_answers = False  # `--fresh`: asked again
+    conn.execute("UPDATE jobs SET updated_at='2999-01-01T00:00:01Z' WHERE id=(SELECT MAX(id) FROM jobs WHERE "
+                 "book_id=? AND stage='scene_analyze' AND status='succeeded')", (book.id,))
+    fresh = Seen()
+    run_book(conn, cfg, fixtures["basic"], fresh, mode="context")
+    assert {"verify", "relations"} <= fresh.stages()
 
 
 def test_a_book_never_proofread_whole_is_proofread_whole(conn, cfg, fixtures):

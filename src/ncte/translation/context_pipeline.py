@@ -356,7 +356,8 @@ class ContextOrchestrator(Orchestrator):
         """A post-read step's requests, built from one snapshot of the notes before any of them is asked, sent side by
         side (``max_concurrency``) and each refused one asked in halves (``call_in_parts`` on ``key``). Every answer
         is in the run's record as soon as it arrives; a resumed run sends again only the requests it has no answer
-        for (the same snapshot gives the same requests: ``reuse``). Returns, in the requests' order, ``(parsed or
+        for (the same snapshot gives the same requests: ``reuse``), and an identical request an earlier run of the book
+        got an answer to is not asked again either (ADR-094). Returns, in the requests' order, ``(parsed or
         None, blocked items, the LLM error)`` for each one asked (None for one not started because of a stop), and
         whether it was stopped. A fatal error is raised once the requests already started are back."""
         out: list[tuple[Any, list[str], LLMError | None] | None] = [None] * len(payloads)
@@ -375,7 +376,12 @@ class ContextOrchestrator(Orchestrator):
         def done(i: int, r: tuple[Any, list[str], LLMError | None]) -> None:
             out[i] = r
 
+        before = dict(getattr(self.recorder, "reused", {}))
         stopped = self._side_by_side(len(payloads), work, done, what)
+        after = getattr(self.recorder, "reused", {})
+        earlier = after.get("earlier_run", 0) - before.get("earlier_run", 0)
+        if earlier:  # ADR-094: identical requests an earlier run already got answers to were not asked again
+            self.log(f"  {what}: {earlier} of {len(payloads)} answers taken from an earlier run (identical request)")
         return out, stopped or any(r is None for r in out)
 
     def _stretches(self, stage: str, what: str, parts: list[list[dict[str, Any]]],

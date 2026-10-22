@@ -1108,3 +1108,8 @@ open workspace/eval/<timestamp>/report.html
 - `verify.action_items`、`a:` 參照、`context.verify_action_items`；`verify` 提示詞的 `action` 類；`schemas.VerifyItem.evidence`／`summary`；`retrieval` 不把覆核紀錄放進翻譯請求。
 - 讀書機制的診斷（§3211）：證據與人物卡都在請求裡仍 6 次讀錯、單獨問就答對；三方顧問的改善建議見 docs/todo.md。
 - 測試：`tests/integration/test_verify_actions.py`（新）。763 passed、2 skipped；ruff、mypy 通過。
+
+## 沿用相同請求的答案（2026-10-22，分支 reuse-answers-2026-10-22；ADR-094）
+- `DbRecorder.answered`／`took`；`context.reuse_answers`；`ncte translate`／`resume` 的 `--fresh`。
+- 正常流程重讀 §3211 那一場（agy，整本副本）：讀書仍記成爺爺，覆核改成紅葉（ADR-093），翻譯五個「他」都變「她」；補問性別 8 人無失敗（ADR-088）；75 個請求、1 小時 21 分，讀後整理對整本重跑占大半。新譯把「お祖父ちゃんお祖母ちゃん」譯成「外公外婆」，但書中 §979 寫明是父方的祖父母（另案處理）。
+- 測試：`tests/integration/test_reuse_answers.py`（新）、`test_rerun_steps.py`。767 passed、2 skipped；ruff、mypy 通過。

@@ -171,6 +171,10 @@ class ContextConfig(_Strict):
     # the second look also asks who did an action the reading only inferred and gave to someone not in the scene
     # (a quoted line: 「〜って言われて」), with the scene's text after it; at most this many per book (0: none)
     verify_action_items: int = Field(40, ge=0, le=500)
+    # a post-read request identical to one an earlier run of this book already got an answer to (same prompt text,
+    # model, effort, schema and data: the request hash) takes that answer instead of asking again, so re-reading one
+    # scene re-asks only what it changed (ADR-094); false (`--fresh`; `--force` too): earlier runs' answers are not used
+    reuse_answers: bool = True
     # after the first translation of the book, before proofreading: kanji words carried over unchanged into the Chinese
     # (found by string match) are put to the model, which says which ones read otherwise in Taiwan Chinese; those get
     # a glossary entry and their paragraphs go back to the translator

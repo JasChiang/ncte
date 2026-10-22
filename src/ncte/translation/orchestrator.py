@@ -235,7 +235,8 @@ class DbRecorder:
     def __init__(self, conn: sqlite3.Connection, lock: threading.RLock, run_id: str, book_id: str,
                  pricing: Pricing, *, reuse: bool = True):
         self.conn, self.lock, self.run_id, self.book_id, self.pricing = conn, lock, run_id, book_id, pricing
-        self.reuse = reuse
+        self.reuse = reuse  # earlier runs' answers to identical post-read requests (ADR-094)
+        self.reused: dict[str, int] = {}  # answers taken instead of asking: this_run / earlier_run
         self.models: dict[str, Pricing] = {}  # step models other than the run's (``stage_models``)
         self.sizes: dict[int, int] = {}  # request → its payload's characters, until it is answered
 
@@ -254,15 +255,24 @@ class DbRecorder:
             self.sizes[rid] = size
             return rid
 
-    def answered(self, req: LLMRequest) -> tuple[int, str] | None:
-        """(request id, answer) of the same request already answered in this run, if any: a post-read step that was
-        stopped part way asks only what it has no answer for when resumed (the same input gives the same request)."""
+    def answered(self, req: LLMRequest) -> tuple[int, str, bool] | None:
+        """(request id, answer) of the same request already answered, if any: a post-read step that was stopped part
+        way asks only what it has no answer for when resumed (the same input gives the same request). With ``reuse``
+        an earlier run's answer to the identical request counts too (ADR-094): the request hash covers the prompt
+        text, model, effort, schema and data, so only a request that changed is asked again."""
         with self.lock:
             row = self.conn.execute(
-                "SELECT id, response_text FROM llm_requests WHERE run_id=? AND book_id=? AND stage=? AND request_hash=? "
-                "AND status='succeeded' AND response_text IS NOT NULL ORDER BY id DESC LIMIT 1",
-                (self.run_id, self.book_id, req.stage, req.request_hash())).fetchone()
-        return (int(row[0]), str(row[1])) if row is not None else None
+                "SELECT id, response_text, run_id FROM llm_requests WHERE book_id=? AND stage=? AND request_hash=? "
+                "AND status='succeeded' AND response_text IS NOT NULL AND (run_id=? OR ?) "
+                "ORDER BY (run_id=?) DESC, id DESC LIMIT 1",
+                (self.book_id, req.stage, req.request_hash(), self.run_id, int(self.reuse), self.run_id)).fetchone()
+        return (int(row[0]), str(row[1]), row[2] != self.run_id) if row is not None else None
+
+    def took(self, earlier: bool) -> None:
+        """An answer from ``answered`` was used (it parsed): counted, for the log and the job details."""
+        key = "earlier_run" if earlier else "this_run"
+        with self.lock:
+            self.reused[key] = self.reused.get(key, 0) + 1
 
     def success(self, rid: int, resp: LLMResponse, parse_status: str) -> None:
         cost, status = resp.cost_usd, "reported"
@@ -437,7 +447,8 @@ class Orchestrator:
         if mode != "json_schema":
             self._note(f"{self.model} does not advertise structured_outputs; using {mode} + strict local "
                        f"Pydantic validation (no native schema guarantee)")
-        recorder = DbRecorder(self.conn, self.lock, self.run_id, self.book.id, self.pricing)
+        recorder = DbRecorder(self.conn, self.lock, self.run_id, self.book.id, self.pricing,
+                              reuse=self.cfg.context.reuse_answers and not self.opts.force)  # --force redoes all
         self.recorder = recorder
         self.stage_pricing = self._step_models()
         recorder.models = self.stage_pricing

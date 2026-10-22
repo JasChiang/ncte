@@ -315,6 +315,8 @@ def translate(
     limit_units: Annotated[int | None, typer.Option("--limit-units", help="Only the first N body units (smoke test)")] = None,
     unit_id: Annotated[list[str] | None, typer.Option("--unit-id", help="Restrict to these unit ids")] = None,
     force: Annotated[bool, typer.Option("--force", help="Ignore translation cache")] = False,
+    fresh: Annotated[bool, typer.Option("--fresh", help="Ask the post-read steps afresh: no answers from earlier runs "
+                                                       "to identical requests (ADR-094)")] = False,
     fake: Annotated[bool, typer.Option("--fake", help="Use offline FakeLLM (NOT a real translation)")] = False,
     reasoning_effort: Annotated[str | None, typer.Option("--reasoning-effort",
                                                          help="low | medium | high … (model-dependent); default = the model's own")] = None,
@@ -326,6 +328,8 @@ def translate(
     cfg = state.cfg
     if reasoning_effort:
         cfg.openrouter.reasoning_effort = None if reasoning_effort == "default" else reasoning_effort
+    if fresh:
+        cfg.context.reuse_answers = False
     book = _book(epub, auto_import=True)
     opts = RunOptions(mode=mode or cfg.app.mode, model=model or cfg.openrouter.model,
                       budget_usd=cfg.openrouter.per_book_budget_usd if budget_usd is None else budget_usd,
@@ -409,6 +413,8 @@ def _orchestrator(cfg: Config, client: Any, book: Book, rid: str, opts: Any) -> 
 @app.command()
 def resume(run_id: Annotated[str, typer.Option("--run-id")],
            budget_usd: Annotated[float | None, typer.Option("--budget-usd", help="Raise/lower the budget")] = None,
+           fresh: Annotated[bool, typer.Option("--fresh", help="No answers from earlier runs to identical post-read "
+                                                              "requests (ADR-094)")] = False,
            as_json: Annotated[bool, typer.Option("--json")] = False) -> None:
     """Continue an interrupted / budget-stopped run from its checkpoint."""
     from .memory.db import Transaction
@@ -417,6 +423,8 @@ def resume(run_id: Annotated[str, typer.Option("--run-id")],
     state._conn = state.ws.find_run(run_id)
     row, cfg, opts = load_run(state.conn, run_id)
     cfg.app.workspace = str(state.cfg.workspace)
+    if fresh:
+        cfg.context.reuse_answers = False
     if budget_usd is not None:
         from .translation.orchestrator import record_event
 
