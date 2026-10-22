@@ -300,3 +300,12 @@ def test_the_plain_agent_is_used_only_by_the_listed_steps(monkeypatch, tmp_path)
     reading, translating = fake.turns_sent()
     assert "--agent" not in reading["args"] and reading["agent"] is None
     assert "--agent" in translating["args"]
+
+
+def test_agy_sends_five_at_a_time_unless_the_number_is_set():
+    cfg = Config()
+    use_agy_models(cfg)
+    assert cfg.openrouter.max_concurrency == 5
+    cfg = Config.model_validate({"openrouter": {"max_concurrency": 2}})
+    use_agy_models(cfg)
+    assert cfg.openrouter.max_concurrency == 2

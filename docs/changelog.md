@@ -1122,3 +1122,8 @@ open workspace/eval/<timestamp>/report.html
 - `scene_analyze`、`scene_read` 提示詞的 `actions` 規則；`schemas.UtteranceAnalysis.speech_tag` 接受 null。
 - 抽驗暫存資料：scratchpad actrec（`build.py` 從書的資料庫重建請求、`run.py` 舊／新提示詞各跑一次、`judge.py` 盲評、`tally.py` 統計）。
 - 測試：`tests/unit/test_schemas.py`（新）。770 passed、2 skipped；ruff、mypy 通過。
+
+## agy 同時送 5 個（2026-10-22；ADR-097）
+- `config.AGY_CONCURRENCY`、`use_agy_models`；`config.example.yaml` 的說明。
+- 抽驗暫存資料：scratchpad conc（`conc.py`、`all.sh`、`run.log`）。
+- 測試：`tests/unit/test_agy_cli.py`。771 passed、2 skipped；ruff、mypy 通過。

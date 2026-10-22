@@ -320,6 +320,9 @@ def use_codex_models(cfg: Config) -> None:
 
 
 AGY_MODEL = "agy/gemini-flash"  # the newest Gemini Flash agy lists (a family name survives a model retiring)
+# requests at a time on agy unless set: 5 kept every request as fast as 2 did and proofreading took half the time, with
+# no rate limit (2026-10-22, 14 requests at each); what runs out sooner is the 5-hour quota, which the client waits for
+AGY_CONCURRENCY = 5
 
 
 def use_agy_models(cfg: Config) -> None:
@@ -337,6 +340,8 @@ def use_agy_models(cfg: Config) -> None:
     o.fallback_models = [m for m in o.fallback_models if agy(m)]
     o.temperature = None
     o.reasoning_effort = o.reasoning_effort or "medium"
+    if "max_concurrency" not in o.model_fields_set:
+        o.max_concurrency = AGY_CONCURRENCY
 
 
 def use_local_models(cfg: Config) -> None:

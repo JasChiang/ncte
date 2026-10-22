@@ -16,7 +16,7 @@ openrouter:
   review_model: null        # null = same as model
   fallback_models: []       # only used if listed here; never switches silently
   timeout_seconds: 120
-  max_concurrency: 2        # requests at a time (ADR-065): baseline batches; context mode: chapters side by side (scenes of a chapter in order), proofreading and reader stretches; 1 = one at a time
+  max_concurrency: 2        # requests at a time (ADR-065): baseline batches; context mode: chapters side by side (scenes of a chapter in order), proofreading and reader stretches; 1 = one at a time; on agy 5 unless set here
   max_attempts: 4
   per_book_budget_usd: 5.0  # default --budget-usd for a run
   require_schema: true
