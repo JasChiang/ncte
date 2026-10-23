@@ -453,7 +453,9 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
 def _write_fixes(orch: Any, rows: list[sqlite3.Row], feedback: dict[str, list[dict[str, Any]]],
                  stats: dict[str, int], *, side_by_side: SideBySide | None = None) -> list[WrittenFix]:
     """The retranslations of ``_retranslate_with_feedback``, written as ``needs_review`` with their ``fix_unchecked``
-    mark (and the record a later check needs, ADR-100): the fixes waiting for their check, in story order."""
+    mark (and the record a later check needs, ADR-100): the fixes waiting for their check, in story order. A fatal
+    error or the budget running out in one group is raised after the groups that finished are written: they wait for
+    their check like any fix a stop cut off (ADR-100), not lost with the group that failed."""
     conn = orch.conn
     with orch.lock:
         current = {r["id"]: latest_translation(conn, r["id"], r["source_hash"]) for r in rows}
@@ -511,11 +513,30 @@ def _write_fixes(orch: Any, rows: list[sqlite3.Row], feedback: dict[str, list[di
     def keep(g: int, part: BatchResult | LLMError) -> None:
         got[g] = part
 
-    if side_by_side is None:
-        for g in range(len(groups)):
-            keep(g, one(g))
-    else:
-        side_by_side(len(groups), one, keep)
+    # a fatal error or the budget running out stops what is left; the groups that finished are written (waiting for
+    # their check, ADR-100: a resumed run asks it) before the error goes on
+    stop: BaseException | None = None
+    try:
+        if side_by_side is None:
+            for g in range(len(groups)):
+                keep(g, one(g))
+        else:
+            side_by_side(len(groups), one, keep)
+    except Exception as exc:  # noqa: BLE001 – raised again once the finished groups are written
+        stop = exc
+    fixes = _write_finished(orch, groups, got, todo, current, before, feedback, stats, res)
+    if stop is not None:
+        raise stop
+    return fixes
+
+
+def _write_finished(orch: Any, groups: list[list[sqlite3.Row]], got: list[BatchResult | LLMError | None],
+                    todo: list[sqlite3.Row], current: dict[str, Any], before: dict[str, str],
+                    feedback: dict[str, list[dict[str, Any]]], stats: dict[str, int],
+                    res: BatchResult) -> list[WrittenFix]:
+    """The retranslations that came back (``got``, by group; None: not sent), written as ``_write_fixes`` says."""
+    from ..exporter import exported_text
+
     for group, part in zip(groups, got, strict=True):
         if part is None:
             continue  # not sent: what was found stays open
@@ -804,6 +825,37 @@ def _claim(x: dict[str, Any]) -> str:
 FixItem = tuple[sqlite3.Row, str, str, list[dict[str, Any]], list[Finding]]
 
 
+def fix_check_chars(cfg: Config) -> int:
+    """The most characters of fixes one fix check request carries: twice ``translation.fix_batch_chars``. A fix
+    request carries up to that many Japanese characters of paragraphs and their windows; checking those fixes reads
+    the same source and window again with the Chinese beside it (the text before, the fix, the translation around),
+    about as much again — so one check holds about what one retranslation request was given."""
+    return 2 * cfg.translation.fix_batch_chars
+
+
+def _fix_chunks(orch: Any, fixes: list[FixItem]) -> list[list[FixItem]]:
+    """The fixes in story order, cut into fix check requests of at most FIX_CHECK_BATCH fixes and ``fix_check_chars``
+    characters — each fix counted as it is sent: its source, the text before and after, the issues, the paragraphs
+    around it (source and translation). A fix larger than the limit goes alone."""
+    limit = fix_check_chars(orch.cfg)
+    fixes = sorted(fixes, key=lambda x: x[0]["ordinal"])
+    with orch.lock:
+        sizes = [len(r["source_text"]) + len(before) + len(after) + sum(len(_claim(x)) for x in issues)
+                 + sum(len(a["source"]) + len(a.get("translation", "")) for a in _surroundings(orch.conn, orch.book.id,
+                                                                                              [r]))
+                 for r, before, after, issues, _ in fixes]
+    out: list[list[FixItem]] = []
+    size = 0
+    for x, n in zip(fixes, sizes, strict=True):
+        if out and len(out[-1]) < FIX_CHECK_BATCH and size + n <= limit:
+            out[-1].append(x)
+            size += n
+        else:
+            out.append([x])
+            size = n
+    return out
+
+
 def _check_fixes(orch: Any, fixes: list[FixItem]) -> dict[str, FixCheck]:
     """One look per fix, against the source: did the new text fix what was found? A fix the check did not answer for
     (its request failed after the empty answers asked again, or the answer left it out) is sent once more on its own,
@@ -815,8 +867,7 @@ def _check_fixes(orch: Any, fixes: list[FixItem]) -> dict[str, FixCheck]:
     prompt = load_prompt("fix_check")
     again: list[FixItem] = []
     failures: list[tuple[int | None, list[str]]] = []
-    for i in range(0, len(fixes), FIX_CHECK_BATCH):
-        chunk = fixes[i:i + FIX_CHECK_BATCH]
+    for chunk in _fix_chunks(orch, fixes):
         left, failed = _ask_fix_checks(orch, prompt, chunk, out)
         if failed is not None:
             failures.append((failed, [r["id"] for r, *_ in chunk]))

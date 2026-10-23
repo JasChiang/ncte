@@ -1159,3 +1159,11 @@ open workspace/eval/<timestamp>/report.html
 - 可驗收報告 `steps_complete`（`acceptance.READ_STEPS`）；網頁 `Runner.progress` 的 `unasked` 與「補問沒問到的項目」。
 - 估算：scratchpad pc（`replay.py` 用那本書資料庫的副本重排修正驗收的分組：43 → 21 個請求）。
 - 測試：`tests/integration/test_pipeline_coverage.py`（新，16 個）、三個 CLI 的單元測試各一個。799 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-101、ADR-102 審閱後修正（2026-10-23，分支 combo-check-2026-10-23）
+- 讀音：`units.with_readings` 改成 `units.text_forms`（本字與讀音是分開的兩份，各自找）；`in_source` 用它；`apply_scene_analysis` 一段一段找（道具、別名、其他寫法），`relevant_glossary` 與讀場景、整理記憶的譯名表挑選也各自找。
+- 沒有名字的人物：`scene._said_alias` 別名至少兩個字（`MIN_FORM_LEN`）；前面場景已知寫法的對卡只在一張卡有這個寫法、模型沒標 `other_person`／`period`、是否群體相同時（拒絕理由寫明原因），對到的記在 `state_json.matched_by_words` 與計數；模型自己取的稱呼記在 `state_json.model_labels`（`scene.RECORD_ONLY`，整理記憶的請求不帶）。
+- 整本步驟：`_ask_groups` 回傳多一項沒問到的項目，請求失敗時馬上分兩半再問一次（`_ask_once_more`：體例、找漏掉的術語照原樣再問一次）；七個步驟的內容審查擋下都記 `<步驟>_blocked`、不再 partial 或列清單（補問性別、體例、角色印象、同形詞、找漏掉的術語）；`_end_step` 的 `answered` 與 `_translated_before`（續跑在翻譯之後補到時記 `<步驟>_after_translation`）；整步重做時之前執行的 `_blocked` 標 superseded；`create_extra_jobs` 看最近一次不是 skipped 的紀錄，partial 有清單就接手。
+- 可驗收報告：`steps_complete` 不看 skipped；新增 `limits`、`answered_after_translation`（不影響可驗收），`summary` 一併列出。網頁「補問沒問到的項目」的說明。
+- `review`：`_fix_chunks`、`fix_check_chars`（修正驗收以 20 段與 2×`fix_batch_chars` 字切，依故事順序）；`_write_fixes` 遇到致命錯誤或預算用完時先寫入已完成的各場（`_write_finished`）再丟出。
+- 測試：`tests/unit/test_units.py`（1）、`tests/integration/test_in_source.py`（3）、`tests/integration/test_entities.py`（1）、`tests/integration/test_pipeline_coverage.py`（7 步驟 ×2 的參數化 2 個與另外 4 個）。837 passed、5 skipped；ruff、mypy 通過。

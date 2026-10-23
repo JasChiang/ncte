@@ -342,3 +342,51 @@ def test_merge_leaves_no_reference_to_the_dropped_card(conn, cfg, fixtures):
     assert conn.execute("SELECT source_viewpoint FROM facts WHERE id='f1'").fetchone()[0] == named
     assert json.loads(conn.execute("SELECT addressee_ids_json FROM utterances WHERE id='q1'").fetchone()[0]) == [named, other]
     assert conn.execute("SELECT addressee_id FROM address_usage WHERE speaker_id=?", (other,)).fetchone()[0] == named
+
+
+def test_words_of_an_earlier_card_mean_it_only_when_the_model_says_nothing_otherwise(conn, cfg, fixtures):
+    """ADR-101: a new character whose words are not in its evidence but are a card's seen in an earlier scene is that
+    card — the program's shortcut, on the record (``matched_by_words``). The model's own word on who this is wins: a
+    past life's 「母親」 (``other_person``, ``period``) or a group is not merged into the card; and words two cards have
+    are not for the program to choose between (handled as any words not in the evidence: rejected here)."""
+    from ncte.analysis.scene import apply_scene_analysis
+    from ncte.llm.schemas import SceneAnalysisOutput
+    from ncte.memory import repository as repo
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    scenes = conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq", (book.id,)).fetchall()
+    first = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal LIMIT 1",
+                         (book.id, scenes[0]["id"])).fetchone()
+    later = scenes[-1]
+    ev = conn.execute("SELECT id FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal LIMIT 1",
+                      (book.id, later["id"])).fetchone()[0]
+    mother, _ = repo.upsert_character(conn, book.id, "母親", name_zh=None, aliases=["義母上"], unit_id=first["id"],
+                                      ordinal=first["ordinal"], origin="test")
+    for name in ("男甲", "男乙"):
+        repo.upsert_character(conn, book.id, name, name_zh=None, aliases=["黒衣の男"], unit_id=first["id"],
+                              ordinal=first["ordinal"], origin="test")
+
+    def read(**nc: object) -> tuple[dict[str, str], dict[str, object]]:
+        out = {"pov": None, "location": None, "time": None, "participants": [], "utterances": [], "actions": [],
+               "props": [], "uncertainties": [],
+               "new_characters": [{"temp_id": "new_1", "aliases_ja": [], "proposed_name_zh": "",
+                                   "evidence_unit_ids": [ev], **nc}]}
+        refs: dict[str, str] = {}
+        sc = conn.execute("SELECT * FROM scenes WHERE id=?", (later["id"],)).fetchone()
+        stats = apply_scene_analysis(conn, book.id, sc, SceneAnalysisOutput.model_validate(out), refs=refs)
+        state = json.loads(conn.execute("SELECT state_json FROM scenes WHERE id=?", (later["id"],)).fetchone()[0])
+        return refs, {**stats, "matched": state.get("matched_by_words", [])}
+
+    refs, got = read(name_ja="母親")
+    assert refs["new_1"] == mother and got["matched_by_words"] == 1
+    assert got["matched"] == [{"ref": "new_1", "name_ja": "母親", "character_id": mother}]
+    refs, got = read(name_ja="義母上")
+    assert refs["new_1"] == mother
+    for other in ({"other_person": True}, {"period": "前世"}, {"other_person": True, "period": "前世"}, {"group": True}):
+        refs, got = read(name_ja="母親", **other)
+        assert refs.get("new_1") != mother and not got["matched"] and got["rejected"] == 1, other
+    refs, got = read(name_ja="黒衣の男")
+    assert "new_1" not in refs and not got["matched"] and got["rejected"] == 1
+    reasons = [r[0] for r in conn.execute("SELECT reason FROM memory_rejections WHERE book_id=? ORDER BY id", (book.id,))]
+    assert reasons[-1].endswith("the words name several known characters")
+    assert reasons[0].endswith("the words name a known character the model says this is not")

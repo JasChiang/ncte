@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Config
-from ..epub.units import in_source, source_form, with_readings
+from ..epub.units import in_source, source_form, text_forms
 from ..llm.schemas import SceneAnalysisOutput
 from ..memory import repository as repo
 from ..memory import visibility as vis
@@ -184,15 +184,28 @@ MAX_NAME_LEN = 24
 PRONOUNS = set(FIRST_PERSON) | set(SECOND_PERSON) | {"彼", "彼女", "あいつ", "こいつ", "そいつ", "奴", "やつ"}
 
 
-def _standalone(alias: str, text: str, longer_names: list[str]) -> bool:
-    """True if ``alias`` occurs in ``text`` outside every longer name that contains it (カイ vs カイト)."""
-    for n in sorted({n for n in longer_names if alias in n and n != alias}, key=len, reverse=True):
-        text = text.replace(n, "\0")
-    return alias in text
+def _standalone(alias: str, texts: str | list[str], longer_names: list[str]) -> bool:
+    """True if ``alias`` occurs in ``texts`` (a text, or several looked in each alone: ``text_forms``) outside every
+    longer name that contains it (カイ vs カイト)."""
+    longer = sorted({n for n in longer_names if alias in n and n != alias}, key=len, reverse=True)
+    for text in [texts] if isinstance(texts, str) else texts:
+        for n in longer:
+            text = text.replace(n, "\0")
+        if alias in text:
+            return True
+    return False
 
 
 def _valid_name(name: str) -> bool:
     return bool(name) and len(name) <= MAX_NAME_LEN and not any(ch in name for ch in "「」『』") and name not in PRONOUNS
+
+
+MIN_FORM_LEN = 2  # words a person is known by, besides a name the model gives: one character (「男」「父」) names anyone
+# what a scene's state keeps for the record only, never sent back to a model: which of the model's new characters the
+# program took for an earlier card by the words it gives (``matched_by_words``), and the label the model gave a person
+# the book does not name (``model_labels``: the model's description, not the book's words — never a name, an alias,
+# evidence or a glossary term)
+RECORD_ONLY = ("matched_by_words", "model_labels")
 
 
 _KIND_ORDER = ("name", "nickname", "title", "description")
@@ -201,10 +214,12 @@ _KIND_ORDER = ("name", "nickname", "title", "description")
 def _said_alias(nc: Any, evidence: list[str]) -> str | None:
     """The book's words a new person is known by when ``name_ja`` is not in its evidence: of the aliases found in the
     evidence paragraphs, a name first, then a nickname, a title, a description, in the model's order otherwise
-    (what each alias is, is the model's reading). A common noun or a pronoun names anyone and is never one."""
+    (what each alias is, is the model's reading). A common noun, a pronoun or a single character (「男」, as other forms
+    of a person are held to two) names anyone and is never one."""
     kinds = {source_form(k.ja): k.kind for k in nc.alias_kinds}
     found = [a for a in dict.fromkeys(source_form(x) for x in nc.aliases_ja)
-             if _valid_name(a) and kinds.get(a) != "common" and any(in_source(a, t) for t in evidence)]
+             if _valid_name(a) and len(a) >= MIN_FORM_LEN and kinds.get(a) != "common"
+             and any(in_source(a, t) for t in evidence)]
     order = {a: _KIND_ORDER.index(k) if (k := kinds.get(a)) in _KIND_ORDER else len(_KIND_ORDER) for a in found}
     return min(found, key=lambda a: order[a]) if found else None
 
@@ -294,7 +309,7 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
     # the lines found by their brackets (structure); who says them is the model's reading
     q_payload = [{"unit_id": q.unit_id, "quote_index": q.index, "text": q.text[:200],
                   "continues_previous_quote": q.continuation_of is not None} for q in quotes]
-    seen = " ".join(with_readings(r["plain_text"]) for r in rows)  # a term is the base text or a reading
+    seen = text_forms(" ".join(r["plain_text"] for r in rows))  # a term is the base text or a reading
     from .narration import hint as narration_hint
 
     prev = conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND seq<? AND version>0 ORDER BY seq DESC LIMIT 1",
@@ -321,7 +336,7 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
                               **({"relations": kin[c["id"]]} if kin.get(c["id"]) else {})}
                              for c in known
                              if (v := vis.character_view(conn, book_id, c, scene["start_ordinal"] - 1, forms_at))],
-        "glossary": [g for g in glossary if str(g.get("ja", "")) in seen],
+        "glossary": [g for g in glossary if any(str(g.get("ja", "")) in f for f in seen)],
     }
 
 
@@ -410,12 +425,15 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     texts = _unit_texts(rows)
     unit_text = {t.id: t.text for t in texts}
     unit_src = {r["id"]: r["plain_text"] for r in rows}  # as stored: the model's words are found in a reading too
-    scene_text = with_readings("\n".join(unit_src.values()))  # what the model's words are looked for in
+    # what the model's words are looked for in: each paragraph as the base text and as read, each alone
+    scene_text = [f for t in unit_src.values() for f in text_forms(t)]
     stats = {"new_characters": 0, "rejected": 0, "explicit": 0, "inferred": 0, "unknown": 0, "examples": 0,
              "human_kept": 0}
     known = vis.visible_characters(conn, book_id, scene["start_ordinal"] - 1)
     ref_map: dict[str, str] = {c["id"]: c["id"] for c in known}
     names_of: dict[str, list[str]] = {c["id"]: [c["canonical_name"], *json.loads(c["aliases_json"])] for c in known}
+    matched: list[dict[str, str]] = []  # new characters taken for an earlier card by their words (on the record)
+    labels: dict[str, str] = {}  # the model's own label of a person the book does not name, by its ref
 
     def rej(item: object, reason: str) -> None:
         stats["rejected"] += 1
@@ -431,9 +449,12 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     if parsed is not None:
         existing_alias = repo.alias_map(repo.characters(conn, book_id))
         forms_at = vis.form_positions(conn, book_id)
-        known_by = {f: c["id"] for c in reversed(known)  # the words each person is known by so far (earliest card wins)
-                    if (view := vis.character_view(conn, book_id, c, scene["start_ordinal"] - 1, forms_at))
-                    for f in [view["name_ja"], *view["aliases_ja"]]}
+        known_by: dict[str, set[str]] = {}  # the words each person is known by so far, and whose they are
+        for card in known:
+            if view := vis.character_view(conn, book_id, card, scene["start_ordinal"] - 1, forms_at):
+                for f in [view["name_ja"], *view["aliases_ja"]]:
+                    known_by.setdefault(f, set()).add(card["id"])
+        group_cards = {c["id"] for c in known if "is_group" in c.keys() and c["is_group"]}
         reveals: list[tuple[str, str, str, Any, list[str]]] = []
         for nc in parsed.new_characters:
             name = source_form(nc.name_ja)  # a name quoted with its reading (婆《ばあ》) is the text's 婆
@@ -442,19 +463,31 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 rej(nc.model_dump(), "invalid character name")
                 continue
             if not any(in_source(name, unit_src[u]) for u in ev_ids):
-                if ev_ids and name in known_by:
-                    # words an earlier scene gave a known person (「指示を出していた男」 in the scene before): that card,
-                    # whose words were checked where they were read — before this scene, never after
-                    ref_map[nc.temp_id] = known_by[name]
-                    names_of.setdefault(known_by[name], []).append(name)
+                cards = known_by.get(name, set())
+                # words an earlier scene gave a known person (「指示を出していた男」 in the scene before): that card,
+                # whose words were checked where they were read — before this scene, never after. Only when the words
+                # are one card's, and the model said nothing that makes this someone else: another person or time
+                # (a past life's 「母親」) or a group where the card is a person (or the other way round) is the
+                # model's reading of who this is, and two cards with the words are not for the program to choose
+                # between — those are handled as any person whose words are not in the evidence
+                if ev_ids and len(cards) == 1 and not nc.other_person and not nc.period.strip() \
+                        and bool(nc.group) == (next(iter(cards)) in group_cards):
+                    cid = next(iter(cards))
+                    ref_map[nc.temp_id] = cid
+                    names_of.setdefault(cid, []).append(name)
+                    matched.append({"ref": nc.temp_id, "name_ja": name, "character_id": cid})
+                    stats["matched_by_words"] = stats.get("matched_by_words", 0) + 1
                     continue
                 said = _said_alias(nc, [unit_src[u] for u in ev_ids])
                 if said is None:  # none of the words the person is given is in the book: the hallucination guard
-                    rej(nc.model_dump(), "name_ja not found verbatim in evidence units (possible hallucination)")
+                    rej(nc.model_dump(), "name_ja not found verbatim in evidence units (possible hallucination)"
+                        + ("; the words name several known characters" if len(cards) > 1 else
+                           "; the words name a known character the model says this is not" if cards and ev_ids else ""))
                     continue
                 # no name in the book and a label of the model's own (「人攫いの指示役の男」), with the book's words for
                 # the person among the aliases: the card is known by those words. The label and its rendering are not
                 # the book's words and are not kept; the card's rendering is chosen for its words, as for any card
+                labels[nc.temp_id] = name  # kept as the model's description only (``RECORD_ONLY``)
                 name, nc = said, nc.model_copy(update={"proposed_name_zh": ""})
             first = next(t for t in texts if in_source(name, unit_src[t.id]))
             if name not in existing_alias:
@@ -663,7 +696,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             rej(item, reason)
         for pr in parsed.props:
             name = re.sub(r"[（(].*?[）)]", "", source_form(pr.name_ja or "")).strip()  # 「魔剣（魔法で…）」: the name
-            if in_source(name, scene_text):
+            if any(in_source(name, t) for t in unit_src.values()):
                 holder = ref_map.get(pr.holder_ref) if pr.holder_ref else None
                 props.append({"name_ja": name, "holder": holder,
                               "evidence_unit_ids": [u for u in pr.evidence_unit_ids if u in unit_text]})
@@ -729,10 +762,14 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             narration["self_forms"] = forms
     if segments:  # stretches in another voice are kept even when the scene's own narration is unclear
         narration = {**(narration or {"person": "unclear", "source": "llm"}), "segments": segments}
-    state = {"narration": narration, "pov": parsed.pov if parsed else None, "location": parsed.location if parsed else None,
+    state: dict[str, Any] = {"narration": narration, "pov": parsed.pov if parsed else None, "location": parsed.location if parsed else None,
              "time": parsed.time if parsed else None, "participants": participants, "actions": actions,
              "props": props, "uncertainties": uncertainties, "analysis": "llm" if parsed else "program_only",
              "quotes": len(quotes), "run_id": run_id}
+    if matched:
+        state["matched_by_words"] = matched
+    if kept := [{"character_id": ref_map[r], "label": lb} for r, lb in labels.items() if r in ref_map]:
+        state["model_labels"] = kept
     conn.execute("UPDATE scenes SET state_json=?, version=? WHERE book_id=? AND id=?",
                  (json.dumps(state, ensure_ascii=False), version, book_id, sid))
     repo.refresh_profiles(conn, book_id)

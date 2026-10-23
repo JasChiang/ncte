@@ -167,22 +167,21 @@ def read_text(text: str) -> str:
     return match_text(RUBY_MARKED.sub(r"\2", PH_RE.sub("", text)))
 
 
-def with_readings(text: str) -> str:
-    """``match_text`` and ``read_text`` of a text, one after the other: what to look in for a term that may be the
-    book's base text or a reading (a glossary term taken from a reading reaches the requests its reading is in)."""
+def text_forms(text: str) -> list[str]:
+    """What to look in for words that may be the book's base text or a reading: the text as ``match_text`` has it and,
+    when it has readings, as ``read_text`` has it — two candidates, never joined, so a string is found only within one
+    of them (強敵《とも》 alone has 強敵 and とも, not 「強敵とも」)."""
     plain = match_text(text)
-    return plain if RUBY_OPEN not in text else f"{plain}\n{read_text(text)}"
+    return [plain] if RUBY_OPEN not in text else [plain, read_text(text)]
 
 
 def in_source(quoted: str, source: str) -> bool:
-    """Whether a string the model gives as the book's words occurs in ``source`` (a unit's text, or several joined):
-    both compared as ``match_text`` has them, or ``source`` read with its readings (``read_text``), spacing ignored.
-    An empty string is not found."""
+    """Whether a string the model gives as the book's words occurs in ``source`` (a unit's stored text, or several
+    joined): compared as ``match_text`` has them, or with ``source`` read with its readings (``text_forms``: each
+    alone, so nothing is found across where one ends and the other starts), spacing ignored. An empty string is not
+    found."""
     q = _SPACING.sub("", match_text(quoted))
-    if not q:
-        return False
-    return q in _SPACING.sub("", match_text(source)) or (RUBY_OPEN in source
-                                                          and q in _SPACING.sub("", read_text(source)))
+    return bool(q) and any(q in _SPACING.sub("", f) for f in text_forms(source))
 
 
 @dataclass

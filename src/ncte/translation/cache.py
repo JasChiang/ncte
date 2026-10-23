@@ -47,10 +47,10 @@ def glossary_entries(conn: sqlite3.Connection, book_id: str) -> list[dict[str, A
 
 
 def relevant_glossary(entries: list[dict[str, Any]], text: str) -> list[dict[str, Any]]:
-    from ..epub.units import with_readings
+    from ..epub.units import text_forms
 
-    t = with_readings(text)  # a term the book gives only as a reading (ローエレメンタル) goes where that reading is
-    return [g for g in entries if g["source_term"] and g["source_term"] in t]
+    forms = text_forms(text)  # a term the book gives only as a reading (ローエレメンタル) goes where that reading is
+    return [g for g in entries if g["source_term"] and any(g["source_term"] in f for f in forms)]
 
 
 def glossary_hash(entries: list[dict[str, Any]]) -> str:

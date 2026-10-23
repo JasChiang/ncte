@@ -9,7 +9,10 @@ translation is good — it says the pipeline did everything it promised and noth
 * the passes that check the book (proofreading, the reader's look) ran over all of it — a refused or failed stretch
   is not checked — and no review job was blocked or failed on the text that is now current;
 * no whole-book step (the second look, genders, relations, impressions, house style, terms, same-form words) was left
-  partial: a request that failed left what it was about unasked (ADR-102);
+  partial: a request that failed left what it was about unasked (ADR-102). What the content filter refused in those
+  steps is not unasked — asking again would be refused again — and does not fail the book: it is listed under
+  ``limits`` with its reason, and what a resumed run answered after the translation had read the book under
+  ``answered_after_translation``;
 * every person's edit is still the text that will be exported (its source unchanged);
 * the exported EPUB passed validation (when an export result is given).
 
@@ -31,6 +34,8 @@ NOT_SEEN = ("review_blocked", "proofread_blocked", "reader_blocked")
 CONFLICT = "rule_conflict"
 SAMPLE = 20
 READ_STEPS = ("verify", "gender_gaps", "relations", "impressions", "house_style", "terms", "false_friends")
+LIMITS = tuple(f"{s}_blocked" for s in READ_STEPS)
+LATE = tuple(f"{s}_after_translation" for s in READ_STEPS)
 
 
 def _check(units: list[str] | set[str], *, detail: str = "") -> dict[str, Any]:
@@ -74,9 +79,9 @@ def acceptance(conn: sqlite3.Connection, book_id: str, *, proofread: bool = True
     # the whole-book steps after reading and the same-form words: one whose requests failed left what they were about
     # unasked (``partial``, ADR-102) — not done, whatever came after it
     partial = []
-    for stage in READ_STEPS:
-        last = conn.execute("SELECT status, checkpoint_json FROM jobs WHERE book_id=? AND stage=? ORDER BY id DESC "
-                            "LIMIT 1", (book_id, stage)).fetchone()
+    for stage in READ_STEPS:  # a later run that skipped the step says nothing about it
+        last = conn.execute("SELECT status, checkpoint_json FROM jobs WHERE book_id=? AND stage=? AND status!='skipped' "
+                            "ORDER BY id DESC LIMIT 1", (book_id, stage)).fetchone()
         if last is not None and last["status"] == "partial":
             partial.append(f"{stage} ({json.loads(last['checkpoint_json'] or '{}').get('unasked', '?')} unasked)")
     checks["steps_complete"] = {"ok": not partial, "count": len(partial), "units": [],
@@ -89,6 +94,13 @@ def acceptance(conn: sqlite3.Connection, book_id: str, *, proofread: bool = True
     if validation_ok is not None:
         checks["epub_valid"] = {"ok": validation_ok, "count": 0 if validation_ok else 1, "units": []}
     conflicts = {f["unit_id"] for f in open_rows if f["type"] == CONFLICT and is_current(f, best)}
+
+    def listed(types: tuple[str, ...]) -> list[dict[str, str]]:
+        rows = conn.execute(f"SELECT type, evidence FROM qa_findings WHERE book_id=? AND status='open' AND type IN "
+                            f"({','.join('?' * len(types))}) ORDER BY id", (book_id, *types)).fetchall()
+        return [{"step": t.removesuffix("_blocked").removesuffix("_after_translation"), "reason": e}
+                for t, e in dict.fromkeys((r["type"], r["evidence"]) for r in rows)]
+
     # whose eyes proofread it (ADR-082): the run's own model only, or also another company's
     cross = [r[0] for r in conn.execute("SELECT DISTINCT model FROM llm_requests WHERE book_id=? AND stage=? AND "
                                         "status='succeeded'", (book_id, "proofread:cross"))]
@@ -96,6 +108,14 @@ def acceptance(conn: sqlite3.Connection, book_id: str, *, proofread: bool = True
             "proofread_by": {"cross": cross} if cross else {"cross": [], "note": "proofread by the translating "
                                                                        "company's own model only"},
             "conflicts": {"count": len(conflicts), "units": sorted(conflicts)[:SAMPLE]},
+            "limits": {"count": len(limits := listed(LIMITS)), "items": limits[:SAMPLE],
+                       "note": "the content filter refused these in the steps after reading: not asked, and not asked "
+                               "again (it would refuse again); the steps are done without them — a known limit, not a "
+                               "failure"},
+            "answered_after_translation": {"count": len(late := listed(LATE)), "items": late[:SAMPLE],
+                                           "note": "asked again by a resumed run after the translation had read the "
+                                                   "book: the translation did not have these answers (proofreading "
+                                                   "and a new run do)"},
             "note": "Acceptable means the pipeline finished every step and nothing failed silently; it is not a "
                     "judgement of translation quality."}
 
@@ -104,6 +124,10 @@ def summary(rep: dict[str, Any]) -> str:
     """One line: 「acceptable」 or what is missing."""
     n = rep.get("conflicts", {}).get("count", 0)
     listed = f"; {n} rule conflict(s) listed" if n else ""
+    if k := rep.get("limits", {}).get("count", 0):
+        listed += f"; {k} item(s) refused by the content filter (a known limit)"
+    if k := rep.get("answered_after_translation", {}).get("count", 0):
+        listed += f"; {k} answer(s) of a resumed run came after the translation"
     if rep["acceptable"]:
         return f"acceptance: OK (pipeline complete; not a quality judgement){listed}"
     bad = [f"{k}={c.get('detail') or c['count']}" for k, c in rep["checks"].items() if not c["ok"]]

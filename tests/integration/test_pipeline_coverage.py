@@ -285,3 +285,160 @@ def test_an_empty_answer_keeps_what_the_turn_took_on_its_row(conn, cfg, fixtures
     assert _job(conn, rid, "verify")[0] == "succeeded"  # asked again (translator.EMPTY_RETRIES) and answered
     tot = cost_report(conn, run_id=rid)["totals"]
     assert tot["failed_requests"] >= 1 and tot["latency_ms_total"] >= 7
+
+
+def _base(stage: str) -> Any:
+    from ncte.llm.fake import DEFAULTS
+
+    return {**DEFAULTS, **RESPONDERS}[stage]
+
+
+@pytest.mark.parametrize("step", list(STEPS))
+def test_a_request_that_fails_has_its_items_asked_once_more_before_the_translation(conn, cfg, fixtures, step):
+    """These steps' answers are what the translation reads: a request that failed (every empty answer asked again)
+    has its items asked once more in the same run, in two halves (one item: as it was), before the translation —
+    not only by a resumed run after it. Answered so, the step is done."""
+    from ncte.errors import EmptyAnswerError
+    from ncte.translation.translator import EMPTY_RETRIES
+
+    stage, key, _own = STEPS[step]
+    base, first, tries = _base(stage), [], [0]
+
+    def answer(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+        items = json.dumps(payload.get(key), sort_keys=True, ensure_ascii=False)
+        if not first:
+            first.append(items)
+        if items == first[0] and tries[0] <= EMPTY_RETRIES:  # the first request, on every try it gets
+            tries[0] += 1
+            raise EmptyAnswerError("empty answer")
+        return base(payload, req)
+
+    client = FakeLLM(responders={**RESPONDERS, stage: answer})
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    status, cp = _job(conn, rid, step)
+    assert tries[0] == EMPTY_RETRIES + 1 and status == "succeeded" and cp["unasked"] == 0
+    calls = [(i, p) for i, (c, p) in enumerate(zip(client.calls, client.payloads, strict=True)) if c.stage == stage]
+    failed = json.loads(first[0]) or []
+    again = [p.get(key) or [] for _, p in calls if json.dumps(p.get(key), sort_keys=True, ensure_ascii=False)
+             != first[0] and any(x in failed for x in p.get(key) or [])]
+    if len(failed) > 1:  # in two halves, together the request's items
+        assert len(again) == 2 and [x for half in again for x in half] == failed
+    if step != "false_friends":  # the same-form words come after the translation by design
+        translated = next(i for i, c in enumerate(client.calls) if c.stage == "translate")
+        assert max(i for i, _ in calls) < translated
+    assert acceptance(conn, book.id)["checks"]["steps_complete"]["ok"]
+
+
+@pytest.mark.parametrize("step", list(STEPS))
+def test_what_the_content_filter_refused_is_a_known_limit_not_a_dead_end(conn, cfg, fixtures, step):
+    """Refused again if asked again: a step left incomplete only by the content filter is done, the refusal is a
+    finding with its reason, listed by the acceptance report as a limit (not a failure), and a resume does not send
+    it again — the house style's one request too (it was left unasked and asked on every resume)."""
+    from ncte.errors import ContentBlockedError
+
+    stage, key, own = STEPS[step]
+    base, first = _base(stage), []
+
+    def answer(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+        items = payload.get(key) or []
+        if items and not first:
+            first.append(items[0].get(own))
+        if first and any(i.get(own) == first[0] for i in items):
+            raise ContentBlockedError("HTTP 403 content filter: fake PROHIBITED_CONTENT")
+        return base(payload, req)
+
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, stage: answer}),
+                            mode="context")
+    assert first and s.status == "completed"
+    status, cp = _job(conn, rid, step)
+    assert status == "succeeded" and "unasked_ids" not in cp
+    assert conn.execute("SELECT 1 FROM qa_findings WHERE run_id=? AND type=? AND status='open'",
+                        (rid, f"{step}_blocked")).fetchone()
+    rep = acceptance(conn, book.id)
+    assert rep["checks"]["steps_complete"]["ok"] and rep["limits"]["count"] >= 1
+    assert {i["step"] for i in rep["limits"]["items"]} == {step}
+    again = FakeLLM(responders=RESPONDERS)
+    resume_run(conn, cfg, rid, again)
+    assert not [c for c in again.calls if c.stage == stage]
+
+
+def test_a_later_run_that_skipped_a_step_does_not_hide_what_it_left_unasked(conn, cfg, fixtures):
+    """Run 2 (forced) left the second look partial; run 3 planned from run 1's look and skipped it, and acceptance,
+    reading run 3's row, said done. The step is due in run 3 and asks only what run 2 left; a skipped row never hides
+    a partial one."""
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    book, r2, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS,
+                                                                 faults={"verify": ["empty_answer"] * 99}),
+                           mode="context", force=True)
+    left = _job(conn, r2, "verify")[1]["unasked_ids"]
+    conn.execute("INSERT INTO jobs(book_id, run_id, stage, target_id, seq, status, updated_at) VALUES "
+                 "(?, 'r_skipped', 'verify', ?, 0, 'skipped', 't')", (book.id, book.id))
+    assert not acceptance(conn, book.id)["checks"]["steps_complete"]["ok"]  # the skipped row hides nothing
+    _, r3, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    status, cp = _job(conn, r3, "verify")
+    assert status == "succeeded" and cp["unasked"] == 0 and "unasked_ids" not in cp
+    assert cp["items"] == len(left)  # run 2's counts, with what it left asked (run 1's answer to the same request)
+    assert acceptance(conn, book.id)["checks"]["steps_complete"]["ok"]
+
+
+def test_items_a_resume_answers_after_the_translation_are_said_to_be(conn, cfg, fixtures):
+    """A resume fills what a step left unasked after the translation already read the book without it: done, and
+    said so (a finding, the acceptance report's ``answered_after_translation``)."""
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS,
+                                                                  faults={"verify": ["empty_answer"] * 99}),
+                            mode="context")
+    assert acceptance(conn, book.id)["answered_after_translation"]["count"] == 0
+    resume_run(conn, cfg, rid, FakeLLM(responders=RESPONDERS))
+    assert _job(conn, rid, "verify")[0] == "succeeded"
+    rep = acceptance(conn, book.id)
+    assert rep["checks"]["steps_complete"]["ok"] and rep["answered_after_translation"]["count"] == 1
+    assert rep["answered_after_translation"]["items"][0]["step"] == "verify"
+
+
+def test_fix_checks_are_cut_by_size_too_in_story_order(conn, cfg, fixtures, monkeypatch):
+    """Twenty fixes of long paragraphs make one very large request: a fix check also stops at a size
+    (``review.fix_check_chars``, twice what a fix request carries), cut in story order; a fix larger than it goes
+    alone."""
+    picked: list[str] = []
+
+    def reader(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+        if not picked:
+            picked.extend(payload["paragraphs"][i]["unit_id"] for i in (1, 14, 22))
+        return {"issues": [{"unit_id": u, "kind": "unclear", "severity": "medium", "problem": "讀者看不懂"}
+                           for u in picked if u in {p["unit_id"] for p in payload["paragraphs"]}]}
+
+    assert review.fix_check_chars(cfg) == 2 * cfg.translation.fix_batch_chars
+    monkeypatch.setattr(review, "fix_check_chars", lambda c: 1)
+    client = FakeLLM(responders={**RESPONDERS, "reader": reader})
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    checks = [p for c, p in zip(client.calls, client.payloads, strict=True) if c.stage == "fix_check"]
+    order = {r["id"]: r["ordinal"] for r in conn.execute("SELECT id, ordinal FROM units WHERE book_id=?", (book.id,))}
+    assert [len(p["items"]) for p in checks] == [1, 1, 1]
+    assert [order[p["items"][0]["unit_id"]] for p in checks] == sorted(order[u] for u in picked)
+
+
+def test_a_fatal_error_in_one_scenes_fix_keeps_the_fixes_the_others_finished(conn, cfg, fixtures):
+    """Side by side, one scene's retranslation hit a fatal error: the scenes that came back were thrown away with it.
+    They are written now, waiting for their check (ADR-100), and the run stops; a resume checks them."""
+    from ncte.errors import FatalAPIError
+
+    first: list[str] = []
+
+    def translate(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+        if payload.get("review_feedback"):
+            if not first:
+                first.append(payload["units"][0]["unit_id"])
+            if payload["units"][0]["unit_id"] == first[0]:
+                time.sleep(0.1)  # the other scene started beside it comes back first
+                raise FatalAPIError("HTTP 402 (insufficient credits): fake")
+        return default_translate(payload, req)
+
+    client = FakeLLM(responders={**RESPONDERS, "false_friends": _differs, "translate": translate})
+    book, rid, s = run_book(conn, cfg, fixtures["basic"], client, mode="context")
+    assert s.status == "stopped_fatal"
+    waiting = conn.execute("SELECT t.unit_id FROM translations t JOIN qa_findings f ON f.translation_id=t.id WHERE "
+                           "t.run_id=? AND f.type='fix_unchecked' AND f.status='open'", (rid,)).fetchall()
+    assert waiting and first[0] not in {r[0] for r in waiting}
+    resume_run(conn, cfg, rid, FakeLLM(responders={**RESPONDERS, "false_friends": _differs}))
+    assert not conn.execute("SELECT 1 FROM qa_findings WHERE run_id=? AND type='fix_unchecked' AND status='open'",
+                            (rid,)).fetchone()

@@ -223,3 +223,43 @@ def test_the_authors_own_brackets_are_text(book):
     conn.execute("UPDATE units SET plain_text='　空に、《はじまり》の歌が流れた。' WHERE id=?", (ids["彼の名は"],))
     _memory(conn, book_id, scene, prop_states=[{"name_ja": "《はじまり》の歌", "holder_ref": None, "evidence_unit_ids": []}])
     assert _one(conn, "SELECT name_ja FROM prop_states WHERE book_id=?", book_id) == "《はじまり》の歌"
+
+
+def test_words_across_the_base_text_and_its_reading_are_not_the_books(book):
+    """The base text and the text read with its readings are looked in each alone, a paragraph at a time: nothing is
+    found where one ends and the other starts (the scene's base text ends 「青かった。」, read from the start it is
+    「第一章　強敵」), nor across two paragraphs (the heading's 「強敵」 and the next paragraph's reading 「とも」)."""
+    conn, book_id, scene, ids = book
+    assert scene_prop(conn, book_id, scene, ids, {"term": "青かった。第一章"}) == []
+    assert scene_prop(conn, book_id, scene, ids, {"term": "強敵とも"}) == []
+    assert scene_prop(conn, book_id, scene, ids, {"term": "青かった"}) == ["青かった"]
+
+
+def test_a_single_character_alias_never_names_an_unnamed_person(book):
+    """ADR-101 keeps a person the book does not name under the book's words among the aliases — two characters at
+    least, as other forms of a person are: 「空」 alone (no kind given) names anyone."""
+    conn, book_id, scene, ids = book
+    unit = conn.execute("SELECT id FROM units WHERE book_id=? AND plain_text LIKE '%空は%'", (book_id,)).fetchone()[0]
+    _scene(conn, book_id, scene, new_characters=[{"temp_id": "new_1", "name_ja": "空を見ていた誰か", "aliases_ja": ["空"],
+                                                   "proposed_name_zh": "某人", "evidence_unit_ids": [unit]}])
+    assert _one(conn, "SELECT canonical_name FROM characters WHERE book_id=?", book_id) is None
+    assert _one(conn, "SELECT reason FROM memory_rejections WHERE book_id=?", book_id).startswith("name_ja not found")
+
+
+def test_the_model_label_of_an_unnamed_person_is_kept_as_its_description_only(book):
+    """The label the model gave a person the book does not name is its description: kept on the scene's record, never a
+    name, an alias or a glossary term, and not sent back to the model."""
+    from ncte.analysis.memory_update import build_memory_payload
+
+    conn, book_id, scene, ids = book
+    _scene(conn, book_id, scene, new_characters=[{"temp_id": "new_1", "name_ja": "主人公の好敵手", "aliases_ja": ["強敵"],
+                                                   "alias_kinds": [{"ja": "強敵", "kind": "description"}],
+                                                   "proposed_name_zh": "好對手", "evidence_unit_ids": [ids["と呼べる相手"]]}])
+    card = conn.execute("SELECT * FROM characters WHERE book_id=?", (book_id,)).fetchone()
+    assert card["canonical_name"] == "強敵" and "主人公の好敵手" not in card["aliases_json"]
+    state = json.loads(_one(conn, "SELECT state_json FROM scenes WHERE id=?", scene["id"]))
+    assert state["model_labels"] == [{"character_id": card["id"], "label": "主人公の好敵手"}]
+    assert _one(conn, "SELECT 1 FROM glossary WHERE book_id=? AND source_term='主人公の好敵手'", book_id) is None
+    scene = conn.execute("SELECT * FROM scenes WHERE id=?", (scene["id"],)).fetchone()
+    payload = build_memory_payload(conn, book_id, scene, [])
+    assert "主人公の好敵手" not in json.dumps(payload, ensure_ascii=False)

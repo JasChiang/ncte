@@ -26,7 +26,7 @@ from typing import Any
 from ..analysis.memory_update import apply_memory_update, build_memory_payload
 from ..analysis.naming import apply_naming, auto_settle, build_naming_payload, model_view, pending
 from ..analysis.scene import apply_scene_analysis, build_analysis_payload, forget_scene_cards, get_scene
-from ..analysis.split_read import MIN_PART, call_in_parts, even_parts, merge_outputs, subset_payload
+from ..analysis.split_read import MIN_PART, _label, call_in_parts, even_parts, merge_outputs, subset_payload
 from ..errors import ContentBlockedError, EmptyAnswerError, FatalAPIError, LLMError, ModelOutputError
 from ..llm.prompt_loader import load_prompt
 from ..llm.schemas import MemoryUpdateOutput, NamingOutput, SceneAnalysisOutput, VerifyOutput
@@ -43,6 +43,9 @@ CANDIDATES = "(naming missing terms)"  # the terms step's request for terms the 
 
 
 PART_BEFORE = 4  # paragraphs of the part before, given to a later part of a long scene
+# what one request of a step after reading came to (``_ask_groups``): the answer (None: nothing), the items the
+# content filter refused, the error that left items not asked, and those items
+Asked = tuple[Any, list[str], LLMError | None, list[str]]
 
 
 class ContextOrchestrator(Orchestrator):
@@ -243,8 +246,18 @@ class ContextOrchestrator(Orchestrator):
                                       (self.book.id,)).fetchone()[0]
 
         def add(stage: str, seq: int) -> None:
-            status, cp = "pending", {}
-            if not self.opts.force:
+            status = "pending"
+            cp: dict[str, Any] = {}
+            # the step's latest state (a later run that skipped it says nothing about it): one a failed request left
+            # partial is not done — due now, asking only what it left; read again, the whole step is (ADR-102)
+            last = self.conn.execute("SELECT status, checkpoint_json FROM jobs WHERE book_id=? AND stage=? AND "
+                                     "target_id=? AND status!='skipped' ORDER BY id DESC LIMIT 1",
+                                     (self.book.id, stage, self.book.id)).fetchone()
+            left = json.loads(last["checkpoint_json"] or "{}") if last is not None and last["status"] == "partial" \
+                else {}
+            if "unasked_ids" in left and not self.opts.force and not reading:
+                cp = left
+            elif not self.opts.force:
                 done = self.conn.execute("SELECT updated_at, checkpoint_json FROM jobs WHERE book_id=? AND stage=? AND "
                                          "target_id=? AND status='succeeded' ORDER BY id DESC LIMIT 1",
                                          (self.book.id, stage, self.book.id)).fetchone()
@@ -311,18 +324,45 @@ class ContextOrchestrator(Orchestrator):
         return job is not None and job["status"] in ("pending", "running")
 
     def _end_step(self, stage: str, stats: dict[str, Any], unasked: list[str], record_job: bool,
-                  partial: bool = False, extra: dict[str, Any] | None = None) -> None:
+                  extra: dict[str, Any] | None = None, answered: int | None = None) -> None:
         """A whole-book step after reading is done: ``succeeded``, or ``partial`` when a request failed (after the tries
-        every request gets) and left items unasked — or when ``partial`` says so for another reason (refused) — with
-        the unasked items in the checkpoint (``unasked_ids``) for a resumed run to ask, and nothing else (ADR-102).
-        Not answered is not looked at: the step is not done, and the acceptance report says so."""
+        every request gets, and its items asked once more in halves) and left items unasked, with them in the
+        checkpoint (``unasked_ids``) for a resumed run to ask, and nothing else (ADR-102). Not answered is not looked
+        at: the step is not done, and the acceptance report says so. What the content filter refused is not unasked:
+        it is a known limit, a finding of its own (``*_blocked``), and asking again would be refused again.
+        ``answered``: items a resumed run asked again and got answers to (None: the step was done whole, and what an
+        earlier run's look at it was refused is history); when the translation has already read the book without
+        them, a finding says so (``*_after_translation``) — proofreading reads the book with them, and a new run
+        translates with them. The same-form words come after the translation by design: never said of them."""
         stats["unasked"] = len(unasked)
         if record_job:
-            self._set_job(stage, self.book.id, "partial" if unasked or partial else "succeeded", None,
+            self._set_job(stage, self.book.id, "partial" if unasked else "succeeded", None,
                           {**stats, **(extra or {}), **({"unasked_ids": unasked} if unasked else {})})
+        if answered is None:
+            with self.lock:
+                self.conn.execute("UPDATE qa_findings SET status='superseded' WHERE book_id=? AND type=? AND "
+                                  "status='open' AND run_id!=?", (self.book.id, f"{stage}_blocked", self.run_id))
+        elif answered and stage != "false_friends" and self._translated_before():
+            self._finding(None, f"{stage}_after_translation", "low",
+                          f"{answered} item(s) of {stage} were answered after the book was translated: the translation "
+                          f"did not have them (proofreading reads the book with them; a new run translates with them)")
+            self.log(f"  {stage}: {answered} item(s) answered after the translation, which did not have them")
         if unasked:
             self.log(f"  {stage}: {len(unasked)} item(s) not asked (the request failed)"
                      + (f": ncte resume --run-id {self.run_id} asks only them" if record_job else ""))
+
+    def _translated_before(self) -> bool:
+        """The translation has read the book before now: this run translated some of it, or translates nothing more
+        and an earlier run did."""
+        with self.lock:
+            if self.conn.execute("SELECT 1 FROM jobs WHERE run_id=? AND stage='translate' AND status='succeeded' "
+                                 "LIMIT 1", (self.run_id,)).fetchone():
+                return True
+            if self.conn.execute("SELECT 1 FROM jobs WHERE run_id=? AND stage='translate' AND status IN "
+                                 "('pending','running') LIMIT 1", (self.run_id,)).fetchone():
+                return False
+            return self.conn.execute("SELECT 1 FROM translations t JOIN units u ON u.id=t.unit_id WHERE u.book_id=? "
+                                     "LIMIT 1", (self.book.id,)).fetchone() is not None
 
     def _paused(self, what: str) -> bool:
         """Stopped (paused from the page, or a stop reason set) before the next batch: the job stays running."""
@@ -377,28 +417,50 @@ class ContextOrchestrator(Orchestrator):
         return stopped
 
     def _ask_groups(self, stage: str, prompt: Any, payloads: list[dict[str, Any]], key: str, what: str
-                    ) -> tuple[list[tuple[Any, list[str], LLMError | None] | None], bool]:
+                    ) -> tuple[list[Asked | None], bool]:
         """A post-read step's requests, built from one snapshot of the notes before any of them is asked, sent side by
         side (``max_concurrency``) and each refused one asked in halves (``call_in_parts`` on ``key``). Every answer
         is in the run's record as soon as it arrives; a resumed run sends again only the requests it has no answer
         for (the same snapshot gives the same requests: ``reuse``), and an identical request an earlier run of the book
-        got an answer to is not asked again either (ADR-094). Returns, in the requests' order, ``(parsed or
-        None, blocked items, the LLM error)`` for each one asked (None for one not started because of a stop), and
-        whether it was stopped. A fatal error is raised once the requests already started are back."""
-        out: list[tuple[Any, list[str], LLMError | None] | None] = [None] * len(payloads)
+        got an answer to is not asked again either (ADR-094). A request that failed (after the empty answers asked
+        again) has its items asked once more right away, in two halves (one item: as it was) — these answers feed the
+        translation, which comes next (ADR-102); a request that answered is sent as it was built. Returns, in the
+        requests' order, ``(parsed or None, refused items, the LLM error, items not asked)`` for each one asked (None
+        for one not started because of a stop) — items by their label (``split_read._label``), the error only when
+        some are not asked — and whether it was stopped. A fatal error is raised once the requests already started
+        are back."""
+        out: list[Asked | None] = [None] * len(payloads)
 
-        def work(i: int) -> tuple[Any, list[str], LLMError | None]:
+        def ask(pl: dict[str, Any], blocked: list[str]) -> Any:
+            return call_in_parts(lambda p: self._llm(stage, prompt, p, [], reuse=True), pl, key, blocked, min_part=1)
+
+        def work(i: int) -> Asked:
             blocked: list[str] = []
             try:
-                parsed = call_in_parts(lambda pl: self._llm(stage, prompt, pl, [], reuse=True), payloads[i], key,
-                                       blocked, min_part=1)
+                return ask(payloads[i], blocked), blocked, None, []
             except FatalAPIError:
                 raise
             except LLMError as exc:
-                return None, blocked, exc
-            return parsed, blocked, None
+                error: LLMError = exc
+            items = payloads[i].get(key) or []
+            half = (len(items) + 1) // 2
+            parts = [items[:half], items[half:]] if len(items) > 1 else [items]
+            self.log(f"  {what}: a request failed ({type(error).__name__}); its {len(items)} item(s) asked once more"
+                     + (" in two halves" if len(parts) > 1 else ""))
+            got, failed = [], []
+            for part in parts:
+                try:
+                    if (parsed := ask({**payloads[i], key: part}, blocked)) is not None:
+                        got.append(parsed)
+                except FatalAPIError:
+                    raise
+                except LLMError as exc:
+                    error = exc
+                    failed += [x for x in map(_label, part) if x not in blocked]
+            blocked[:] = dict.fromkeys(blocked)  # an item refused before the failure is refused again in its half
+            return (merge_outputs(got) if got else None), blocked, error if failed else None, failed
 
-        def done(i: int, r: tuple[Any, list[str], LLMError | None]) -> None:
+        def done(i: int, r: Asked) -> None:
             out[i] = r
 
         before = dict(getattr(self.recorder, "reused", {}))
@@ -408,6 +470,18 @@ class ContextOrchestrator(Orchestrator):
         if earlier:  # ADR-094: identical requests an earlier run already got answers to were not asked again
             self.log(f"  {what}: {earlier} of {len(payloads)} answers taken from an earlier run (identical request)")
         return out, stopped or any(r is None for r in out)
+
+    def _ask_once_more(self, stage: str, prompt: Any, payload: dict[str, Any], what: str) -> Any:
+        """A step's single request (the house style, naming the terms the reading left out): a failure (after the
+        empty answers asked again) is asked once more as it was, before the translation reads what it is for
+        (ADR-102). A refusal is not: the content filter would refuse it again."""
+        try:
+            return self._llm(stage, prompt, payload, [])
+        except (FatalAPIError, ContentBlockedError):
+            raise
+        except LLMError as exc:
+            self.log(f"  {what}: the request failed ({type(exc).__name__}); asked once more")
+        return self._llm(stage, prompt, payload, [])
 
     def _stretches(self, stage: str, what: str, parts: list[list[dict[str, Any]]],
                    befores: list[list[dict[str, Any]]], one: Callable[..., None], stats: dict[str, Any],
@@ -585,23 +659,25 @@ class ContextOrchestrator(Orchestrator):
         if cut and self._paused("second look"):
             return
         unasked: list[str] = []
+        refused = 0
         for chunk, got in zip(chunks, answers, strict=True):
             if got is None:
                 continue
-            parsed, blocked, exc = got
+            parsed, blocked, exc, failed = got
+            refused += len(blocked)
             for ref in blocked:  # the content filter refused an item's passages: the rest were asked in halves
                 self._finding(None, "verify_blocked", "low", f"the content filter refused the second look at {ref}")
             if exc is not None:  # the read pass's answers stand; the items were not looked at again (ADR-102)
-                self._finding(None, "verify_failed", "medium", f"{len(chunk)} item(s) not asked: {str(exc)[:360]}")
-                unasked += [i["ref"] for i in chunk if i["ref"] not in blocked]
-                continue
+                self._finding(None, "verify_failed", "medium", f"{len(failed)} item(s) not asked: {str(exc)[:360]}")
+                unasked += failed
             if parsed is None:
                 continue
             assert isinstance(parsed, VerifyOutput)
             with self.lock, Transaction(self.conn):
                 for k, v in verify.apply(self.conn, self.book.id, chunk, parsed, self._finding).items():
                     stats[k] = stats.get(k, 0) + v
-        self._end_step("verify", stats, unasked, record_job)
+        self._end_step("verify", stats, unasked, record_job,
+                       answered=None if only is None else len(items) - len(unasked) - refused)
         self.log(f"second look: {stats}")
 
     def gender_gaps_pass(self, *, record_job: bool = True) -> dict[str, int]:
@@ -622,6 +698,7 @@ class ContextOrchestrator(Orchestrator):
         stats: dict[str, int] = {"asked": asked, "blocked": 0, "failed": 0} if only is None else \
             {**saved, "failed": 0}
         unasked: list[str] = []
+        refused = 0
         results: list[tuple[GenderGapsOutput, dict[str, Any]]] = []
         answers, cut = self._ask_groups("verify:genders", prompt, [req for req, _ in groups], "characters", "genders")
         if cut and self._paused("genders"):  # written all at once: answers so far reused on resume
@@ -629,15 +706,19 @@ class ContextOrchestrator(Orchestrator):
         for (req, lk), got in zip(groups, answers, strict=True):
             if got is None:
                 continue
-            parsed, blocked, exc = got
+            parsed, blocked, exc, failed = got
+            name = {c["ref"]: c["name"] for c in req["characters"]}
+            if blocked:  # refused again if asked again: a known limit, not left for a resume (ADR-102)
+                self._finding(None, "gender_gaps_blocked", "low", f"內容審查拒絕了 {len(blocked)} 個角色的性別補問"
+                              f"（{'、'.join(name.get(r, r) for r in blocked)[:200]}）")
             if exc is not None:  # those characters stay without a gender: said in the report, and the step is partial
-                names = "、".join(c["name"] for c in req["characters"])
                 self._finding(None, "gender_gaps_failed", "medium",
-                              f"{len(lk['_chars'])} 個角色沒問到性別（{names[:200]}）：{str(exc)[:200]}")
-                stats["failed"] += len(lk["_chars"])
-                unasked += list(lk["_chars"].values())
-                continue
-            stats["blocked"] += len(blocked)
+                              f"{len(failed)} 個角色沒問到性別（{'、'.join(name.get(r, r) for r in failed)[:200]}）："
+                              f"{str(exc)[:200]}")
+                stats["failed"] += len(failed)
+                unasked += [lk["_chars"][r] for r in failed if r in lk["_chars"]]
+            stats["blocked"] = stats.get("blocked", 0) + len(blocked)
+            refused += len(blocked)
             if parsed is not None:
                 assert isinstance(parsed, GenderGapsOutput)
                 results.append((parsed, lk))
@@ -645,7 +726,8 @@ class ContextOrchestrator(Orchestrator):
             with self.lock:
                 for k, v in gender_gaps.apply(self.conn, self.book.id, results).items():
                     stats[k] = stats.get(k, 0) + v
-        self._end_step("gender_gaps", stats, unasked, record_job, partial=bool(stats["blocked"]))
+        self._end_step("gender_gaps", stats, unasked, record_job,
+                       answered=None if only is None else asked - len(unasked) - refused)
         self.log(f"genders asked again: {stats}")
         if stats["failed"]:
             self.log(f"  {stats['failed']} characters were not asked (the request failed): they stay without a gender")
@@ -676,20 +758,19 @@ class ContextOrchestrator(Orchestrator):
             for (_req, lookup), got in zip(groups, answers, strict=True):
                 if got is None:
                     continue
-                parsed, blocked, exc = got
+                parsed, blocked, exc, left = got
                 if blocked:
                     self._finding(None, "relations_blocked", "low",
                                   f"the content filter refused the material of {len(blocked)} pair(s)")
                 ids = {k: "|".join(v) for k, v in lookup["_pairs"].items()}
                 if exc is not None:  # those pairs keep no relation this time
                     self._finding(None, "relations_failed", "medium",
-                                  f"{len(ids)} pair(s) not asked: {str(exc)[:260]}")
-                    failed.update(v for k, v in ids.items() if k not in blocked)
-                    continue
+                                  f"{len(left)} pair(s) not asked: {str(exc)[:260]}")
+                    failed.update(ids[k] for k in left if k in ids)
                 if parsed is None:
                     continue
                 assert isinstance(parsed, RelationsOutput)
-                answered.update(v for k, v in ids.items() if k not in blocked)
+                answered.update(v for k, v in ids.items() if k not in blocked and k not in left)
                 results.append((parsed, lookup))
             if stopped:
                 cut.append(True)
@@ -711,7 +792,8 @@ class ContextOrchestrator(Orchestrator):
                                     only=None if only is None else [(p["a"], p["b"]) for p in pairs])
         counts = {"relations": n, "pairs": len(pairs), **stats} if only is None else \
             {**saved, "relations": saved.get("relations", 0) + n, "pairs_asked_again": len(pairs)}
-        self._end_step("relations", counts, sorted(failed - answered), record_job)
+        self._end_step("relations", counts, sorted(failed - answered), record_job,
+                       answered=None if only is None else len(answered))
         missing = stats.get("known_from_missing", 0)
         self.log(f"relations: {n} ({len(pairs)} pairs asked, {len(again)} asked again"
                  + (f"; {missing} without where they can be known: shown from their latest evidence" if missing else "")
@@ -725,6 +807,9 @@ class ContextOrchestrator(Orchestrator):
 
         if not self._step_due("house_style", record_job):  # partial: its one request failed, asked again whole
             return {}
+        job = self._job("house_style", self.book.id) if record_job else None
+        resumed = job is not None and "unasked_ids" in json.loads(job["checkpoint_json"] or "{}")
+        parsed = None
         with self.lock:
             req, refs = house_style.request(self.conn, self.book.id)
             seen = house_style.names_seen(self.conn, self.book.id)  # naming may change them afterwards (2.12)
@@ -732,9 +817,13 @@ class ContextOrchestrator(Orchestrator):
         unasked: list[str] = []
         if req["characters"]:
             try:
-                parsed = self._llm("house_style", load_prompt("house_style"), req, [])
+                parsed = self._ask_once_more("house_style", load_prompt("house_style"), req, "house style")
             except FatalAPIError:
                 raise
+            except ContentBlockedError as exc:  # refused again if asked again: a known limit (ADR-102)
+                self._finding(None, "house_style_blocked", "low", f"the content filter refused the house style: "
+                              f"{str(exc)[:240]}")
+                parsed = None
             except LLMError as exc:
                 self._finding(None, "house_style_failed", "medium", str(exc)[:300])
                 parsed = None
@@ -743,7 +832,8 @@ class ContextOrchestrator(Orchestrator):
                 assert isinstance(parsed, HouseStyleOutput)
                 with self.lock, Transaction(self.conn):
                     stats = house_style.apply(self.conn, self.book.id, parsed, refs)
-        self._end_step("house_style", stats, unasked, record_job, extra={"names_seen": seen})
+        self._end_step("house_style", stats, unasked, record_job, extra={"names_seen": seen},
+                       answered=int(parsed is not None) if resumed else None)
         self.log(f"house style: {stats}")
         return stats
 
@@ -766,11 +856,14 @@ class ContextOrchestrator(Orchestrator):
                 ask = terms.candidate_request(self.conn, self.book.id)
             if ask is not None:
                 try:
-                    got = self._llm("terms", load_prompt("terms_candidates"), ask[0], [])
+                    got = self._ask_once_more("terms", load_prompt("terms_candidates"), ask[0], "naming missing terms")
                     with self.lock:
                         named = terms.take_candidates(self.conn, self.book.id, got, ask[1])
                 except FatalAPIError:
                     raise
+                except ContentBlockedError as exc:  # refused again if asked again: a known limit (ADR-102)
+                    self._finding(None, "terms_blocked", "low", f"the content filter refused naming missing terms: "
+                                  f"{str(exc)[:240]}")
                 except LLMError as exc:  # the glossary's terms are still defined
                     self._finding(None, "terms_failed", "medium", f"naming missing terms: {str(exc)[:280]}")
                     unasked.append(CANDIDATES)
@@ -782,31 +875,32 @@ class ContextOrchestrator(Orchestrator):
         stats: dict[str, int] = {"named": len(named), "asked": asked, "blocked": 0, "failed": 0} if only is None else \
             {**saved, "named": saved.get("named", 0) + len(named), "failed": 0}
         results: list[tuple[TermsOutput, dict[str, Any]]] = []
+        refused = 0
         answers, cut = self._ask_groups("terms", prompt, [req for req, _ in groups], "terms", "terms")
         for (_req, lk), got in zip(groups, answers, strict=True):
             if got is None:
                 continue
-            parsed, blocked, err = got
+            parsed, blocked, err, failed = got
             if err is not None:  # those terms stay as they were
-                self._finding(None, "terms_failed", "medium",
-                              f"{len(lk['_terms'])} term(s) not asked: {str(err)[:260]}")
-                stats["failed"] += len(lk["_terms"])
-                unasked += [t for ref, t in lk["_terms"].items() if ref not in blocked]
-                continue
+                self._finding(None, "terms_failed", "medium", f"{len(failed)} term(s) not asked: {str(err)[:260]}")
+                stats["failed"] += len(failed)
+                unasked += [lk["_terms"][ref] for ref in failed if ref in lk["_terms"]]
             for ref in blocked:
                 self._finding(None, "terms_blocked", "low",
                               f"the content filter refused the material of 「{lk['_terms'].get(ref, ref)}」")
-            stats["blocked"] += len(blocked)
-            if parsed is not None:
+            stats["blocked"] = stats.get("blocked", 0) + len(blocked)
+            refused += len(blocked)
+            if parsed is not None:  # what was not asked (refused, or its half failed) keeps its definitions
                 assert isinstance(parsed, TermsOutput)
-                results.append((parsed, {**lk, "_blocked": set(blocked)}))
+                results.append((parsed, {**lk, "_blocked": {*blocked, *failed}}))
         if cut and self._paused("terms"):  # written all at once: answers so far reused on resume
             return stats
         if results:
             with self.lock:
                 for k, v in terms.apply(self.conn, self.book.id, results, self.run_id).items():
                     stats[k] = stats.get(k, 0) + v
-        self._end_step("terms", stats, unasked, record_job)
+        self._end_step("terms", stats, unasked, record_job, answered=None if only is None else
+                       asked + int(CANDIDATES in only) - len(unasked) - refused)
         self.log(f"terms: {stats}")
         return stats
 
@@ -844,16 +938,21 @@ class ContextOrchestrator(Orchestrator):
             groups = impressions.requests(self.conn, self.book.id, None if only is None else set(only))
         prompt, results = load_prompt("impressions"), []
         unasked: list[str] = []
+        refused = 0
         answers, cut = self._ask_groups("impressions", prompt, [req for req, _ in groups], "characters", "impressions")
-        for (_req, lookup), got in zip(groups, answers, strict=True):
+        for (req, lookup), got in zip(groups, answers, strict=True):
             if got is None:
                 continue
-            parsed, _blocked, exc = got
+            parsed, blocked, exc, failed = got
+            name = {c["ref"]: c["name"] for c in req["characters"]}
+            if blocked:  # refused again if asked again: a known limit, not left for a resume (ADR-102)
+                self._finding(None, "impressions_blocked", "low", f"the content filter refused the impressions of "
+                              f"{'、'.join(name.get(r, r) for r in blocked)[:240]}")
+                refused += len(blocked)
             if exc is not None:  # those characters keep the impressions they had
                 self._finding(None, "impressions_failed", "medium",
-                              f"{len(lookup['_chars'])} character(s) not asked: {str(exc)[:260]}")
-                unasked += list(lookup["_chars"].values())
-                continue
+                              f"{len(failed)} character(s) not asked: {str(exc)[:260]}")
+                unasked += [lookup["_chars"][r] for r in failed if r in lookup["_chars"]]
             if parsed is None:
                 continue
             assert isinstance(parsed, ImpressionsOutput)
@@ -864,7 +963,9 @@ class ContextOrchestrator(Orchestrator):
         if results:
             with self.lock:
                 n = impressions.apply(self.conn, self.book.id, results, self.run_id)
-        self._end_step("impressions", {**saved, "impressions": saved.get("impressions", 0) + n}, unasked, record_job)
+        self._end_step("impressions", {**saved, "impressions": saved.get("impressions", 0) + n}, unasked, record_job,
+                       answered=None if only is None else
+                       sum(len(lk["_chars"]) for _, lk in groups) - len(unasked) - refused)
         self.log(f"impressions: {n}")
         return n
 
@@ -1026,14 +1127,16 @@ class ContextOrchestrator(Orchestrator):
         for (_req, lk), got in zip(groups, answers, strict=True):
             if got is None:
                 continue
-            parsed, blocked, exc = got
+            parsed, blocked, exc, failed = got
+            if blocked:  # refused again if asked again: a known limit, not left for a resume (ADR-102)
+                self._finding(None, "false_friends_blocked", "low", "the content filter refused the same-form words "
+                              + "、".join(lk["_words"][r]["ja"] for r in blocked if r in lk["_words"])[:240])
             if exc is not None:  # those words stay as translated; proofreading still reads them
                 self._finding(None, "false_friends_failed", "medium",
-                              f"{len(lk['_words'])} word(s) not asked: {str(exc)[:260]}")
-                stats["failed"] += len(lk["_words"])
-                unasked += [w["ja"] for ref, w in lk["_words"].items() if ref not in blocked]
-                continue
-            stats["blocked"] += len(blocked)
+                              f"{len(failed)} word(s) not asked: {str(exc)[:260]}")
+                stats["failed"] += len(failed)
+                unasked += [lk["_words"][r]["ja"] for r in failed if r in lk["_words"]]
+            stats["blocked"] = stats.get("blocked", 0) + len(blocked)
             if parsed is not None:
                 assert isinstance(parsed, FalseFriendsOutput)
                 results.append((parsed, lk))
@@ -1068,7 +1171,9 @@ class ContextOrchestrator(Orchestrator):
         # resumed after a partial step: what the step looked at whole is as far as it went then
         upto = saved.get("upto_translation_id") if only is not None else None
         self._end_step("false_friends", stats, unasked, record_job,
-                       extra={"upto_translation_id": upto if upto is not None else self._last_translation_id()})
+                       extra={"upto_translation_id": upto if upto is not None else self._last_translation_id(),
+                              **({"since_translation_id": since} if since is not None else {})},
+                       answered=None if only is None else len(words) - len(unasked))
         self.log(f"same-form words: {stats}")
         return stats
 
