@@ -1238,3 +1238,8 @@ open workspace/eval/<timestamp>/report.html
 - `segment_units`：模型在章標題後立刻切的場景點忽略（標題跟著後面的文字，人工切開照舊）；`ContextOrchestrator._no_story`：沒有正文段落的場景不送讀場景與整理記憶。
 - 整理記憶：一個字的稱呼有自己的拒絕理由。
 - 測試：`tests/integration/test_unconfirmed_realrun.py`（新，6 個；改之前都失敗）。886 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 實測診斷修正（2026-10-23，分支 unnamed-placeholders-2026-10-23）
+- `visibility.character_view`：寫法的位置只看它跟這張卡一起出現的地方（不再被名稱連結的揭曉延後），最先出現的寫法（敘述者佔位名優先、同位置時卡名優先）從卡的第一次出現起顯示；後來揭曉的名字照舊只從揭曉處顯示。
+- 覆核：讀場景自己的疑問附上段落裡的台詞（`lines`／`line_ref`），回答某人時經 `_set_speaker`（和台詞重看共用）改那句的說話者；台詞重看的候選加上場景裡說話或在場的人（`_scene_people`）。`VerifyItem.line_ref`；提示詞 `verify` 說明。
+- 測試：`test_unconfirmed_realrun.py` 新增 3 個（改之前都失敗）。889 passed、5 skipped；ruff、mypy 通過。

@@ -384,6 +384,7 @@ class VerifyItem(_M):
     answer: str  # character id | unknown ; female | male | unknown ; same | different | unsure ; a question: a sentence
     reason: str
     character_id: str = ""  # a question's answer may name who it is about (ADR-067)
+    line_ref: str = ""  # a question's answer about who says a line: which of the item's ``lines`` (ADR-103)
     evidence: list[str] = Field(default_factory=list)  # an action's answer: the codes of the paragraphs it rests on
     summary: str = ""  # an action's answer: the action in one line, saying who does it
 

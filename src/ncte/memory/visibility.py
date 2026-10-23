@@ -129,14 +129,23 @@ def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
     first, linked, held = form_positions(conn, book_id) if forms_at is None else forms_at
     known_from = pos(conn, c["book_id"], c["known_from_ordinal"])
     names = list(dict.fromkeys([c["canonical_name"], *json.loads(c["aliases_json"] or "[]")]))
-    # a form with no recorded first appearance is known with the character — or from its link's reveal, if later
-    # a form seen with this card at a recorded position is known from there (a card moved earlier on a re-read does
-    # not take its later forms with it, ADR-103)
-    # not to before the form first appears in the book either
-    at = {n: (max(h, first[n]) if n in first else max(h, linked.get(n, h))) if (h := held.get((c["id"], n))) is not None
-          else first.get(n, max(known_from, linked.get(n, known_from))) for n in names}
-    anchor = min(names, key=lambda n: at[n])
-    shown = [n for n in names if at[n] <= hz and (n == anchor or linked.get(n, (0.0, 0)) <= hz)]
+    # where each form is first seen with this card: a recorded position (a card moved earlier on a re-read does not
+    # take its later forms with it, ADR-103), never before the form first appears in the book; else with the card
+    def seen_at(n: str) -> Pos:
+        h = held.get((c["id"], n))
+        if h is None:
+            return first.get(n, known_from)
+        return max(h, first[n]) if n in first else h
+
+    seen = {n: seen_at(n) for n in names}
+    # a link revealed later only keeps that name back: the card itself is there from its first appearance, under the
+    # form seen first (the unnamed narrator's 「（敘述者）」 before 汐乃 is revealed, ADR-103). Before, a link's reveal
+    # also delayed the form it was linked to, and the card vanished until then
+    from .repository import placeholder_name
+
+    # (seen at the same place: the card's own name, which a reveal always records at the reveal, not before)
+    anchor = min(names, key=lambda n: (not placeholder_name(n), seen[n], n != c["canonical_name"]))
+    shown = [n for n in names if seen[n] <= hz and (n == anchor or linked.get(n, (0.0, 0)) <= hz)]
     if not shown:
         return None
     head = c["canonical_name"] if c["canonical_name"] in shown else anchor

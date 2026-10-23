@@ -126,3 +126,84 @@ def test_a_one_character_form_of_address_has_its_own_reason(conn, cfg, fixtures)
     reasons = [r[0] for r in conn.execute("SELECT reason FROM memory_rejections WHERE stage='memory_update'")]
     assert any("single character" in r for r in reasons)
     assert not any("not found verbatim" in r for r in reasons)
+
+
+def _late_link(conn, book, term, target, at):
+    from ncte.memory.entities import record_link
+
+    record_link(conn, book.id, term, target, "alias", origin="test", status="accepted", unit_id=None, quote=None,
+                ordinal=at)
+
+
+def test_a_name_revealed_later_does_not_hide_the_card_before_it(conn, cfg, fixtures):
+    """The narrator is 汐乃, revealed only at the end: before that the card is still there, as 「（敘述者）」, without
+    the name; the same for any card whose other name is revealed later."""
+    from ncte.analysis.scene import build_analysis_payload
+    from ncte.memory import visibility as vis
+
+    s = _past_mother(conn, cfg, fixtures)
+    book, intro, last = s["book"], s["intro"], s["scenes"][-1]
+    narrator = new_narrator(conn, book.id, intro)
+    conn.execute("UPDATE characters SET aliases_json=? WHERE id=?", (json.dumps(["汐乃"]), narrator))
+    repo.note_forms(conn, narrator, ["汐乃"], book.id, intro["ordinal"])
+    _late_link(conn, book, "汐乃", "（敘述者）", last["start_ordinal"])
+    view = vis.character_view(conn, book.id, _card(conn, narrator), s["scenes"][1]["end_ordinal"])
+    assert view is not None and view["name_ja"] == "（敘述者）" and "汐乃" not in view["aliases_ja"]
+    payload = build_analysis_payload(conn, book.id, get_scene(conn, book.id, s["scenes"][2]["id"]), [])
+    assert narrator in {c["character_id"] for c in payload["known_characters"]}
+    assert vis.character_view(conn, book.id, _card(conn, narrator), last["start_ordinal"])["aliases_ja"] == ["汐乃"]
+    woman, _ = repo.upsert_character(conn, book.id, "白衣の女", name_zh=None, aliases=["ユナ"], unit_id=intro["id"],
+                                     ordinal=intro["ordinal"], origin="test")
+    _late_link(conn, book, "ユナ", "白衣の女", last["start_ordinal"])
+    early = vis.character_view(conn, book.id, _card(conn, woman), intro["ordinal"])
+    assert early == {"name_ja": "白衣の女", "name_zh": None, "aliases_ja": []}
+
+
+def _question(conn, s, who_else):
+    """The read pass asked who says the scene's line; the scene has the speaker it gave and someone else present."""
+    from ncte.analysis import verify
+
+    book, s1 = s["book"], s["scenes"][1]
+    state = json.loads(get_scene(conn, book.id, s1["id"])["state_json"])
+    state["uncertainties"] = [{"unit_ids": [s["line"]["id"]], "question": "誰がこの台詞を言ったのか"}]
+    state["participants"] = [*state.get("participants", []),
+                             {"character_id": who_else, "presence": "explicit", "evidence_unit_ids": []}]
+    conn.execute("UPDATE scenes SET state_json=? WHERE id=?", (json.dumps(state, ensure_ascii=False), s1["id"]))
+    items = verify.collect(conn, book.id)
+    return items, next(i for i in items if i["kind"] == "question")
+
+
+def test_an_answer_to_the_reading_s_own_question_about_a_line_sets_its_speaker(conn, cfg, fixtures):
+    from ncte.analysis import verify
+    from ncte.llm.schemas import VerifyOutput
+
+    from .test_unconfirmed_cards import _setup, _speaker
+
+    s = _setup(conn, cfg, fixtures)
+    items, item = _question(conn, s, s["a"])
+    utt = conn.execute("SELECT id FROM utterances WHERE unit_id=?", (s["line"]["id"],)).fetchone()[0]
+    assert [x["line_ref"] for x in item["lines"]] == [utt] and s["a"] in item["candidates"]
+    parsed = VerifyOutput.model_validate({"items": [{"ref": item["ref"], "answer": "unknown", "reason": "x"}]})
+    verify.apply(conn, s["book"].id, items, parsed, lambda *a: None)
+    assert _speaker(conn, s["line"]["id"]) == s["p"]  # unknown: the line keeps its speaker
+    conn.execute("DELETE FROM verify_answers")  # (asked again, as after a re-read)
+    items, item = _question(conn, s, s["a"])
+    parsed = VerifyOutput.model_validate({"items": [{"ref": item["ref"], "answer": "母親が言った", "reason": "x",
+                                                     "character_id": s["a"], "line_ref": utt}]})
+    stats = verify.apply(conn, s["book"].id, items, parsed, lambda *a: None)
+    row = conn.execute("SELECT * FROM utterances WHERE id=?", (utt,)).fetchone()
+    assert (row["speaker_id_nullable"], row["status"], row["resolution_source"]) == (s["a"], "inferred", "verify")
+    assert stats["speakers_changed"] == 1
+
+
+def test_a_speaker_re_check_may_choose_anyone_in_the_scene(conn, cfg, fixtures):
+    from ncte.analysis import verify
+
+    from .test_unconfirmed_cards import _setup
+
+    s = _setup(conn, cfg, fixtures)
+    conn.execute("UPDATE utterances SET status='inferred', notes_json=? WHERE unit_id=?",
+                 (json.dumps(["(to look at)"]), s["line"]["id"]))
+    _, _ = _question(conn, s, s["a"])
+    item = next(i for i in verify.collect(conn, s["book"].id) if i["kind"] == "speaker")
+    assert s["a"] in item["candidates"] and s["p"] in item["candidates"]

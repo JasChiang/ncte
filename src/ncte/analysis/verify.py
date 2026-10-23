@@ -94,8 +94,11 @@ def collect(conn: sqlite3.Connection, book_id: str, max_actions: int = MAX_ACTIO
             "SELECT ut.*, un.ordinal FROM utterances ut JOIN units un ON un.id=ut.unit_id WHERE ut.book_id=? AND "
             "ut.status IN ('inferred','unknown') AND ut.notes_json LIKE '%(to look at)%' AND ut.resolution_source!='verify' "
             "ORDER BY un.ordinal", (book_id,)):  # answered by an earlier second look: not asked again (a re-read resets it)
-        cands = sorted({h["candidate_character_id"] for h in conn.execute(
-            "SELECT candidate_character_id FROM speaker_hypotheses WHERE utterance_id=?", (u["id"],))} & names.keys())
+        # the reading's candidates, and anyone the scene has (who speaks or is present there): the second look may find
+        # the speaker the reading did not list (ADR-103 real run)
+        cands = sorted(({h["candidate_character_id"] for h in conn.execute(
+            "SELECT candidate_character_id FROM speaker_hypotheses WHERE utterance_id=?", (u["id"],))}
+            | _scene_people(conn, book_id, u["scene_id"])) & names.keys())
         evidence = _speaker_evidence(conn, book_id, u["id"])
         near = {o for o in evidence if abs(o - u["ordinal"]) <= CONTEXT_UNITS}
         item = {"ref": f"q:{u['id']}", "kind": "speaker", "quote": match_text(u["quote_text"])[:120],
@@ -328,6 +331,17 @@ def _rests_on(item: dict[str, Any], a: Any) -> bool:
         x in item.get("_codes", {}) for x in a.evidence)
 
 
+def _scene_people(conn: sqlite3.Connection, book_id: str, scene_id: str | None) -> set[str]:
+    """Who the scene has: present (the reading's participants) or speaking a line there."""
+    if not scene_id:
+        return set()
+    sc = conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND id=?", (book_id, scene_id)).fetchone()
+    people = {p.get("character_id") for p in json.loads(sc[0] or "{}").get("participants") or []} if sc else set()
+    people |= {r[0] for r in conn.execute("SELECT speaker_id_nullable FROM utterances WHERE book_id=? AND scene_id=? "
+                                          "AND speaker_id_nullable IS NOT NULL", (book_id, scene_id))}
+    return {str(x) for x in people if x}
+
+
 def question_items(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
     """The questions the model raised itself while reading a scene (its ``uncertainties``) that have no answer yet,
     each with the passage around it and the scene's people (named as known at the end of the scene): asked once, with
@@ -351,9 +365,17 @@ def question_items(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any
                 f"SELECT ordinal FROM units WHERE book_id=? AND id IN ({','.join('?' * len(x.get('unit_ids') or []))}) "
                 "ORDER BY ordinal", (book_id, *(x.get("unit_ids") or [])))] if x.get("unit_ids") else []
             ordinal = at[0] if at else sc["start_ordinal"]
-            out.append({"ref": f"u:{sc['id']}:{i}", "kind": "question", "question": x["question"],
-                        "context": _window(conn, book_id, ordinal, set(at)), "candidates": cands,
-                        "_ordinal": ordinal, "_version": str(sc["version"])})
+            item = {"ref": f"u:{sc['id']}:{i}", "kind": "question", "question": x["question"],
+                    "context": _window(conn, book_id, ordinal, set(at)), "candidates": cands,
+                    "_ordinal": ordinal, "_version": str(sc["version"])}
+            # the lines in the paragraphs the question is about: an answer naming who says one of them sets its
+            # speaker, as a speaker re-check does (ADR-103 real run)
+            if lines := [{"line_ref": r[0], "quote": match_text(r[1])[:80]} for r in conn.execute(
+                    f"SELECT ut.id, ut.quote_text FROM utterances ut JOIN units un ON un.id=ut.unit_id WHERE ut.book_id=? "
+                    f"AND ut.unit_id IN ({','.join('?' * len(x.get('unit_ids') or []))}) ORDER BY un.ordinal, "
+                    "ut.quote_index", (book_id, *(x.get("unit_ids") or [])))] if x.get("unit_ids") else []:
+                item["lines"] = lines
+            out.append(item)
     return out
 
 
@@ -491,19 +513,7 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             else:
                 stats["ignored"] += 1
                 continue
-            if new_id == u["speaker_id_nullable"] and status == u["status"]:
-                stats["speakers_kept"] += 1
-            else:
-                stats["speakers_changed" if new_id else "speakers_unknown"] += 1
-                if new_id != u["speaker_id_nullable"]:
-                    changed[key] = u["speaker_id_nullable"]
-            notes = json.loads(u["notes_json"]) + [note]
-            conn.execute("UPDATE utterances SET speaker_id_nullable=?, status=?, resolution_source='verify', "
-                         "notes_json=?, updated_at=? WHERE id=?",
-                         (new_id, status, json.dumps(notes, ensure_ascii=False), utcnow(), key))
-            if new_id != u["speaker_id_nullable"]:
-                repo.speaker_changed_addressees(conn, key, new_id)
-            repo.remove_speech_examples_for(conn, key)
+            _set_speaker(conn, key, new_id, status, note, stats, changed)
         elif kind == "g":
             if answer == item["first_answer"]:
                 stats["genders_kept"] += 1
@@ -538,6 +548,13 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             conn.execute("UPDATE scenes SET state_json=? WHERE book_id=? AND id=?",
                          (json.dumps(state, ensure_ascii=False), book_id, sid))
             stats["questions_answered"] = stats.get("questions_answered", 0) + 1
+            # who says a line of the question's paragraphs: the answer sets that line's speaker through the speaker
+            # path (a person of the scene, the line it names — or the only one there); unknown leaves it
+            lines = [x["line_ref"] for x in item.get("lines") or []]
+            line = a.line_ref if a.line_ref in lines else lines[0] if len(lines) == 1 else None
+            if line and answer != "unknown" and a.character_id in item["candidates"]:
+                _set_speaker(conn, line, a.character_id, "inferred", f"second look (question): {answer[:80]} — "
+                             f"{a.reason[:120]}", stats, changed)
         elif kind == "a":  # who did an action the reading inferred and gave to someone absent
             sid, _, idx = key.rpartition(":")
             sc = conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND id=?", (book_id, sid)).fetchone()
@@ -632,6 +649,26 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
     follow_speakers(conn, book_id, changed)
     repo.refresh_profiles(conn, book_id)
     return stats
+
+
+def _set_speaker(conn: sqlite3.Connection, utterance_id: str, new_id: str | None, status: str, note: str,
+                 stats: dict[str, int], changed: dict[str, str | None]) -> None:
+    """The second look's speaker for a line: never stated (``inferred``, or ``unknown``), a person's choice kept."""
+    u = conn.execute("SELECT * FROM utterances WHERE id=?", (utterance_id,)).fetchone()
+    if u is None or u["status"] == "human_verified":
+        return
+    if new_id == u["speaker_id_nullable"] and status == u["status"]:
+        stats["speakers_kept"] += 1
+    else:
+        stats["speakers_changed" if new_id else "speakers_unknown"] += 1
+        if new_id != u["speaker_id_nullable"]:
+            changed[utterance_id] = u["speaker_id_nullable"]
+    notes = json.loads(u["notes_json"]) + [note]
+    conn.execute("UPDATE utterances SET speaker_id_nullable=?, status=?, resolution_source='verify', notes_json=?, "
+                 "updated_at=? WHERE id=?", (new_id, status, json.dumps(notes, ensure_ascii=False), utcnow(), utterance_id))
+    if new_id != u["speaker_id_nullable"]:
+        repo.speaker_changed_addressees(conn, utterance_id, new_id)
+    repo.remove_speech_examples_for(conn, utterance_id)
 
 
 def _narrator_is(conn: sqlite3.Connection, book_id: str, placeholder: str, named: str) -> None:
