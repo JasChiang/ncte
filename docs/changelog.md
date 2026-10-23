@@ -1142,3 +1142,7 @@ open workspace/eval/<timestamp>/report.html
 - `translator.call_structured` 重問空答案（`EMPTY_RETRIES`，從 `ContextOrchestrator._llm` 移過來）；`review._check_fixes`／`_ask_fix_checks`（失敗或漏答的段落單獨再問一次）；`review._settle_fixes`、`WrittenFix`（從 `_retranslate_with_feedback` 拆出的結案流程）；`review.check_waiting_fixes`、`Orchestrator.check_waiting_fixes`、`fix_checks_asked`；migration 36 `translations.fix_json`。
 - 實際那本的資料庫（副本）：還在等驗收的 8 段都是 migration 36 之前寫入，沒有紀錄，不會被補問。
 - 測試：`tests/integration/test_fix_check_unanswered.py`（新）。780 passed、5 skipped；ruff、mypy 通過。
+
+## 訂閱方案 CLI 的限制寫進 README（2026-10-23，分支 docs-agent-limits-2026-10-23）
+- README〈已知限制〉加上三種訂閱方案 CLI 各自的技術限制。
+- 更正 ADR-072：加了 `--system-prompt` 之後，`claude -p` 不會帶入使用者自己的 `~/.claude/CLAUDE.md`（實測 2.1.309）；`claude_cli` 的說明一併更正。

@@ -15,7 +15,8 @@ left out and the answer stands.
 Each call runs in its own empty temporary directory: Claude Code reads the CLAUDE.md files of the directory it runs in
 and its parents even with ``--setting-sources ""`` (measured 2026-10-20: a call from inside a project carried about
 1,300 more input tokens and the model knew the project's name). ``--bare`` would skip them but takes only an API key,
-not the plan's login. The user's own ``~/.claude/CLAUDE.md`` is still read.
+not the plan's login. The user's own ``~/.claude/CLAUDE.md`` is not carried either once ``--system-prompt``
+replaces Claude Code's (measured 2026-10-23, 2.1.309: the same input tokens with and without ``--safe-mode``).
 
 A failed call is tried again later and the run says so before each wait (``log``). A usage limit lifts at a set time:
 it is asked again every quarter hour for up to eight hours, however many times that takes. Any other failure (the

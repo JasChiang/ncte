@@ -511,6 +511,7 @@
 - 決定：
   - `claude_cli` 改用 `stream-json --verbose`，取 `type: result` 的事件當回答（與原本的 JSON 同欄位），最後一個 `rate_limit_event` 存成 `usage["plan"]`，格式同 Codex：`{"windows": {"5h": {"used", "resets_at"}, "weekly": {…}}, "source": "claude"}`（`five_hour` → `5h`、`seven_day` → `weekly`，其他名稱照原樣）。讀不到就不填，請求照常。
   - 每次 `claude -p` 在自己的空暫存目錄執行（同 Codex），不讀任何專案的 CLAUDE.md；使用者自己的 `~/.claude/CLAUDE.md` 仍會被讀（沒有不需 API 金鑰的關法）。
+    - 更正（2026-10-23，Claude Code 2.1.309）：加了 `--system-prompt` 之後，使用者自己的 `~/.claude/CLAUDE.md` 也不會帶進去。同一個請求加不加 `--safe-mode`（不載入 CLAUDE.md、可用方案登入）輸入都是 626 token，問模型有沒有收到那份檔案裡的指示也答沒有。所以不需要 `--safe-mode`。
   - `reports/cost_report.plan_usage`：依來源（`usage["plan"].source`，或 provider 是 claude／codex）彙總 token（輸入、快取讀寫、輸出、推理、失敗嘗試）與每個時間窗的已用比例：依完成時間排序，`resets_at` 相差 120 秒內算同一個窗；第一個窗算「最大 − 最小」，之後每個窗（中途重置）算「最大 − 0」。結果在 `cost_report` 的 `plan_usage`、`ncte report` 的一行、網頁總覽的「用掉的方案額度」卡。
   - 顯示的是使用者自己方案的百分比，不換算成絕對量或金額。
 - 限制：比例是整個帳號的，同一時段其他用量（別的對話、別的工具）會一起算；第一個請求自己用的量算不到（每個請求結束後才讀）；Claude 的 `utilization` 只到小數兩位（1%），Codex 的 `used_percent` 是整數百分比，短的執行讀數可能是 0。
