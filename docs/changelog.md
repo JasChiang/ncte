@@ -1218,3 +1218,11 @@ open workspace/eval/<timestamp>/report.html
 - `characters.reading_keys_json`（取代 `reading_key`，migration 37）：`merge_characters` 把被併卡的鍵與 `not_same_json` 併給留下的卡；`unconfirmed_card` 以鍵找回（含合併後留下的卡），候選扣掉自己與答過的卡；覆核確認同一人時留下的卡記下其他候選為「不是」。揭曉名字時不再另寫 `not_same_json`（合併已帶過去）。
 - 用名字找卡：`repository.FINDABLE`／`findable`，`upsert_character`、`entities`（三處）、`address.name_forms`、`cache.glossary_entries`、`workspace` 系列合併、`naming.suspicious_characters` 都用它；覆核的揭曉合併檢查找一般的卡或有名字的另一時期卡。ADR-103 列出整張表。
 - 測試：`tests/integration/test_unconfirmed_review.py` 新增 6 個（每個都用上一版的程式先跑過、失敗）。873 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 第四輪審閱修正（2026-10-23，分支 unnamed-placeholders-2026-10-23）
+- `scene.apply_scene_analysis`：揭曉的名字已有卡時，`same_as_ref` 的卡照樣併進那張卡（`reveals` 多一個「是否新卡」，已有的卡不以揭曉位置記連結）。
+- `cli_memory.resolve_character`（`_character` 改用它）：以名字只找 `findable` 的卡，幾張或只有其他卡時列出 id 請使用者指定。
+- `entities.unlink`／`_drop_alias`：只從實體綁定的卡（沒綁時 `FINDABLE` 的卡）拿掉別名；`backfill_entities` 只看 `FINDABLE` 的卡。
+- `reports/codex`：名稱索引只收 `findable` 的卡；關係圖只讓 `findable` 的卡依實體合併、以名字比對，其他卡依場景裡的說話者與在場（id）出現，標籤用 `card_label`。
+- ADR-103 的查找表補上這些與「卡→它的字出現在哪」（只給模型讀、不決定身分）的一列。
+- 測試：`test_unconfirmed_review.py` 新增 5 個（改之前都失敗）。878 passed、5 skipped；ruff、mypy 通過。

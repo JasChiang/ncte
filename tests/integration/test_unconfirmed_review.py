@@ -264,3 +264,91 @@ def test_a_name_finds_neither_a_card_of_another_time_nor_one_known_only_by_other
     assert "リリア" not in name_forms(conn, book.id)[0]
     assert repo.upsert_character(conn, book.id, "リリア", name_zh=None, aliases=[], unit_id=named["id"],
                                  ordinal=named["ordinal"], origin="test")[0] != cid
+
+
+def test_a_reveal_naming_a_card_that_already_has_the_name_merges_into_it(conn, cfg, fixtures):
+    """リリア already has a card, known from the first scene: revealed as the 「母親」 card, that card is merged into the
+    named one (lines, marks), and リリア stays visible from where it was already known, not only from the reveal."""
+    s = _setup(conn, cfg, fixtures)
+    book, first_scene = s["book"], s["scenes"][0]
+    first = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal LIMIT 1",
+                         (book.id, first_scene["id"])).fetchone()
+    lilia, _ = repo.upsert_character(conn, book.id, "リリア", name_zh="莉莉亞", aliases=[], unit_id=first["id"],
+                                     ordinal=first["ordinal"], origin="test")
+    cid, named = _reveal(conn, s, s["p"])
+    assert cid == lilia and _card(conn, s["p"]) is None
+    assert _speaker(conn, s["line"]["id"]) == lilia
+    assert set(repo.may_be(_card(conn, lilia))) == {s["a"], s["b"]}
+    assert vis.character_view(conn, book.id, _card(conn, lilia), first["ordinal"])["name_ja"] == "リリア"
+
+
+def test_the_command_line_finds_a_card_by_name_only_by_the_rule_and_never_picks_among_several(conn, cfg, fixtures):
+    import pytest
+
+    from ncte.cli_memory import resolve_character
+    from ncte.errors import NCTEError
+
+    s = _past_mother(conn, cfg, fixtures)
+    book = s["book"]
+    past, _ = repo.other_time_card(conn, book.id, "前母", "前世", unit_id=s["intro"]["id"],
+                                   ordinal=s["intro"]["ordinal"], origin="test")
+    with pytest.raises(NCTEError, match=past):
+        resolve_character(conn, book.id, "前母")  # only a card of another time: chosen by id
+    assert resolve_character(conn, book.id, past) == past
+    assert resolve_character(conn, book.id, "母親") == s["mother"]
+    two, _ = repo.upsert_character(conn, book.id, "継母", name_zh="母親", aliases=[], unit_id=s["intro"]["id"],
+                                   ordinal=s["intro"]["ordinal"], origin="test")
+    with pytest.raises(NCTEError, match=two):
+        resolve_character(conn, book.id, "母親")  # two cards called so: the user chooses
+
+
+def test_unlinking_an_alias_takes_it_only_from_the_card_the_entity_is_bound_to(conn, cfg, fixtures):
+    from ncte.memory.entities import link, unlink
+
+    s = _past_mother(conn, cfg, fixtures)
+    book = s["book"]
+    first = conn.execute("SELECT * FROM units WHERE book_id=? ORDER BY ordinal LIMIT 1", (book.id,)).fetchone()
+    mina, _ = repo.upsert_character(conn, book.id, "ミナ", name_zh="米娜", aliases=["ミナっち"], unit_id=first["id"],
+                                    ordinal=first["ordinal"], origin="test")
+    past, _ = repo.other_time_card(conn, book.id, "ミナ", "前世", unit_id=first["id"], ordinal=first["ordinal"],
+                                   origin="test")
+    conn.execute("UPDATE characters SET aliases_json=? WHERE id=?", (json.dumps(["ミナっち"]), past))
+    repo.ensure_glossary(conn, book.id, "ミナ", "米娜", category="character", origin="test", first_unit_id=None)
+    repo.ensure_glossary(conn, book.id, "ミナっち", "小米", category="character", origin="test", first_unit_id=None)
+    link(conn, book.id, "ミナっち", "ミナ", "nickname", origin="test")
+    unlink(conn, book.id, "ミナっち")
+    assert "ミナっち" not in json.loads(_card(conn, mina)["aliases_json"])
+    assert json.loads(_card(conn, past)["aliases_json"]) == ["ミナっち"]
+
+
+def test_the_codex_keys_by_card_and_shows_a_time_as_the_page_does(conn, cfg, fixtures):
+    from ncte.reports.codex import build_index, build_relations
+
+    s = _past_mother(conn, cfg, fixtures)
+    book = s["book"]
+    past = _read(conn, book, s["scenes"][1], s["intro"], s["line"], other_person=True, period="前世")["new_1"]
+    nodes = {n["id"]: n for n in build_relations(conn, book.id)["nodes"]}
+    assert nodes[past]["label"] == "母親（前世）" and past != s["mother"]
+    only, _ = repo.other_time_card(conn, book.id, "前母", "前世", unit_id=s["intro"]["id"],
+                                   ordinal=s["intro"]["ordinal"], origin="test")
+    conn.execute("UPDATE characters SET speech_profile_json=? WHERE id=?",
+                 (json.dumps({"n_examples": 3, "first_person": ["私"]}), only))
+    conn.execute("UPDATE units SET plain_text='　前母が来た。' WHERE id=?", (s["intro"]["id"],))
+    repo.ensure_glossary(conn, book.id, "前母", "前母", category="character", origin="test", first_unit_id=None)
+    entry = next(e for e in build_index(conn, book.id) if e["name_ja"] == "前母")
+    assert "speech" not in entry
+
+
+def test_backfill_groups_only_the_aliases_of_a_card_a_name_finds(conn, cfg, fixtures):
+    from ncte.memory.entities import backfill_entities
+
+    s = _past_mother(conn, cfg, fixtures)
+    book = s["book"]
+    past, _ = repo.other_time_card(conn, book.id, "母親", "前世", unit_id=s["intro"]["id"],
+                                   ordinal=s["intro"]["ordinal"], origin="test")
+    conn.execute("UPDATE characters SET aliases_json=? WHERE id=?", (json.dumps(["旧母"]), past))
+    repo.ensure_glossary(conn, book.id, "旧母", "舊母", category="character", origin="test", first_unit_id=None)
+    backfill_entities(conn, book.id)
+    ent = {r[0]: r[1] for r in conn.execute("SELECT source_term, entity_id FROM glossary WHERE source_term IN "
+                                            "('母親','旧母')")}
+    assert ent["母親"] != ent["旧母"]

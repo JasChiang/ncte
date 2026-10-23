@@ -483,7 +483,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 for f in [view["name_ja"], *view["aliases_ja"]]:
                     known_by.setdefault(f, set()).add(card["id"])
         group_cards = {c["id"] for c in known if "is_group" in c.keys() and c["is_group"]}
-        reveals: list[tuple[str, str, str, Any, list[str]]] = []
+        reveals: list[tuple[str, str, str, Any, list[str], bool]] = []  # (named, revealed, name, at, evidence, new)
 
         def _aliases(nc: Any, name: str) -> list[str]:
             # the model says what each alias is; a common noun (「少女」「兵士」) names anyone and is not kept
@@ -603,6 +603,11 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 # forms stay where they were seen
                 repo.seen_earlier(conn, existing_alias[name], name, book_id, first.id, first.ordinal)
                 names_of[existing_alias[name]] = [name]
+                # the name already has a card and the model says it is the one known so far by a description (or by
+                # words several cards have): the reveal merges that one into it, as for a name new here
+                same = _revealed(known, book_id, nc.same_as_ref)
+                if same and same != existing_alias[name]:
+                    reveals.append((existing_alias[name], same, name, first, nc.evidence_unit_ids, False))
                 continue
             aliases = _aliases(nc, name)
             proposed_zh = nc.proposed_name_zh.strip()[:MAX_NAME_LEN] or None
@@ -633,12 +638,12 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 conn.execute("UPDATE characters SET is_group=1 WHERE id=?", (cid,))
             same = _revealed(known, book_id, nc.same_as_ref)
             if same and same != cid:
-                reveals.append((cid, same, name, first, nc.evidence_unit_ids))
+                reveals.append((cid, same, name, first, nc.evidence_unit_ids, True))
         # a name revealed for a character known so far only by a description: one character from here on.
         # The link records where it was revealed, so the name is not shown before that point.
         from ..memory.entities import record_link
 
-        for cid, same, name, first, _ev in reveals:
+        for cid, same, name, first, _ev, new in reveals:
             old = conn.execute("SELECT * FROM characters WHERE id=?", (same,)).fetchone()
             if old is None:
                 continue
@@ -655,8 +660,9 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 conn.execute("UPDATE OR IGNORE characters SET period=?, label=? WHERE id=? AND period IS NULL",
                              (repo.period_of(old), repo.period_of(old) or repo.OTHER_PERSON, cid))
             # the new name and its own aliases (「王女」) are known from the reveal, not from the description's scene
-            # (the description itself stays known from its own scene)
-            for form in own:
+            # (the description itself stays known from its own scene); a card that already had the name keeps the
+            # positions its forms were first seen at
+            for form in own if new else []:
                 record_link(conn, book_id, form, name, "alias" if form != name else "official", origin="scene_analysis",
                             status="accepted", unit_id=first.id, quote=None, ordinal=first.ordinal)
             for k, v in list(ref_map.items()):

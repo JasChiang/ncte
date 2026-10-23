@@ -680,11 +680,28 @@ def names_unlink(epub: Annotated[str, typer.Argument()], term: Annotated[str, ty
 
 
 def _character(book_id: str, name: str) -> str:
-    """Character id from an id, a Japanese name / alias or the Chinese name."""
-    for r in state.conn.execute(f"SELECT id, canonical_name, display_name_zh, aliases_json FROM characters "
-                                f"WHERE {SERIES_SCOPE}", (book_id,)):
-        if name in (r["id"], r["canonical_name"], r["display_name_zh"]) or name in json.loads(r["aliases_json"]):
-            return str(r["id"])
+    return resolve_character(state.conn, book_id, name)
+
+
+def resolve_character(conn: Any, book_id: str, name: str) -> str:
+    """Character id from an id, or a Japanese name / alias or the Chinese name of a card a name finds (ADR-103: not
+    one known only by other cards' words, not one of another time — those are named by id). A name several cards
+    have is not picked: the user chooses by id."""
+    from .memory.repository import card_label, findable
+
+    rows = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,)).fetchall()
+    if by_id := [r for r in rows if r["id"] == name]:
+        return str(by_id[0]["id"])
+
+    def called(r: Any) -> bool:
+        return name in (r["canonical_name"], r["display_name_zh"]) or name in json.loads(r["aliases_json"])
+
+    hits = [r for r in rows if findable(r) and called(r)]
+    if len(hits) == 1:
+        return str(hits[0]["id"])
+    if choices := hits or [r for r in rows if called(r)]:
+        raise NCTEError(f"{name!r} names several cards, or one chosen only by its id: give the id — "
+                        + ", ".join(f"{r['id']} {card_label(r)}" for r in choices))
     raise NCTEError(f"unknown character {name!r} (see `ncte characters`)")
 
 

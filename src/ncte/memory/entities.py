@@ -63,7 +63,10 @@ def backfill_entities(conn: sqlite3.Connection, book_id: str) -> int:
     n = 0
     import json
 
-    for c in conn.execute(f"SELECT canonical_name, aliases_json FROM characters WHERE {SERIES_SCOPE}", (book_id,)).fetchall():
+    # a card a name finds: the aliases of one known only by other cards' words, or of one of another time, are those
+    # cards' own words and not forms of the entity named like them (ADR-103)
+    for c in conn.execute(f"SELECT canonical_name, aliases_json FROM characters WHERE {SERIES_SCOPE} AND {FINDABLE}",
+                          (book_id,)).fetchall():
         target = conn.execute(f"SELECT entity_id FROM glossary WHERE {SERIES_SCOPE} AND source_term=?",
                               (book_id, c[0])).fetchone()
         if not target:
@@ -169,19 +172,23 @@ def unlink(conn: sqlite3.Connection, book_id: str, term: str) -> None:
                  (book_id, term))
     if old_eid and old_eid != eid:
         refresh_entity(conn, book_id, old_eid)
-        _drop_alias(conn, book_id, term, old_forms)
+        _drop_alias(conn, book_id, term, old_forms, old_eid)
 
 
-def _drop_alias(conn: sqlite3.Connection, book_id: str, term: str, entity_forms: list[str]) -> None:
-    """A detached form is no longer an alias of the character of the entity it was merged into (other
-    characters that legitimately list it keep it)."""
+def _drop_alias(conn: sqlite3.Connection, book_id: str, term: str, entity_forms: list[str], eid: str) -> None:
+    """A detached form is no longer an alias of the character of the entity it was merged into: the card the entity
+    is bound to, or else the card its forms name (a card a name finds, ADR-103). Other characters that list it — a
+    card of another time or one known only by other cards' words with the same name — keep it."""
     import json
 
     if not entity_forms:
         return
-    for cid, aliases_json in conn.execute(
-            f"SELECT id, aliases_json FROM characters WHERE {SERIES_SCOPE} AND canonical_name IN "
-            f"({','.join('?' * len(entity_forms))})", (book_id, *entity_forms)).fetchall():
+    bound = conn.execute("SELECT character_id FROM entities WHERE id=?", (eid,)).fetchone()
+    rows = conn.execute("SELECT id, aliases_json FROM characters WHERE id=?", (bound[0],)).fetchall() \
+        if bound is not None and bound[0] else conn.execute(
+            f"SELECT id, aliases_json FROM characters WHERE {SERIES_SCOPE} AND {FINDABLE} AND canonical_name IN "
+            f"({','.join('?' * len(entity_forms))})", (book_id, *entity_forms)).fetchall()
+    for cid, aliases_json in rows:
         aliases = json.loads(aliases_json)
         if term in aliases:
             aliases.remove(term)

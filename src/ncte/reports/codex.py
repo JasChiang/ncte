@@ -16,6 +16,7 @@ from typing import Any
 
 from ..epub.units import match_text
 from ..memory.entities import entity_forms, senses
+from ..memory.repository import card_label, findable
 from ..series import INF_POS, SERIES_SCOPE, Pos, volumes
 
 KIND_ZH = {"character": "人物", "organization": "團體", "place": "地點", "item": "物品", "skill": "技能", "term": "用語"}
@@ -41,7 +42,7 @@ def build_index(conn: sqlite3.Connection, book_id: str, upto: Pos = INF_POS) -> 
     every = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,)).fetchall()
     # a name's card is the one named so, not one only known by other cards' words (ADR-103: those come first, so the
     # card named so is the one kept)
-    chars = {r["canonical_name"]: r for r in sorted(every, key=lambda r: r["label"] == "")}
+    chars = {r["canonical_name"]: r for r in every if findable(r)}
     cname = {r["id"]: r["display_name_zh"] or r["canonical_name"] for r in every}
     vols = volumes(conn)
     called: dict[str, list[dict[str, Any]]] = {}  # addressee id → forms others (or they themself) use
@@ -113,7 +114,9 @@ def build_relations(conn: sqlite3.Connection, book_id: str, upto: Pos = INF_POS,
     by_entity: dict[str, str] = {}
     for c in sorted(chars, key=lambda c: (official.get(ent_of.get(c["canonical_name"], "")) != c["canonical_name"],
                                           c["known_from_ordinal"])):
-        eid = ent_of.get(c["canonical_name"])
+        # only a card a name finds is the entity named like it; one of another time or one known only by other cards'
+        # words is a node of its own (ADR-103)
+        eid = ent_of.get(c["canonical_name"]) if findable(c) else None
         if eid and eid in by_entity:
             rep[c["id"]] = by_entity[eid]
         else:
@@ -130,11 +133,13 @@ def build_relations(conn: sqlite3.Connection, book_id: str, upto: Pos = INF_POS,
         forms = [c["canonical_name"], *json.loads(c["aliases_json"])]
         if c["display_name_zh"]:
             forms.append(c["display_name_zh"])
-        names.setdefault(c["id"], []).extend(f for f in forms if len(f) >= 2)
-        label[c["id"]] = c["display_name_zh"] or c["canonical_name"]
+        # a fact or a scene naming 「母親」 is not about the past life's 「母親」: only a card a name finds is matched by
+        # its words; the others are found by id (who speaks or is present in the scene)
+        names.setdefault(c["id"], []).extend(f for f in forms if len(f) >= 2 and findable(c))
+        label[c["id"]] = card_label(c)  # with its number or its time, as on the page
     for g in conn.execute(f"SELECT g.source_term, g.target_term, c.id FROM glossary g JOIN characters c ON "
                           f"c.canonical_name=(SELECT source_term FROM glossary g2 WHERE g2.entity_id=g.entity_id AND "
-                          f"g2.form_type='official' LIMIT 1) WHERE g.{SERIES_SCOPE}", (book_id,)):
+                          f"g2.form_type='official' LIMIT 1) AND c.label='' AND c.period IS NULL WHERE g.{SERIES_SCOPE}", (book_id,)):
         if g[2] in names:
             names[g[2]] += [x for x in (g[0], g[1]) if x and len(x) >= 2]
     facts = []
@@ -155,7 +160,10 @@ def build_relations(conn: sqlite3.Connection, book_id: str, upto: Pos = INF_POS,
         if (vols.get(s["book_id"], 1.0), s["start_ordinal"]) >= upto:
             continue
         text = match_text(s["txt"] or "")
-        present = sorted(cid for cid, ns in names.items() if any(n in text for n in ns))
+        by_id = {r[0] for r in conn.execute("SELECT speaker_id_nullable FROM utterances WHERE book_id=? AND scene_id=? "
+                                            "AND speaker_id_nullable IS NOT NULL", (s["book_id"], s["id"]))}
+        by_id |= {p.get("character_id") for p in json.loads(s["state_json"] or "{}").get("participants") or []}
+        present = sorted(cid for cid, ns in names.items() if any(n in text for n in ns) or (not ns and cid in by_id))
         for cid in present:
             appearances[cid] += 1
         for i, a in enumerate(present):
