@@ -643,12 +643,24 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         # The link records where it was revealed, so the name is not shown before that point.
         from ..memory.entities import record_link
 
+        went: dict[str, str] = {}  # a card an earlier reveal of this reading merged away → the card it went into
+
+        def now(x: str) -> str:
+            while x in went:
+                x = went[x]
+            return x
+
         for cid, same, name, first, _ev, new in reveals:
+            # one answer may say A is B and B is A, or chain them: follow what the earlier reveals merged; two cards
+            # already one need nothing, and a card no longer there is skipped
+            cid, same = now(cid), now(same)
             old = conn.execute("SELECT * FROM characters WHERE id=?", (same,)).fetchone()
-            if old is None:
+            named = conn.execute("SELECT aliases_json FROM characters WHERE id=?", (cid,)).fetchone()
+            if cid == same or old is None or named is None:
                 continue
-            own = [name, *json.loads(conn.execute("SELECT aliases_json FROM characters WHERE id=?", (cid,)).fetchone()[0])]
+            own = [name, *json.loads(named[0])]
             repo.merge_characters(conn, cid, same)
+            went[same] = cid
             if open_ := [x for x in repo.may_be(old) if x != cid]:
                 # a name tells who she is called, not which of the cards with the same words she is: still asked
                 # (the cards it was answered not to be came over with the merge)

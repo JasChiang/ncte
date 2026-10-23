@@ -1226,3 +1226,8 @@ open workspace/eval/<timestamp>/report.html
 - `reports/codex`：名稱索引只收 `findable` 的卡；關係圖只讓 `findable` 的卡依實體合併、以名字比對，其他卡依場景裡的說話者與在場（id）出現，標籤用 `card_label`。
 - ADR-103 的查找表補上這些與「卡→它的字出現在哪」（只給模型讀、不決定身分）的一列。
 - 測試：`test_unconfirmed_review.py` 新增 5 個（改之前都失敗）。878 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 第五輪審閱修正（2026-10-23，分支 unnamed-placeholders-2026-10-23）
+- `scene.apply_scene_analysis`：揭曉合併順著同一次讀場景前面的合併找到現在的卡（`went`），已是同一張就略過、卡不在就略過，不再因為互指（A 是 B、B 是 A）或鏈（A 是 B、C 是 A）而中斷。
+- ADR-103 的表補上三個只比對字面、不是找卡的地方（編標籤號、改名前的唯一鍵檢查、敘述者佔位卡）與理由。
+- 測試：`test_unconfirmed_review.py` 新增 2 個（互指、鏈；改之前都失敗）。880 passed、5 skipped；ruff、mypy 通過。

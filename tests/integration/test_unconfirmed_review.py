@@ -282,6 +282,54 @@ def test_a_reveal_naming_a_card_that_already_has_the_name_merges_into_it(conn, c
     assert vis.character_view(conn, book.id, _card(conn, lilia), first["ordinal"])["name_ja"] == "リリア"
 
 
+def _reveal_pairs(conn, s, pairs):
+    """One reading of the last scene naming existing cards, each 'the same as' another (the model's answer)."""
+    book, last = s["book"], s["scenes"][-1]
+    unit = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? AND plain_text LIKE '%リリア%' ORDER BY "
+                        "ordinal LIMIT 1", (book.id, last["id"])).fetchone()
+    out = {"pov": None, "location": None, "time": None, "participants": [], "actions": [], "props": [],
+           "uncertainties": [], "utterances": [],
+           "new_characters": [{"temp_id": f"new_{i}", "name_ja": name, "aliases_ja": [], "proposed_name_zh": "",
+                               "evidence_unit_ids": [unit["id"]], "same_as_ref": ref}
+                              for i, (name, ref) in enumerate(pairs)]}
+    refs: dict[str, str] = {}
+    apply_scene_analysis(conn, book.id, get_scene(conn, book.id, last["id"]), SceneAnalysisOutput.model_validate(out),
+                         refs=refs)
+    return refs
+
+
+def _named(conn, s, name):
+    first = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal LIMIT 1",
+                         (s["book"].id, s["scenes"][0]["id"])).fetchone()
+    return repo.upsert_character(conn, s["book"].id, name, name_zh=None, aliases=[], unit_id=first["id"],
+                                 ordinal=first["ordinal"], origin="test")[0]
+
+
+def test_reveals_in_one_reading_follow_each_others_merges_and_never_crash(conn, cfg, fixtures):
+    """A is said to be B and B to be A in the same answer: one card, no error. A chain (B is the card known by 「母親」,
+    A is B): everything ends on one card."""
+    s = _setup(conn, cfg, fixtures)
+    a = _named(conn, s, "リリア")
+    b = _named(conn, s, "王女")
+    conn.execute("UPDATE units SET plain_text=plain_text || '王女。' WHERE id=(SELECT id FROM units WHERE book_id=? AND "
+                 "scene_id=? AND plain_text LIKE '%リリア%' ORDER BY ordinal LIMIT 1)", (s["book"].id, s["scenes"][-1]["id"]))
+    refs = _reveal_pairs(conn, s, [("リリア", b), ("王女", a)])
+    left = {x for x in (a, b) if _card(conn, x) is not None}
+    assert len(left) == 1 and refs["new_0"] == refs["new_1"] == next(iter(left))
+
+
+def test_a_chain_of_reveals_in_one_reading_ends_on_one_card(conn, cfg, fixtures):
+    s2 = _setup(conn, cfg, fixtures)
+    c = _named(conn, s2, "リリア")
+    d = _named(conn, s2, "王女")
+    conn.execute("UPDATE units SET plain_text=plain_text || '王女。' WHERE id=(SELECT id FROM units WHERE book_id=? AND "
+                 "scene_id=? AND plain_text LIKE '%リリア%' ORDER BY ordinal LIMIT 1)", (s2["book"].id, s2["scenes"][-1]["id"]))
+    refs = _reveal_pairs(conn, s2, [("リリア", d), ("王女", s2["p"])])  # 王女 is merged away before its own reveal
+    kept = {x for x in (c, d, s2["p"]) if _card(conn, x) is not None}
+    assert len(kept) == 1 and refs["new_0"] == refs["new_1"] == next(iter(kept))
+    assert _speaker(conn, s2["line"]["id"]) == next(iter(kept))
+
+
 def test_the_command_line_finds_a_card_by_name_only_by_the_rule_and_never_picks_among_several(conn, cfg, fixtures):
     import pytest
 
