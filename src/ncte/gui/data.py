@@ -344,8 +344,11 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
 
         if c["label"]:  # one of several cards the book calls by the same words: told apart here only (ADR-103)
             out[cid]["label"] = card_label(c, out[cid]["zh"])
-            if open_ := [x for x in may_be(c) if x in chars]:
-                out[cid]["may_be"] = open_  # not yet known whether this is one of those people (the second look asks)
+            # not yet known whether this is one of those people (the second look asks); each with where it is first
+            # known, so the page names one only once the reading position reaches it
+            if open_ := [{"id": x, "from": chars[x]["known_from_ordinal"] if vols.get(chars[x]["book_id"], 1.0) == here
+                          else -1} for x in may_be(c) if x in chars and vols.get(chars[x]["book_id"], 1.0) <= here]:
+                out[cid]["may_be"] = open_
 
         stretches = impressions_of(conn, cid)
         if stretches:

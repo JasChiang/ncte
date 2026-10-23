@@ -1202,3 +1202,12 @@ open workspace/eval/<timestamp>/report.html
 - 寫法的位置：`repository.note_forms`、`hold_forms`、`seen_earlier`（重讀時以寫法對到後面才出現的卡：只有那個寫法從新位置起看得到）；`upsert_character`、`unconfirmed_card`、其他寫法、`merge_characters`、`drop_aliases` 都更新；`visibility.form_positions` 多回傳第三項，`character_view` 以它為準。
 - 分辨同名的卡：`visibility.tell_apart`（`first_seen`、`earlier_model_reading`、`relations_so_far`，都以請求的位置為準），翻譯、讀場景、整理記憶的人物卡，覆核 `same_person` 的卡與候選卡、候選有同名人物的項目（`same_name_candidates`）；沒有同名時請求不變。提示詞 `translate`、`scene_analyze`、`scene_read`、`memory_update`、`verify` 各補一句說明。
 - 測試：`test_unconfirmed_cards.py` 新增 4 個（另一時期的卡以原文為名、時期給模型、重讀同一張、不讓現在的「母親」有歧義；它的名字揭曉只從揭曉處顯示；重讀時卡往前移不讓後面的寫法提早顯示；同名的卡帶描述與關係、不含之後的資料），每個都先確認在改之前會失敗；`test_certainty.py` 2 個、`test_entities.py` 1 個、`test_in_source.py` 1 個改成新的存法。857 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 第二輪審閱修正（2026-10-23，分支 unnamed-placeholders-2026-10-23）
+- 網頁：`gui/data.characters` 的 `may_be` 每項附 `from`；`app.js` 的 `groupLine` 只列讀到的位置已經知道的候選卡。
+- 揭曉名字：`scene.apply_scene_analysis` 把另一個時期的卡的 `period` 留給有名字的卡；`other_time_card` 以時期＋寫法（卡名或別名）找卡；`card_label` 對沒有標籤、有時期的卡顯示時期。
+- 合併：`verify._same_as` 依「沒有標籤 > 原文揭曉的名字 > 回答的那張」選留下的卡並回傳；`merge_characters` 有標籤的卡吸收有名字的卡時改用那個名字、拿掉標籤，改寫其他卡的 `may_be_json`／`not_same_json` 時更新 `updated_at`（`forget_scene_cards` 同）。
+- 覆核：`verify.apply` 多 `unapplied`、`went`（順著同一次覆核的合併找到現在的卡，`verify_pass` 跨批次共用），沒事可做的 `same_person` 回答刪掉答過的紀錄、列入沒問到；`different` 記下問過的卡（`not_same_json`）。
+- 讀場景：`repository.unconfirmed_card` 以 `reading_key`（場景、寫法、這次讀的第幾個）找回同一張，重讀時加別名與位置、只標沒問過的卡；migration 37 多 `reading_key`、`not_same_json`。
+- `entities.ensure_entity` 只綁沒有標籤的卡。
+- 測試：`tests/integration/test_unconfirmed_review.py`（新，10 個，每個在修改前都失敗）。867 passed、5 skipped；ruff、mypy 通過。

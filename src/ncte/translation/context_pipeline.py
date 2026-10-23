@@ -683,6 +683,7 @@ class ContextOrchestrator(Orchestrator):
             return
         unasked: list[str] = []
         refused = 0
+        went: dict[str, str] = {}
         for chunk, got in zip(chunks, answers, strict=True):
             if got is None:
                 continue
@@ -697,7 +698,10 @@ class ContextOrchestrator(Orchestrator):
                 continue
             assert isinstance(parsed, VerifyOutput)
             with self.lock, Transaction(self.conn):
-                for k, v in verify.apply(self.conn, self.book.id, chunk, parsed, self._finding).items():
+                # a merge an earlier batch made is followed by the later ones; an answer left with nothing to do is
+                # asked again (ADR-103)
+                for k, v in verify.apply(self.conn, self.book.id, chunk, parsed, self._finding, unapplied=unasked,
+                                         went=went).items():
                     stats[k] = stats.get(k, 0) + v
         self._end_step("verify", stats, unasked, record_job,
                        answered=None if only is None else len(items) - len(unasked) - refused)

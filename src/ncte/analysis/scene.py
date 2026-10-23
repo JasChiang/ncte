@@ -299,9 +299,10 @@ def forget_scene_cards(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Ro
                          "AND coalesce(origin,'')!='user'", (book_id, c["canonical_name"]))
         repo.forget_card_records(conn, cid)
         conn.execute("DELETE FROM characters WHERE id=?", (cid,))
-        for row in conn.execute("SELECT id, may_be_json FROM characters WHERE instr(may_be_json, ?) > 0", (cid,)).fetchall():
-            conn.execute("UPDATE characters SET may_be_json=? WHERE id=?",
-                         (json.dumps([x for x in json.loads(row[1]) if x != cid]), row[0]))
+        for col in ("may_be_json", "not_same_json"):
+            for row in conn.execute(f"SELECT id, {col} FROM characters WHERE instr({col}, ?) > 0", (cid,)).fetchall():
+                conn.execute(f"UPDATE characters SET {col}=?, updated_at=? WHERE id=?",
+                             (json.dumps([x for x in json.loads(row[1]) if x != cid]), utcnow(), row[0]))
         dropped.append(cid)
     return dropped
 
@@ -450,6 +451,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     if parsed is not None:  # read again: what this scene's last reading wrote of people is written anew
         conn.execute("DELETE FROM character_notes WHERE book_id=? AND scene_id=?", (book_id, sid))
     unconfirmed_cards: list[dict[str, Any]] = []  # cards made for people known by several cards' words (ADR-103)
+    made_by_words: dict[str, int] = {}  # how many such cards this reading made for each of those words
 
     def rej(item: object, reason: str) -> None:
         stats["rejected"] += 1
@@ -503,9 +505,12 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 matched.append({"ref": nc.temp_id, "name_ja": name, "character_id": same, "by": "same_as_ref"})
                 return
             order = {c["id"]: i for i, c in enumerate(cards_now)}
+            # which of this reading's proposals with these words it is: the same one on a re-read, and two stay two
+            k = made_by_words[name] = made_by_words.get(name, -1) + 1
             cid, created = repo.unconfirmed_card(
                 conn, book_id, name, aliases=aliases, may_be=sorted(cards, key=lambda x: order.get(x, len(order))),
-                unit_id=first.id, ordinal=first.ordinal, is_group=bool(nc.group), origin="scene_analysis")
+                unit_id=first.id, ordinal=first.ordinal, is_group=bool(nc.group), origin="scene_analysis",
+                key=f"{sid}|{name}|{k}")
             stats["new_characters"] += int(created)
             stats["unconfirmed"] = stats.get("unconfirmed", 0) + 1
             ref_map[nc.temp_id] = ref_map[cid] = cid
@@ -641,7 +646,12 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             repo.merge_characters(conn, cid, same)
             if open_ := [x for x in repo.may_be(old) if x != cid]:
                 # a name tells who she is called, not which of the cards with the same words she is: still asked
-                conn.execute("UPDATE characters SET may_be_json=? WHERE id=?", (json.dumps(open_), cid))
+                conn.execute("UPDATE characters SET may_be_json=?, not_same_json=? WHERE id=?",
+                             (json.dumps(open_), old["not_same_json"], cid))
+            if repo.period_of(old) is not None:
+                # a name revealed for someone of another time (リリア, the past life's 「母親」): still of that time —
+                # never a present person found by the words, and the same card when that time's words are read again
+                conn.execute("UPDATE characters SET period=? WHERE id=? AND period IS NULL", (repo.period_of(old), cid))
             # the new name and its own aliases (「王女」) are known from the reveal, not from the description's scene
             # (the description itself stays known from its own scene)
             for form in own:

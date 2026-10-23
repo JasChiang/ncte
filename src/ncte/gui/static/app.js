@@ -592,7 +592,7 @@ async function peopleView(id) {
       ${p.aka.length ? `<div class="muted small">其他稱呼：${p.aka.map(a => `<span class="ja">${esc(a.ja)}</span>${readingsTag(a.readings)}${a.zh && a.zh !== a.ja ? `（${esc(a.zh)}）` : ""}`).join("・")}</div>` : ""}
       ${(p.first_person || []).length ? `<div class="small" style="margin-top:4px">自稱：${p.first_person.map(([w, n]) => `<span class="form-tag"><span class="ja">${esc(w)}</span><span class="n">×${n}</span></span>`).join(" ")}</div>` : ""}
       ${genderLine(p, upto)}
-      ${groupLine(p, d, nm)}
+      ${groupLine(p, d, nm, upto)}
       <div class="secnav">${[["sec-rel", "人物關係"], ["sec-addr", "稱呼"], ["sec-co", "常一起出場"], ["sec-ex", "說話例句"], ["sec-facts", "已知事實"]]
         .map(([k, t]) => `<button class="btn small" data-sec="${k}">${t}</button>`).join("")}</div>
       ${p.impression ? `<div class="card" style="margin-top:10px;background:var(--accent-soft)"><strong>角色印象</strong> <span class="muted small">${p.impression.read_all ? "讀完全書後整理" : `讀到 §${p.impression.read_to ?? "?"} 為止整理`}</span>
@@ -626,10 +626,12 @@ function readingsTag(r) { return (r || []).length ? ` <span class="muted small" 
 function bi(ja, zh, cls = "") {
   return `<span class="bi ${cls}"><span class="ja">${esc(ja || "")}</span>${zh ? `<span class="zh">${esc(zh)}</span>` : ""}</span>`;
 }
-function groupLine(p, d, nm) {
+function groupLine(p, d, nm, upto) {
   // a group card and who it is made of; a member shows the groups it belongs to (people not shown yet are left out)
   const link = ids => (ids || []).filter(k => d.characters[k]).map(k => `<a href="#" data-k="${esc(k)}">${esc(nm(k))}</a>`).join("・");
-  const members = link(p.members), of = link(p.member_of), maybe = link(p.may_be);
+  // the cards it may be: only those already known at the reading position (a later card's name is not shown early)
+  const members = link(p.members), of = link(p.member_of),
+    maybe = link((p.may_be || []).filter(m => m.from <= upto).map(m => m.id));
   // a card for someone the book calls by words other cards have: whether it is one of them is not known yet (ADR-103)
   return (maybe ? `<div class="small" style="margin-top:4px">身分未確認：可能和 ${maybe} 是同一人（讀完後的覆核會再確認）</div>` : "")
     + (members ? `<div class="small" style="margin-top:4px">成員：${members}</div>` : "")

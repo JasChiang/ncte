@@ -46,8 +46,9 @@ def ensure_entity(conn: sqlite3.Connection, book_id: str, term: str) -> str | No
         return None
     if row["entity_id"]:
         return str(row["entity_id"])
-    ch = conn.execute(f"SELECT id FROM characters WHERE {SERIES_SCOPE} AND canonical_name=? ORDER BY label!=''",
-                      (book_id, term)).fetchone()  # the card named so, not one only known by its words (ADR-103)
+    # the card named so; never one only known by other cards' words or one of another time (ADR-103)
+    ch = conn.execute(f"SELECT id FROM characters WHERE {SERIES_SCOPE} AND canonical_name=? AND label=''",
+                      (book_id, term)).fetchone()
     eid = _new_entity(conn, book_id, term, row["category"], ch[0] if ch else None)
     conn.execute("UPDATE glossary SET entity_id=? WHERE id=?", (eid, row["id"]))
     return eid

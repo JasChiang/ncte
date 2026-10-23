@@ -439,8 +439,12 @@ def narrator_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
 
 
 def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], parsed: VerifyOutput,
-          finding: Any) -> dict[str, int]:
-    """Apply the second look. ``finding(unit_id, type, severity, evidence)`` records what needs the user."""
+          finding: Any, *, unapplied: list[str] | None = None, went: dict[str, str] | None = None) -> dict[str, int]:
+    """Apply the second look. ``finding(unit_id, type, severity, evidence)`` records what needs the user.
+
+    The answers come from one snapshot: a card an earlier answer of this pass merged away is followed to the card it
+    went into. A same-person answer left with nothing to do that way (the card and the one it names are now one) is
+    not an answer: its ref goes to ``unapplied`` (asked again, ADR-102) and is not recorded as answered."""
     from ..memory.address import follow_speakers
 
     by_ref = {i["ref"]: i for i in items}
@@ -448,6 +452,17 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
              "genders_kept": 0, "merges_doubted": 0, "ignored": 0}
     changed: dict[str, str | None] = {}  # lines whose speaker the second look changed → the speaker before
     from ..memory.db import utcnow as _now
+
+    went = {} if went is None else went  # card merged away in this pass → the card it went into
+
+    def now(cid: str) -> str:
+        while cid in went:
+            cid = went[cid]
+        return cid
+
+    def merge(keep: str, drop: str) -> None:
+        repo.merge_characters(conn, keep, drop)
+        went[drop] = keep
 
     for a in parsed.items:
         if (seen := by_ref.get(a.ref)) is not None and seen.get("_fp") and answer_valid(seen, a.answer.strip()) \
@@ -547,25 +562,37 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             conn.execute("UPDATE scenes SET state_json=? WHERE book_id=? AND id=?",
                          (json.dumps(state, ensure_ascii=False), book_id, sid))
         elif kind == "i":
-            if answer in item["candidates"] and answer != key:  # 「姉ちゃん」 in the sister's story is 高木
-                _narrator_is(conn, book_id, key, answer)
+            if answer in item["candidates"] and now(answer) != now(key):  # 「姉ちゃん」 in the sister's story is 高木
+                _narrator_is(conn, book_id, now(key), now(answer))
+                went[now(key)] = now(answer)
                 stats["identities_merged"] = stats.get("identities_merged", 0) + 1
         elif kind == "s":  # a card known by words other cards have: one of them, or someone else (ADR-103)
-            c = conn.execute("SELECT * FROM characters WHERE id=? AND book_id=?", (key, book_id)).fetchone()
-            if c is None or not repo.may_be(c) or not answer_valid(item, answer) or not _rests_on(item, a) \
-                    or answer == "unknown":
+            if not answer_valid(item, answer) or not _rests_on(item, a) or answer == "unknown":
                 left = "same_person_open" if answer == "unknown" else "ignored"
                 stats[left] = stats.get(left, 0) + 1
                 continue  # stays marked: asked again when the card or the cards it may be change
-            if answer == "different":
-                conn.execute("UPDATE characters SET may_be_json='[]', updated_at=? WHERE id=?", (utcnow(), key))
+            card, other = now(key), now(answer) if answer != "different" else ""
+            c = conn.execute("SELECT * FROM characters WHERE id=? AND book_id=?", (card, book_id)).fetchone()
+            if c is None or card == other or (answer == "different" and not repo.may_be(c)):
+                # nothing left to do (an earlier answer of this pass made them one card): not an answer
+                conn.execute("DELETE FROM verify_answers WHERE book_id=? AND ref=?", (book_id, a.ref))
+                if unapplied is not None:
+                    unapplied.append(a.ref)
+                stats["same_person_unapplied"] = stats.get("same_person_unapplied", 0) + 1
+                continue
+            if answer == "different":  # holds for the cards it was asked about; a card not asked about is asked later
+                asked = sorted({*json.loads(c["not_same_json"] or "[]"), *(now(x) for x in item["candidates"])})
+                conn.execute("UPDATE characters SET may_be_json='[]', not_same_json=?, updated_at=? WHERE id=?",
+                             (json.dumps(asked), utcnow(), card))
                 stats["same_person_different"] = stats.get("same_person_different", 0) + 1
             else:  # the same person: one card from here on, its lines and memory moved over
-                _same_as(conn, book_id, key, answer)
+                keep, drop = _same_as(conn, book_id, card, other)
+                went[drop] = keep
                 stats["same_person_merged"] = stats.get("same_person_merged", 0) + 1
         elif kind == "p":
-            if answer.startswith("same:") and answer[5:].strip() in item["candidates"]:
-                repo.merge_characters(conn, answer[5:].strip(), key)  # one group known by two descriptions
+            if answer.startswith("same:") and answer[5:].strip() in item["candidates"] \
+                    and now(answer[5:].strip()) != now(key):
+                merge(now(answer[5:].strip()), now(key))  # one group known by two descriptions
                 stats["groups_merged"] = stats.get("groups_merged", 0) + 1
             else:
                 members = [m.strip() for m in answer.split(",") if m.strip() in item["candidates"]]
@@ -575,8 +602,9 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
                 if members:
                     stats["groups_with_members"] = stats.get("groups_with_members", 0) + 1
         elif kind == "r":
-            if answer in item["candidates"]:  # the narrator is this named character: one card from here on
-                _narrator_is(conn, book_id, key, answer)
+            if answer in item["candidates"] and now(answer) != now(key):  # the narrator is this named character
+                _narrator_is(conn, book_id, now(key), now(answer))
+                went[now(key)] = now(answer)
                 stats["narrators_matched"] = stats.get("narrators_matched", 0) + 1
             else:
                 stats["narrators_kept"] = stats.get("narrators_kept", 0) + 1
@@ -613,22 +641,33 @@ def _narrator_is(conn: sqlite3.Connection, book_id: str, placeholder: str, named
                     ordinal=c["known_from_ordinal"])
 
 
-def _same_as(conn: sqlite3.Connection, book_id: str, card: str, other: str) -> None:
-    """The second look found the card known by other cards' words to be ``other`` (ADR-103): folded into it, lines and
-    memory with it. When ``other`` was first seen later than this card, its own names stay hidden until its own first
-    appearance: only the words this card was known by are known from here (ADR-032)."""
+def _same_as(conn: sqlite3.Connection, book_id: str, card: str, other: str) -> tuple[str, str]:
+    """The second look found the card known by other cards' words to be ``other`` (ADR-103): one card from here on,
+    lines and memory with it. Returns (the card kept, the card folded into it). When the kept card was first seen
+    later, its own names stay hidden until its own first appearance: only the folded card's words are known from its
+    place (ADR-032)."""
     from ..memory.entities import record_link
     from ..series import pos
 
     c = conn.execute("SELECT * FROM characters WHERE id=?", (card,)).fetchone()
     o = conn.execute("SELECT * FROM characters WHERE id=?", (other,)).fetchone()
     if c is None or o is None:
-        return
-    later = pos(conn, o["book_id"], o["known_from_ordinal"]) > pos(conn, c["book_id"], c["known_from_ordinal"])
-    mine = {c["canonical_name"], *json.loads(c["aliases_json"] or "[]")}
-    own = [f for f in [o["canonical_name"], *json.loads(o["aliases_json"] or "[]")] if f not in mine]
-    repo.merge_characters(conn, other, card)
+        return other, card
+    # the card that stays keeps a real name: one named so (not known only by other cards' words), and of two such the
+    # one whose name the book revealed (リリア over 「母親」); otherwise the card the answer names
+    def rank(r: sqlite3.Row) -> tuple[bool, bool]:
+        revealed = conn.execute("SELECT 1 FROM entity_links WHERE book_id=? AND target_term=? AND form_type='official' "
+                                "AND status='accepted'", (book_id, r["canonical_name"])).fetchone() is not None
+        return bool(repo.label_of(r)), not revealed
+
+    keep, drop = (c, o) if rank(c) < rank(o) else (o, c)
+    later = pos(conn, keep["book_id"], keep["known_from_ordinal"]) > pos(conn, drop["book_id"], drop["known_from_ordinal"])
+    mine = {drop["canonical_name"], *json.loads(drop["aliases_json"] or "[]")}
+    own = [f for f in [keep["canonical_name"], *json.loads(keep["aliases_json"] or "[]")] if f not in mine]
+    repo.merge_characters(conn, keep["id"], drop["id"])
+    # the kept card's own names stay hidden until its own first appearance (its forms keep their positions too)
     for form in own if later else []:
-        record_link(conn, book_id, form, o["canonical_name"], "alias" if form != o["canonical_name"] else "official",
-                    origin="same_person", status="accepted", unit_id=o["known_from_unit_id"], quote=None,
-                    ordinal=o["known_from_ordinal"])
+        record_link(conn, book_id, form, keep["canonical_name"],
+                    "alias" if form != keep["canonical_name"] else "official", origin="same_person", status="accepted",
+                    unit_id=keep["known_from_unit_id"], quote=None, ordinal=keep["known_from_ordinal"])
+    return str(keep["id"]), str(drop["id"])
