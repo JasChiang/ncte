@@ -1132,3 +1132,8 @@ open workspace/eval/<timestamp>/report.html
 - `context_pipeline.proofread_pass` 遇到 partial 時改走 `_fill_unanswered`／`_gap_stretches`（前後各附同一章的段落：`proofread.head`、`proofread` 提示詞的 `context_after`）；每一輪計數的 `no_verdict_ids`、`verdicts_filled`；`_stretches` 合併清單；`_unanswered`、`_counts`（紀錄行不列 id）。
 - 網頁：`Runner.progress` 的 `unanswered`；執行已結束時的「補問沒判定的段落」。
 - 測試：`tests/integration/test_proofread_fill.py`（新）。773 passed、5 skipped；ruff、mypy 通過。
+
+## 提示詞不設身分（2026-10-23，分支 prompt-persona-2026-10-22；ADR-099）
+- 16 個提示詞的開頭；`reader` 的 `unclear` 標準。
+- 抽驗暫存資料：`workspace/exp/persona-ab`（四個工作區副本、`ab.yaml` 關掉校稿等步驟、`run.sh`、`mk.py` 產生盲評檔、`verdict.txt`）。
+- 測試：773 passed、5 skipped；ruff、mypy 通過。
