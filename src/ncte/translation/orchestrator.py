@@ -305,12 +305,18 @@ class DbRecorder:
 
     def failure(self, rid: int, exc: Exception) -> None:
         billed = bool(getattr(exc, "possibly_billed", False))
+        # a turn that ran and came back empty (a CLI source): its tokens, plan windows and time are kept as a success's
+        # are, so the plan and cost reports count it (ADR-102)
+        used, took = getattr(exc, "usage", None), getattr(exc, "latency_ms", None)
         with self.lock:
-            self.sizes.pop(rid, None)  # the row keeps the size written when it was sent
+            size = self.sizes.pop(rid, None)
             self.conn.execute(
-                "UPDATE llm_requests SET status='failed', error=?, cost_status=?, cost_usd=?, finished_at=? WHERE id=?",
+                "UPDATE llm_requests SET status='failed', error=?, cost_status=?, cost_usd=?, finished_at=?, "
+                "latency_ms=COALESCE(?, latency_ms), usage_json=COALESCE(?, usage_json) WHERE id=?",
                 (f"{type(exc).__name__}: {str(exc)[:500]}", "unknown" if billed else "none",
-                 None if billed else 0.0, utcnow(), rid))
+                 None if billed else 0.0, utcnow(), took,
+                 json.dumps({**used, **({"payload_chars": size} if size is not None else {})})
+                 if isinstance(used, dict) else None, rid))
 
 
 # --------------------------------------------------------------------------- orchestrator

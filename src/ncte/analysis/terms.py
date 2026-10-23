@@ -173,12 +173,13 @@ def candidates(conn: sqlite3.Connection, book_id: str, extra: list[str] | None =
     return chosen
 
 
-def requests(conn: sqlite3.Connection, book_id: str,
-             extra: list[str] | None = None) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+def requests(conn: sqlite3.Connection, book_id: str, extra: list[str] | None = None,
+             only: set[str] | None = None) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """(payload, lookup) per PER_REQUEST terms. Codes are unique over the whole step: ``t`` a term, ``s`` an example
-    sentence, ``f`` a fact; the lookup maps each back to its term or to where its evidence is."""
+    sentence, ``f`` a fact; the lookup maps each back to its term or to where its evidence is. ``only``: these terms
+    (the ones a failed request left unasked, ADR-102)."""
     out = []
-    chosen = candidates(conn, book_id, extra)
+    chosen = [c for c in candidates(conn, book_id, extra) if only is None or c["ja"] in only]
     n_ev = 0
     for i in range(0, len(chosen), PER_REQUEST):
         items, terms, ev = [], {}, {}

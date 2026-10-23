@@ -175,8 +175,6 @@ class ClaudeCLIClient:
                 result = json.dumps(structured, ensure_ascii=False)
             else:
                 result = str(out.get("result") or "")
-            if not result.strip():
-                raise EmptyAnswerError("empty answer")
             u = out.get("usage") or {}
             cache_write = int(u.get("cache_creation_input_tokens") or 0)
             cache_read = int(u.get("cache_read_input_tokens") or 0)
@@ -189,8 +187,11 @@ class ClaudeCLIClient:
                 usage["models"] = [str(k) for k in out["modelUsage"]]
             if plan:
                 usage["plan"] = plan
+            took = int((time.monotonic() - start) * 1000)
+            if not result.strip():  # the turn ran and was counted against the plan: what it took goes with the error
+                raise EmptyAnswerError("empty answer", usage=usage, latency_ms=took)
             return LLMResponse(content=result, model=req.model, provider="claude", generation_id=out.get("session_id"),
-                               usage=usage, cost_usd=0.0, latency_ms=int((time.monotonic() - start) * 1000),
+                               usage=usage, cost_usd=0.0, latency_ms=took,
                                finish_reason="stop", attempts=attempt, structured_mode=req.structured_mode)
 
 

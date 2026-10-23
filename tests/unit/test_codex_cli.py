@@ -535,3 +535,14 @@ def test_the_tokens_of_failed_tries_are_counted_too(monkeypatch, tmp_path):
     assert r.usage["failed_tries"] == {"input_tokens": 32154, "cached_input_tokens": 0, "output_tokens": 178000,
                                        "reasoning_output_tokens": 0}
     assert not list(sessions.rglob("*.jsonl"))  # no session file is left behind
+
+
+def test_an_empty_answer_carries_what_the_turn_took(monkeypatch):
+    """ADR-102: the turn ran (its tokens counted against the plan): what it took goes with the error."""
+    from ncte.errors import EmptyAnswerError
+
+    monkeypatch.setattr(subprocess, "run", Codex(Answer("  ")))
+    with pytest.raises(EmptyAnswerError) as err:
+        CodexCLIClient(waits=()).complete(_req())
+    assert err.value.usage is not None and err.value.usage["prompt_tokens"] == 10400
+    assert err.value.usage["completion_tokens"] == 80 and err.value.latency_ms is not None

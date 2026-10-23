@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -430,11 +431,29 @@ def _close_jobs(orch: Any, unit_ids: list[str], status: str) -> None:
                               [(status, utcnow(), orch.run_id, u) for u in unit_ids])
 
 
+# runs ``work(0)…work(n-1)`` side by side, ``done(i, result)`` for each; True when stopped before all were started
+SideBySide = Callable[[int, Callable[[int], Any], Callable[[int, Any], None]], bool]
+
+
 def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dict[str, list[dict[str, Any]]],
-                               stats: dict[str, int]) -> None:
+                               stats: dict[str, int], *, side_by_side: SideBySide | None = None) -> None:
     """Send units back to the translator with what was found (and the current text, to change only what is wrong);
     then check each fix against the source (``fix_check``). ``feedback[unit]`` items may carry the ``finding_id`` they
-    come from: only those findings are settled, and only by a fix the check accepts."""
+    come from: only those findings are settled, and only by a fix the check accepts.
+
+    ADR-102: the units are all a checker's batch asked to fix (a proofreading or reader's stretch, the same-form words,
+    a review request), over any number of scenes. They are retranslated a scene at a time (``fix_groups``: each group
+    keeps its scene's memory) and then checked together — one fix check request for up to FIX_CHECK_BATCH fixes,
+    not one per scene. ``side_by_side`` (``ContextOrchestrator._side_by_side``) sends the groups at once, up to the
+    run's concurrency; what comes back is kept in the groups' order, so the fixes are written and checked in story
+    order whatever finished first."""
+    _settle_fixes(orch, _write_fixes(orch, rows, feedback, stats, side_by_side=side_by_side), stats)
+
+
+def _write_fixes(orch: Any, rows: list[sqlite3.Row], feedback: dict[str, list[dict[str, Any]]],
+                 stats: dict[str, int], *, side_by_side: SideBySide | None = None) -> list[WrittenFix]:
+    """The retranslations of ``_retranslate_with_feedback``, written as ``needs_review`` with their ``fix_unchecked``
+    mark (and the record a later check needs, ADR-100): the fixes waiting for their check, in story order."""
     conn = orch.conn
     with orch.lock:
         current = {r["id"]: latest_translation(conn, r["id"], r["source_hash"]) for r in rows}
@@ -448,7 +467,7 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
             continue
         todo.append(r)
     if not todo:
-        return
+        return []
     from ..exporter import exported_text
 
     # what the book says now, as exported (the text and a translator's note after it)
@@ -465,7 +484,9 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
     whole = orch.cfg.translation.fix_scope == "scene"
     with orch.lock:
         groups = fix_groups(conn, orch.cfg, orch.book.id, todo)
-    for group in groups:
+
+    def one(g: int) -> BatchResult | LLMError:
+        group = groups[g]
         ctx = orch.batch_context(_fake_batch(orch, group, whole_scene=whole, fix=not whole))
         around = ctx.pop("around", {})
         ctx["review_feedback"] = [
@@ -478,18 +499,35 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
                             for side in ("before", "after")}} if r["id"] in around else {})}
             for r in group]
         try:
-            part = orch.translator.translate([UnitInput.from_row(r) for r in group], ctx, qa_glossary=orch.qa_glossary())
+            return orch.translator.translate([UnitInput.from_row(r) for r in group], ctx,
+                                             qa_glossary=orch.qa_glossary())
         except FatalAPIError:
             raise
         except LLMError as exc:
-            orch._finding(None, "review_retranslation_failed", "medium", str(exc)[:300])
+            return exc
+
+    got: list[BatchResult | LLMError | None] = [None] * len(groups)  # None: not sent (a stop)
+
+    def keep(g: int, part: BatchResult | LLMError) -> None:
+        got[g] = part
+
+    if side_by_side is None:
+        for g in range(len(groups)):
+            keep(g, one(g))
+    else:
+        side_by_side(len(groups), one, keep)
+    for group, part in zip(groups, got, strict=True):
+        if part is None:
+            continue  # not sent: what was found stays open
+        if isinstance(part, LLMError):
+            orch._finding(None, "review_retranslation_failed", "medium", str(part)[:300])
             stats["pending"] += len(group)
             stats["still_flagged"] += len(group)
             continue
         res.ok.update(part.ok)
         res.failed.update(part.failed)
     if not res.ok and not res.failed:
-        return
+        return []
     by_id = {r["id"]: r for r in todo}
     # the translator kept the text it was asked to change (the same once typeset): nothing to check
     kept = {u: t["id"] for u, t in current.items() if t is not None and u in res.ok and typeset(
@@ -529,7 +567,7 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
             stats["still_flagged"] += 1
             stats["pending"] += 1
             orch._finding(uid, "review_retranslation_failed", "high", res.failed[uid][:300])
-    _settle_fixes(orch, fixes, stats)
+    return fixes
 
 
 @dataclass
@@ -627,8 +665,8 @@ def _settle_fixes(orch: Any, fixes: list[WrittenFix], stats: dict[str, int], *, 
 def check_waiting_fixes(orch: Any, unit_ids: set[str] | None = None) -> dict[str, int]:
     """ADR-100: fixes whose check never answered — it failed, or a pause cut it off — on texts that are still the
     book's (the ``fix_unchecked`` mark open; a later review that found nothing may have cleared ``needs_review``, the
-    fix was still never checked against the source) are checked once more, a scene at a time, from what was
-    recorded with the fix, and settled as the first check would have settled them. A fix whose check was asked in this
+    fix was still never checked against the source) are checked once more, together (as a checker's batch's fixes are,
+    ADR-102), from what was recorded with the fix, and settled as the first check would have settled them. A fix whose check was asked in this
     process already (the first check and its one more try) is not asked again here; still without an answer, it stays
     open. A fix written before the record was kept (``fix_json`` empty) cannot be put to the check and stays open."""
     stats = new_stats(asked=0, unrecorded=0)
@@ -643,7 +681,7 @@ def check_waiting_fixes(orch: Any, unit_ids: set[str] | None = None) -> dict[str
             "SELECT t.*, f.id AS mark FROM translations t JOIN units u ON u.id=t.unit_id JOIN qa_findings f "
             "ON f.translation_id=t.id AND f.unit_id=t.unit_id WHERE u.book_id=? AND f.type='fix_unchecked' AND "
             "f.status='open' ORDER BY u.ordinal, t.id", (orch.book.id,)).fetchall()
-        groups: dict[str, list[WrittenFix]] = {}
+        fixes: list[WrittenFix] = []
         for t in waiting:
             uid = t["unit_id"]
             # a newer text (another fix, a person's) is the book's now: this one is history
@@ -657,13 +695,12 @@ def check_waiting_fixes(orch: Any, unit_ids: set[str] | None = None) -> dict[str
             row = conn.execute("SELECT * FROM units WHERE id=?", (uid,)).fetchone()
             old = conn.execute("SELECT * FROM translations WHERE id=?",
                                (rec["before_id"],)).fetchone() if rec["before_id"] is not None else None
-            groups.setdefault(row["scene_id"] or "", []).append(WrittenFix(
+            fixes.append(WrittenFix(
                 row, t["id"], t["mark"], t["run_id"], old, rec["before"],
                 exported_text(t["text"], t["translator_note"], "needs_review"), rec["issues"],
                 [Finding(f["type"], f["severity"], f["evidence"], uid) for f in rec["findings"]]))
-    for group in groups.values():  # one scene at a time, as the fixes were made
-        stats["asked"] += len(group)
-        _settle_fixes(orch, group, stats, again=True)
+    stats["asked"] += len(fixes)
+    _settle_fixes(orch, fixes, stats, again=True)
     return stats
 
 def _record_conflicts(orch: Any, tids: dict[str, int], feedback: dict[str, list[dict[str, Any]]],

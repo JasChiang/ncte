@@ -467,3 +467,14 @@ def test_each_call_runs_in_an_empty_directory(monkeypatch):
     monkeypatch.setattr(subprocess, "run", run)
     ClaudeCLIClient().complete(_req())
     assert cwds and not Path(cwds[0]).exists()
+
+
+def test_an_empty_answer_carries_what_the_turn_took(monkeypatch):
+    """ADR-102: the turn ran (counted against the plan, at its list price): what it took goes with the error."""
+    from ncte.errors import EmptyAnswerError
+
+    monkeypatch.setattr(subprocess, "run", Calls(_ok(" ")))
+    with pytest.raises(EmptyAnswerError) as err:
+        ClaudeCLIClient().complete(_req())
+    assert err.value.usage is not None and err.value.usage["prompt_tokens"] == 1503
+    assert err.value.usage["list_cost_usd"] == 0.042 and err.value.latency_ms is not None

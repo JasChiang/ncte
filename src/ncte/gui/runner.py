@@ -203,9 +203,12 @@ class Runner:
             from ..translation.context_pipeline import _unanswered
 
             unanswered = sum(map(len, _unanswered(json.loads(pj["checkpoint_json"] or "{}"))))
+        # items whose request failed in a step after reading (or the same-form words): continuing asks only them (ADR-102)
+        unasked = sum(len(json.loads(r[0] or "{}").get("unasked_ids") or []) for r in conn.execute(
+            "SELECT checkpoint_json FROM jobs WHERE run_id=? AND status='partial' AND stage!='proofread'", (row["id"],)))
         return {"run": {"id": row["id"], "status": status, "budget_usd": row["budget_usd"], "spent_usd": round(spent, 4),
                         "left_usd": left, "model": row["model"], "started_at": row["started_at"], "provider": provider,
-                        "plan_usd": round(run_plan_usd(conn, [row["id"]]), 2), "unanswered": unanswered},
+                        "plan_usd": round(run_plan_usd(conn, [row["id"]]), 2), "unanswered": unanswered, "unasked": unasked},
                 "stages": stages, "busy": live, "other_busy": (self.busy and not live) or elsewhere is not None,
                 "elsewhere": elsewhere,
                 "log": list(self.log)[-8:] if live or self.run_id == row["id"] else [],

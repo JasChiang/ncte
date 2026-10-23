@@ -361,8 +361,6 @@ class CodexCLIClient:
                     result = answer.read_text(encoding="utf-8")
                 except OSError:
                     result = ""
-                if not result.strip():
-                    raise EmptyAnswerError("empty answer")
                 u = usage_in or {}
 
                 def n(key: str, u: dict[str, Any] = u) -> int:
@@ -379,8 +377,11 @@ class CodexCLIClient:
                     usage["failed_tries"] = dict(failed_tries)
                 if plan:
                     usage["plan"] = plan
+                took = int((time.monotonic() - start) * 1000)
+                if not result.strip():  # the turn ran and was counted against the plan: what it took goes with the error
+                    raise EmptyAnswerError("empty answer", usage=usage, latency_ms=took)
                 return LLMResponse(content=result.strip(), model=req.model, provider="codex", generation_id=thread,
-                                   usage=usage, cost_usd=0.0, latency_ms=int((time.monotonic() - start) * 1000),
+                                   usage=usage, cost_usd=0.0, latency_ms=took,
                                    finish_reason="stop", attempts=attempt, structured_mode=req.structured_mode)
 
 

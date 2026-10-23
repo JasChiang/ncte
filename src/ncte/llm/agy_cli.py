@@ -364,8 +364,6 @@ class AgyCLIClient:
                     later(any(s in said.lower() for s in USAGE_LIMIT))
                     continue
                 result = str(out.get("response") or "").strip()
-                if not result:
-                    raise EmptyAnswerError("empty answer")
                 raw = out.get("usage")
                 u: dict[str, Any] = raw if isinstance(raw, dict) else {}
                 failed_tries = dict(spent)
@@ -392,8 +390,11 @@ class AgyCLIClient:
                     plan = None
                 if plan:
                     usage["plan"] = plan
+                took = int((time.monotonic() - start) * 1000)
+                if not result:  # the turn ran and was counted against the plan: what it took goes with the error
+                    raise EmptyAnswerError("empty answer", usage=usage, latency_ms=took)
                 return LLMResponse(content=result, model=req.model, provider="agy", generation_id=conversation,
-                                   usage=usage, cost_usd=0.0, latency_ms=int((time.monotonic() - start) * 1000),
+                                   usage=usage, cost_usd=0.0, latency_ms=took,
                                    finish_reason="stop", attempts=attempt, structured_mode=req.structured_mode)
 
 

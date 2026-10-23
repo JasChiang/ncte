@@ -260,8 +260,10 @@ class FakeLLM:
             raise FatalAPIError("HTTP 402 (insufficient credits): fake")
         if fault == "rejected":
             raise RequestRejectedError("HTTP 400: fake rejection")
-        if fault == "empty_answer":  # a CLI source's turn that ended with no answer
-            raise EmptyAnswerError("empty answer")
+        if fault == "empty_answer":  # a CLI source's turn that ended with no answer, after reading the request
+            raise EmptyAnswerError("empty answer", usage={"prompt_tokens": sum(estimate_tokens(m["content"])
+                                                                                 for m in req.messages),
+                                                          "completion_tokens": 40}, latency_ms=7)
         data = self.responders[stage](payload, req)
         if stage == "translate" and data.get("translations"):
             tr = data["translations"]

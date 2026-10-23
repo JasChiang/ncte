@@ -31,8 +31,10 @@ def main_characters(conn: sqlite3.Connection, book_id: str) -> list[sqlite3.Row]
     return [r for r in rows if r["n"] >= 3 or r["is_narrator"]][:MAIN]
 
 
-def requests(conn: sqlite3.Connection, book_id: str) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    chars = main_characters(conn, book_id)
+def requests(conn: sqlite3.Connection, book_id: str, only: set[str] | None = None
+             ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+    """(payload, lookup) per PER_REQUEST main characters; ``only``: these (the ones a failed request left unasked)."""
+    chars = [c for c in main_characters(conn, book_id) if only is None or c["id"] in only]
     names = {r["id"]: r["display_name_zh"] or r["canonical_name"]
              for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,))}
     out = []

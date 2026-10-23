@@ -300,17 +300,22 @@ def unanswered(pairs: list[dict[str, Any]], results: list[tuple[RelationsOutput,
 
 
 def apply(conn: sqlite3.Connection, book_id: str, results: list[tuple[RelationsOutput, dict[str, Any]]],
-          stats: dict[str, int] | None = None) -> int:
+          stats: dict[str, int] | None = None, only: list[tuple[str, str]] | None = None) -> int:
     """Replace the model's relations of the book (a person's stay), each shown from where a reader can know it: the
     evidence the model names in ``known_from`` (one of the relation's own cited evidence). Without a usable one it is
     shown from its latest cited evidence — never earlier than it may be knowable — and counted in ``stats``
-    (``known_from_missing``)."""
+    (``known_from_missing``). ``only``: the pairs asked (the ones a failed request left unasked, ADR-102): only their
+    relations are replaced, the rest of the book's stay."""
     n = 0
     stats = stats if stats is not None else {}
     with Transaction(conn):
         manual = {(r["a_id"], r["b_id"], r["relation_zh"]) for r in conn.execute(
             "SELECT * FROM relations WHERE book_id=? AND origin!='llm'", (book_id,))}
-        conn.execute("DELETE FROM relations WHERE book_id=? AND origin='llm'", (book_id,))
+        if only is None:
+            conn.execute("DELETE FROM relations WHERE book_id=? AND origin='llm'", (book_id,))
+        for a, b in only or []:
+            conn.execute("DELETE FROM relations WHERE book_id=? AND origin='llm' AND ((a_id=? AND b_id=?) OR "
+                         "(a_id=? AND b_id=?))", (book_id, a, b, b, a))
         placed: list[tuple[str, str, str, int, str | None, str]] = []
         for parsed, lk in results:
             chars, ev = lk["_chars"], lk["_ev"]

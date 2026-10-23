@@ -39,6 +39,7 @@ from .orchestrator import CONFIRM_MODEL_FLAGS, Batch, Orchestrator, make_batches
 from .translator import call_structured
 
 VERIFY_BATCH = 25  # items per second-look request
+CANDIDATES = "(naming missing terms)"  # the terms step's request for terms the reading left out, when it went unasked
 
 
 PART_BEFORE = 4  # paragraphs of the part before, given to a later part of a long scene
@@ -299,6 +300,30 @@ class ContextOrchestrator(Orchestrator):
                               (utcnow(), self.run_id, stage, self.book.id))
         return json.loads(row["checkpoint_json"] or "{}") if row is not None else {}
 
+    def _step_due(self, stage: str, record_job: bool) -> bool:
+        """A whole-book step after reading is due: its job is pending or running, or ``partial`` with items its failed
+        requests left unasked (a resumed run asks only those, ADR-102). Not recorded as a job: always."""
+        if not record_job:
+            return True
+        job = self._job(stage, self.book.id)
+        if job is not None and job["status"] == "partial":  # partial for what was refused only: nothing to ask again
+            return "unasked_ids" in json.loads(job["checkpoint_json"] or "{}")
+        return job is not None and job["status"] in ("pending", "running")
+
+    def _end_step(self, stage: str, stats: dict[str, Any], unasked: list[str], record_job: bool,
+                  partial: bool = False, extra: dict[str, Any] | None = None) -> None:
+        """A whole-book step after reading is done: ``succeeded``, or ``partial`` when a request failed (after the tries
+        every request gets) and left items unasked — or when ``partial`` says so for another reason (refused) — with
+        the unasked items in the checkpoint (``unasked_ids``) for a resumed run to ask, and nothing else (ADR-102).
+        Not answered is not looked at: the step is not done, and the acceptance report says so."""
+        stats["unasked"] = len(unasked)
+        if record_job:
+            self._set_job(stage, self.book.id, "partial" if unasked or partial else "succeeded", None,
+                          {**stats, **(extra or {}), **({"unasked_ids": unasked} if unasked else {})})
+        if unasked:
+            self.log(f"  {stage}: {len(unasked)} item(s) not asked (the request failed)"
+                     + (f": ncte resume --run-id {self.run_id} asks only them" if record_job else ""))
+
     def _paused(self, what: str) -> bool:
         """Stopped (paused from the page, or a stop reason set) before the next batch: the job stays running."""
         if self._stop_reason:
@@ -541,14 +566,15 @@ class ContextOrchestrator(Orchestrator):
         """Pass 1b (ADR-033): a second look at what the read pass left in doubt, with the surrounding text."""
         from ..analysis import verify
 
-        job = self._job("verify", self.book.id)
-        if record_job and (job is None or job["status"] not in ("pending", "running")):
+        if not self._step_due("verify", record_job):
             return
-        if record_job:
-            self._begin_job("verify")
+        saved = self._begin_job("verify") if record_job else {}
+        only = saved.pop("unasked_ids", None)  # resumed after a partial look: only the items it did not ask
         with self.lock:
             items = verify.collect(self.conn, self.book.id, max_actions=self.cfg.context.verify_action_items)
-        stats: dict[str, int] = {"items": len(items)}
+        if only is not None:
+            items = [i for i in items if i["ref"] in set(only)]  # one answered since, or changed, is gone
+        stats: dict[str, int] = {**saved, "items": len(items)} if only is None else {**saved, "unasked": 0}
         prompt = load_prompt("verify")
         chunks = [items[i:i + VERIFY_BATCH] for i in range(0, len(items), VERIFY_BATCH)]
         payloads = [{"task": "verify", "items": [{k: v for k, v in it.items() if not k.startswith("_")} for it in chunk]}
@@ -558,14 +584,16 @@ class ContextOrchestrator(Orchestrator):
         answers, cut = self._ask_groups("verify", prompt, payloads, "items", "second look")
         if cut and self._paused("second look"):
             return
+        unasked: list[str] = []
         for chunk, got in zip(chunks, answers, strict=True):
             if got is None:
                 continue
             parsed, blocked, exc = got
             for ref in blocked:  # the content filter refused an item's passages: the rest were asked in halves
                 self._finding(None, "verify_blocked", "low", f"the content filter refused the second look at {ref}")
-            if exc is not None:  # the read pass's answers stand
-                self._finding(None, "verify_failed", "low", str(exc)[:400])
+            if exc is not None:  # the read pass's answers stand; the items were not looked at again (ADR-102)
+                self._finding(None, "verify_failed", "medium", f"{len(chunk)} item(s) not asked: {str(exc)[:360]}")
+                unasked += [i["ref"] for i in chunk if i["ref"] not in blocked]
                 continue
             if parsed is None:
                 continue
@@ -573,8 +601,7 @@ class ContextOrchestrator(Orchestrator):
             with self.lock, Transaction(self.conn):
                 for k, v in verify.apply(self.conn, self.book.id, chunk, parsed, self._finding).items():
                     stats[k] = stats.get(k, 0) + v
-        if record_job:
-            self._set_job("verify", self.book.id, "succeeded", None, stats)
+        self._end_step("verify", stats, unasked, record_job)
         self.log(f"second look: {stats}")
 
     def gender_gaps_pass(self, *, record_job: bool = True) -> dict[str, int]:
@@ -584,17 +611,17 @@ class ContextOrchestrator(Orchestrator):
         from ..analysis import gender_gaps
         from ..llm.schemas import GenderGapsOutput
 
-        if not self.cfg.context.gender_gaps:
+        if not self.cfg.context.gender_gaps or not self._step_due("gender_gaps", record_job):
             return {}
-        job = self._job("gender_gaps", self.book.id)
-        if record_job and (job is None or job["status"] not in ("pending", "running")):
-            return {}
-        if record_job:
-            self._begin_job("gender_gaps")
+        saved = self._begin_job("gender_gaps") if record_job else {}
+        only = saved.pop("unasked_ids", None)  # resumed after a partial step: only the characters it did not ask
         with self.lock:
-            groups = gender_gaps.requests(self.conn, self.book.id)
+            groups = gender_gaps.requests(self.conn, self.book.id, None if only is None else set(only))
         prompt = load_prompt("gender_gaps")
-        stats: dict[str, int] = {"asked": sum(len(lk["_chars"]) for _, lk in groups), "blocked": 0, "failed": 0}
+        asked = sum(len(lk["_chars"]) for _, lk in groups)
+        stats: dict[str, int] = {"asked": asked, "blocked": 0, "failed": 0} if only is None else \
+            {**saved, "failed": 0}
+        unasked: list[str] = []
         results: list[tuple[GenderGapsOutput, dict[str, Any]]] = []
         answers, cut = self._ask_groups("verify:genders", prompt, [req for req, _ in groups], "characters", "genders")
         if cut and self._paused("genders"):  # written all at once: answers so far reused on resume
@@ -608,6 +635,7 @@ class ContextOrchestrator(Orchestrator):
                 self._finding(None, "gender_gaps_failed", "medium",
                               f"{len(lk['_chars'])} 個角色沒問到性別（{names[:200]}）：{str(exc)[:200]}")
                 stats["failed"] += len(lk["_chars"])
+                unasked += list(lk["_chars"].values())
                 continue
             stats["blocked"] += len(blocked)
             if parsed is not None:
@@ -615,10 +643,9 @@ class ContextOrchestrator(Orchestrator):
                 results.append((parsed, lk))
         if results:
             with self.lock:
-                stats.update(gender_gaps.apply(self.conn, self.book.id, results))
-        if record_job:
-            self._set_job("gender_gaps", self.book.id, "partial" if stats["failed"] or stats["blocked"] else "succeeded",
-                          None, stats)
+                for k, v in gender_gaps.apply(self.conn, self.book.id, results).items():
+                    stats[k] = stats.get(k, 0) + v
+        self._end_step("gender_gaps", stats, unasked, record_job, partial=bool(stats["blocked"]))
         self.log(f"genders asked again: {stats}")
         if stats["failed"]:
             self.log(f"  {stats['failed']} characters were not asked (the request failed): they stay without a gender")
@@ -630,16 +657,19 @@ class ContextOrchestrator(Orchestrator):
         from ..analysis import relations
         from ..llm.schemas import RelationsOutput
 
-        job = self._job("relations", self.book.id)
-        if record_job and (job is None or job["status"] not in ("pending", "running")):
+        if not self._step_due("relations", record_job):
             return 0
-        if record_job:
-            self._begin_job("relations")
+        saved = self._begin_job("relations") if record_job else {}
+        only = saved.pop("unasked_ids", None)  # resumed after a partial step: only the pairs it did not ask
         with self.lock:
             pairs, chars = relations.candidate_pairs(self.conn, self.book.id)
+        if only is not None:
+            pairs = [p for p in pairs if f"{p['a']}|{p['b']}" in set(only)]
         prompt = load_prompt("relations")
         results: list[tuple[RelationsOutput, dict[str, Any]]] = []
         cut: list[bool] = []  # stopped with pairs left unasked
+        failed: set[str] = set()  # pairs of a request that failed, …
+        answered: set[str] = set()  # … unless a later request about them (asked again) answered
 
         def ask(groups: list[tuple[dict[str, Any], dict[str, Any]]]) -> None:
             answers, stopped = self._ask_groups("relations", prompt, [req for req, _ in groups], "pairs", "relations")
@@ -650,12 +680,16 @@ class ContextOrchestrator(Orchestrator):
                 if blocked:
                     self._finding(None, "relations_blocked", "low",
                                   f"the content filter refused the material of {len(blocked)} pair(s)")
+                ids = {k: "|".join(v) for k, v in lookup["_pairs"].items()}
                 if exc is not None:  # those pairs keep no relation this time
-                    self._finding(None, "relations_failed", "low", str(exc)[:300])
+                    self._finding(None, "relations_failed", "medium",
+                                  f"{len(ids)} pair(s) not asked: {str(exc)[:260]}")
+                    failed.update(v for k, v in ids.items() if k not in blocked)
                     continue
                 if parsed is None:
                     continue
                 assert isinstance(parsed, RelationsOutput)
+                answered.update(v for k, v in ids.items() if k not in blocked)
                 results.append((parsed, lookup))
             if stopped:
                 cut.append(True)
@@ -673,9 +707,11 @@ class ContextOrchestrator(Orchestrator):
         stats: dict[str, int] = {}
         if results:
             with self.lock:
-                n = relations.apply(self.conn, self.book.id, results, stats=stats)
-        if record_job:
-            self._set_job("relations", self.book.id, "succeeded", None, {"relations": n, "pairs": len(pairs), **stats})
+                n = relations.apply(self.conn, self.book.id, results, stats=stats,
+                                    only=None if only is None else [(p["a"], p["b"]) for p in pairs])
+        counts = {"relations": n, "pairs": len(pairs), **stats} if only is None else \
+            {**saved, "relations": saved.get("relations", 0) + n, "pairs_asked_again": len(pairs)}
+        self._end_step("relations", counts, sorted(failed - answered), record_job)
         missing = stats.get("known_from_missing", 0)
         self.log(f"relations: {n} ({len(pairs)} pairs asked, {len(again)} asked again"
                  + (f"; {missing} without where they can be known: shown from their latest evidence" if missing else "")
@@ -687,27 +723,27 @@ class ContextOrchestrator(Orchestrator):
         from ..analysis import house_style
         from ..llm.schemas import HouseStyleOutput
 
-        job = self._job("house_style", self.book.id)
-        if record_job and (job is None or job["status"] not in ("pending", "running")):
+        if not self._step_due("house_style", record_job):  # partial: its one request failed, asked again whole
             return {}
         with self.lock:
             req, refs = house_style.request(self.conn, self.book.id)
             seen = house_style.names_seen(self.conn, self.book.id)  # naming may change them afterwards (2.12)
         stats: dict[str, int] = {}
+        unasked: list[str] = []
         if req["characters"]:
             try:
                 parsed = self._llm("house_style", load_prompt("house_style"), req, [])
             except FatalAPIError:
                 raise
             except LLMError as exc:
-                self._finding(None, "house_style_failed", "low", str(exc)[:300])
+                self._finding(None, "house_style_failed", "medium", str(exc)[:300])
                 parsed = None
+                unasked = ["house_style"]
             if parsed is not None:
                 assert isinstance(parsed, HouseStyleOutput)
                 with self.lock, Transaction(self.conn):
                     stats = house_style.apply(self.conn, self.book.id, parsed, refs)
-        if record_job:
-            self._set_job("house_style", self.book.id, "succeeded", None, {**stats, "names_seen": seen})
+        self._end_step("house_style", stats, unasked, record_job, extra={"names_seen": seen})
         self.log(f"house style: {stats}")
         return stats
 
@@ -718,15 +754,14 @@ class ContextOrchestrator(Orchestrator):
         from ..analysis import terms
         from ..llm.schemas import TermsOutput
 
-        if not self.cfg.context.term_definitions:
+        if not self.cfg.context.term_definitions or not self._step_due("terms", record_job):
             return {}
-        job = self._job("terms", self.book.id)
-        if record_job and (job is None or job["status"] not in ("pending", "running")):
-            return {}
-        if record_job:
-            self._begin_job("terms")
+        saved = self._begin_job("terms") if record_job else {}
+        only = saved.pop("unasked_ids", None)  # resumed after a partial step: only what it did not ask
+        unasked: list[str] = []
         named: list[str] = []
-        if self.cfg.context.term_candidates:  # ADR-073: terms the reading left out of the glossary
+        if self.cfg.context.term_candidates and (only is None or CANDIDATES in only):
+            # ADR-073: terms the reading left out of the glossary
             with self.lock:
                 ask = terms.candidate_request(self.conn, self.book.id)
             if ask is not None:
@@ -737,12 +772,15 @@ class ContextOrchestrator(Orchestrator):
                 except FatalAPIError:
                     raise
                 except LLMError as exc:  # the glossary's terms are still defined
-                    self._finding(None, "terms_failed", "low", f"naming missing terms: {str(exc)[:280]}")
+                    self._finding(None, "terms_failed", "medium", f"naming missing terms: {str(exc)[:280]}")
+                    unasked.append(CANDIDATES)
         with self.lock:
-            groups = terms.requests(self.conn, self.book.id, named)
+            groups = terms.requests(self.conn, self.book.id, [*named, *(t for t in only or [] if t != CANDIDATES)],
+                                    only=None if only is None else {*named, *only})
         prompt = load_prompt("terms")
-        stats: dict[str, int] = {"named": len(named), "asked": sum(len(lk["_terms"]) for _, lk in groups),
-                                 "blocked": 0, "failed": 0}
+        asked = sum(len(lk["_terms"]) for _, lk in groups)
+        stats: dict[str, int] = {"named": len(named), "asked": asked, "blocked": 0, "failed": 0} if only is None else \
+            {**saved, "named": saved.get("named", 0) + len(named), "failed": 0}
         results: list[tuple[TermsOutput, dict[str, Any]]] = []
         answers, cut = self._ask_groups("terms", prompt, [req for req, _ in groups], "terms", "terms")
         for (_req, lk), got in zip(groups, answers, strict=True):
@@ -750,8 +788,10 @@ class ContextOrchestrator(Orchestrator):
                 continue
             parsed, blocked, err = got
             if err is not None:  # those terms stay as they were
-                self._finding(None, "terms_failed", "low", str(err)[:300])
+                self._finding(None, "terms_failed", "medium",
+                              f"{len(lk['_terms'])} term(s) not asked: {str(err)[:260]}")
                 stats["failed"] += len(lk["_terms"])
+                unasked += [t for ref, t in lk["_terms"].items() if ref not in blocked]
                 continue
             for ref in blocked:
                 self._finding(None, "terms_blocked", "low",
@@ -764,9 +804,9 @@ class ContextOrchestrator(Orchestrator):
             return stats
         if results:
             with self.lock:
-                stats.update(terms.apply(self.conn, self.book.id, results, self.run_id))
-        if record_job:
-            self._set_job("terms", self.book.id, "succeeded", None, stats)
+                for k, v in terms.apply(self.conn, self.book.id, results, self.run_id).items():
+                    stats[k] = stats.get(k, 0) + v
+        self._end_step("terms", stats, unasked, record_job)
         self.log(f"terms: {stats}")
         return stats
 
@@ -796,21 +836,23 @@ class ContextOrchestrator(Orchestrator):
         from ..analysis import impressions
         from ..llm.schemas import ImpressionsOutput
 
-        job = self._job("impressions", self.book.id)
-        if record_job and (job is None or job["status"] not in ("pending", "running")):
+        if not self._step_due("impressions", record_job):
             return 0
-        if record_job:
-            self._begin_job("impressions")
+        saved = self._begin_job("impressions") if record_job else {}
+        only = saved.pop("unasked_ids", None)  # resumed after a partial step: only the characters it did not ask
         with self.lock:
-            groups = impressions.requests(self.conn, self.book.id)
+            groups = impressions.requests(self.conn, self.book.id, None if only is None else set(only))
         prompt, results = load_prompt("impressions"), []
+        unasked: list[str] = []
         answers, cut = self._ask_groups("impressions", prompt, [req for req, _ in groups], "characters", "impressions")
         for (_req, lookup), got in zip(groups, answers, strict=True):
             if got is None:
                 continue
             parsed, _blocked, exc = got
-            if exc is not None:
-                self._finding(None, "impressions_failed", "low", str(exc)[:300])
+            if exc is not None:  # those characters keep the impressions they had
+                self._finding(None, "impressions_failed", "medium",
+                              f"{len(lookup['_chars'])} character(s) not asked: {str(exc)[:260]}")
+                unasked += list(lookup["_chars"].values())
                 continue
             if parsed is None:
                 continue
@@ -822,8 +864,7 @@ class ContextOrchestrator(Orchestrator):
         if results:
             with self.lock:
                 n = impressions.apply(self.conn, self.book.id, results, self.run_id)
-        if record_job:
-            self._set_job("impressions", self.book.id, "succeeded", None, {"impressions": n})
+        self._end_step("impressions", {**saved, "impressions": saved.get("impressions", 0) + n}, unasked, record_job)
         self.log(f"impressions: {n}")
         return n
 
@@ -888,7 +929,7 @@ class ContextOrchestrator(Orchestrator):
                      before: list[dict[str, Any]] | None = None) -> None:
         from ..analysis import reader
         from ..llm.schemas import ReaderOutput
-        from .review import _retranslate_with_feedback, in_conflict
+        from .review import in_conflict
 
         blocked: list[str] = []
         with self.lock:
@@ -930,51 +971,67 @@ class ContextOrchestrator(Orchestrator):
             feedback.setdefault(it.unit_id, []).append(
                 {"issue_type": f"reader_{it.kind}", "evidence": it.problem, "suggestion": reader.FIX_NOTE,
                  "finding_id": fid})
-        if not feedback:
-            return
+        if feedback:
+            self._fix_found(feedback, stats)
+
+    def _fix_found(self, feedback: dict[str, list[dict[str, Any]]], stats: dict[str, Any], *,
+                   side_by_side: bool = False) -> None:
+        """What one checker's batch found (a stretch, the same-form words), back to the translator and then checked
+        against the source (ADR-055) all together: retranslated a scene at a time — each keeps that scene's memory —
+        and the fixes of every scene put to the fix check in as few requests as its batch allows (ADR-102).
+        ``side_by_side``: the scenes are retranslated at once, up to the run's concurrency (a step on its own; a
+        proofreading or reader's stretch is already one of several side by side and asks its scenes in turn)."""
+        from .review import _retranslate_with_feedback
+
         with self.lock:
-            rows = {r["id"]: r for r in self.conn.execute(
-                f"SELECT * FROM units WHERE id IN ({','.join('?' * len(feedback))})", list(feedback))}
-        by_scene: dict[str, list[sqlite3.Row]] = {}
-        for uid in feedback:
-            if uid in rows:
-                by_scene.setdefault(rows[uid]["scene_id"] or "", []).append(rows[uid])
-        for group in by_scene.values():  # one scene at a time: the translation keeps that scene's memory
-            _retranslate_with_feedback(self, group, {r["id"]: feedback[r["id"]] for r in group}, stats)
+            rows = sorted(self.conn.execute(f"SELECT * FROM units WHERE id IN ({','.join('?' * len(feedback))})",
+                                            list(feedback)), key=lambda r: r["ordinal"])
+
+        def run(n: int, work: Callable[[int], Any], done: Callable[[int, Any], None]) -> bool:
+            return self._side_by_side(n, work, done, "fixes")
+
+        _retranslate_with_feedback(self, rows, {r["id"]: feedback[r["id"]] for r in rows}, stats,
+                                   side_by_side=run if side_by_side else None)
 
     def false_friends_pass(self, *, record_job: bool = True) -> dict[str, int]:
         """After the first translation of the book (``analysis.false_friends``): kanji words carried over unchanged are
         put to the translating model; one that reads otherwise in Taiwan Chinese gets a glossary entry and every
-        paragraph that carried it goes back to the translator with the suggestion, a scene at a time, each fix checked
-        against the source. Recorded as a job, a later run looks only at what was translated since (2.11)."""
+        paragraph that carried it goes back to the translator with the suggestion, each fix checked against the source.
+        Recorded as a job, a later run looks only at what was translated since (2.11). ADR-102: the requests about the
+        words are sent side by side, as the steps after reading send theirs (the same requests: an answer kept for one
+        is not asked again, ADR-094), the scenes' fixes are retranslated side by side and checked together; a request
+        that failed leaves the step partial with its words listed, and a resumed run asks only those."""
         from ..analysis import false_friends as ff
         from ..llm.schemas import FalseFriendsOutput
-        from .review import _retranslate_with_feedback, in_conflict, new_stats
+        from .review import in_conflict, new_stats
 
-        if not self.cfg.context.false_friends:
-            return {}
-        job = self._job("false_friends", self.book.id)
-        if record_job and (job is None or job["status"] not in ("pending", "running")):
+        if not self.cfg.context.false_friends or not self._step_due("false_friends", record_job):
             return {}
         saved = self._begin_job("false_friends") if record_job else {}
+        only = saved.pop("unasked_ids", None)  # resumed after a partial step: only the words it did not ask
         since = saved.get("since_translation_id")
         with self.lock:
             words = ff.collect(self.conn, self.book.id, self._story_files(), since)
+        if only is not None:
+            words = [w for w in words if w["ja"] in set(only)]
         prompt = load_prompt("false_friends")
-        stats: dict[str, int] = {**new_stats(words=len(words), blocked=0, failed=0)}
+        stats: dict[str, int] = {**new_stats(words=len(words), blocked=0, failed=0)} if only is None else \
+            {**saved, "failed": 0}
+        unasked: list[str] = []
         results: list[tuple[FalseFriendsOutput, dict[str, Any]]] = []
-        for req, lk in ff.requests(words):
-            if self._paused("same-form words"):  # nothing kept yet: asked again on resume
-                return stats
-            blocked: list[str] = []
-            try:
-                parsed = call_in_parts(lambda pl: self._llm("false_friends", prompt, pl, []), req, "words", blocked,
-                                       min_part=1)
-            except FatalAPIError:
-                raise
-            except LLMError as exc:  # those words stay as translated; proofreading still reads them
-                self._finding(None, "false_friends_failed", "low", str(exc)[:300])
+        groups = ff.requests(words)
+        answers, cut = self._ask_groups("false_friends", prompt, [req for req, _ in groups], "words", "same-form words")
+        if cut and self._paused("same-form words"):  # nothing kept yet: the answers so far are reused on resume
+            return stats
+        for (_req, lk), got in zip(groups, answers, strict=True):
+            if got is None:
+                continue
+            parsed, blocked, exc = got
+            if exc is not None:  # those words stay as translated; proofreading still reads them
+                self._finding(None, "false_friends_failed", "medium",
+                              f"{len(lk['_words'])} word(s) not asked: {str(exc)[:260]}")
                 stats["failed"] += len(lk["_words"])
+                unasked += [w["ja"] for ref, w in lk["_words"].items() if ref not in blocked]
                 continue
             stats["blocked"] += len(blocked)
             if parsed is not None:
@@ -983,8 +1040,9 @@ class ContextOrchestrator(Orchestrator):
         differs: list[dict[str, Any]] = []
         if results:
             with self.lock:
-                got, differs = ff.apply(self.conn, self.book.id, results)
-            stats.update(got)
+                found, differs = ff.apply(self.conn, self.book.id, results)
+            for k, v in found.items():
+                stats[k] = stats.get(k, 0) + v
             self.reload_glossary()  # the fixes are translated with the new entries
         feedback: dict[str, list[dict[str, Any]]] = {}
         hits = {h["unit_id"] for w in differs for h in w["hits"]}
@@ -1003,20 +1061,14 @@ class ContextOrchestrator(Orchestrator):
                      "evidence": f"譯文照搬了原文的「{w['ja']}」，寫成「{w['zh']}」：{w['reason']}",
                      "suggestion": f"{w['suggestion']}\n{ff.FIX_NOTE}", "finding_id": fid})
         if feedback:
-            with self.lock:
-                rows = {r["id"]: r for r in self.conn.execute(
-                    f"SELECT * FROM units WHERE id IN ({','.join('?' * len(feedback))})", list(feedback))}
-            by_scene: dict[str, list[sqlite3.Row]] = {}
-            for uid in sorted(feedback, key=lambda u: rows[u]["ordinal"] if u in rows else 0):
-                if uid in rows:
-                    by_scene.setdefault(rows[uid]["scene_id"] or "", []).append(rows[uid])
-            for group in by_scene.values():  # one scene at a time: the translation keeps that scene's memory
-                if self._paused("same-form words"):  # the words fixed so far are no longer carried over on resume
-                    return stats
-                _retranslate_with_feedback(self, group, {r["id"]: feedback[r["id"]] for r in group}, stats)
-        if record_job:
-            self._set_job("false_friends", self.book.id, "succeeded", None,
-                          {**stats, "upto_translation_id": self._last_translation_id()})
+            # the scenes side by side, each keeping its memory; what was written is checked even when paused meanwhile
+            self._fix_found(feedback, stats, side_by_side=True)
+            if self._paused("same-form words"):  # the words fixed so far are no longer carried over on resume
+                return stats
+        # resumed after a partial step: what the step looked at whole is as far as it went then
+        upto = saved.get("upto_translation_id") if only is not None else None
+        self._end_step("false_friends", stats, unasked, record_job,
+                       extra={"upto_translation_id": upto if upto is not None else self._last_translation_id()})
         self.log(f"same-form words: {stats}")
         return stats
 
@@ -1225,7 +1277,7 @@ class ContextOrchestrator(Orchestrator):
                         stats: dict[str, Any], after: list[dict[str, Any]] | None = None) -> None:
         from ..analysis import proofread
         from ..llm.schemas import ProofreadOutput
-        from .review import _retranslate_with_feedback, in_conflict
+        from .review import in_conflict
 
         with self.lock:
             cast = proofread.cast(self.conn, self.book.id, part)
@@ -1314,17 +1366,8 @@ class ContextOrchestrator(Orchestrator):
             feedback.setdefault(it.unit_id, []).append(
                 {"issue_type": f"proofread_{it.kind}", "evidence": f"{it.problem}（譯文：{it.quote}）",
                  "suggestion": f"{it.fix}\n{note}", "finding_id": fid})
-        if not feedback:
-            return
-        with self.lock:
-            rows = {r["id"]: r for r in self.conn.execute(
-                f"SELECT * FROM units WHERE id IN ({','.join('?' * len(feedback))})", list(feedback))}
-        by_scene: dict[str, list[sqlite3.Row]] = {}
-        for uid in feedback:
-            if uid in rows:
-                by_scene.setdefault(rows[uid]["scene_id"] or "", []).append(rows[uid])
-        for group in by_scene.values():  # one scene at a time: the translation keeps that scene's memory
-            _retranslate_with_feedback(self, group, {r["id"]: feedback[r["id"]] for r in group}, stats)
+        if feedback:
+            self._fix_found(feedback, stats)
 
     def naming_pass(self) -> bool:
         """Pass 2: propose renderings. False when the run stops here for the user's choices."""

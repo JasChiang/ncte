@@ -65,11 +65,13 @@ def candidates(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
     return out
 
 
-def requests(conn: sqlite3.Connection, book_id: str) -> list[tuple[dict[str, Any], dict[str, Any]]]:
+def requests(conn: sqlite3.Connection, book_id: str, only: set[str] | None = None
+             ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """(payload, lookup) per PER_REQUEST characters. Codes are unique over the whole step: ``g`` a character, ``s`` a
-    sentence; the lookup maps each back to its character, and a sentence to where it is and what it says."""
+    sentence; the lookup maps each back to its character, and a sentence to where it is and what it says. ``only``:
+    these characters (the ones a failed request left unasked, ADR-102)."""
     out = []
-    chosen = candidates(conn, book_id)
+    chosen = [c for c in candidates(conn, book_id) if only is None or c["id"] in only]
     n = 0
     for i in range(0, len(chosen), PER_REQUEST):
         items, chars, ev = [], {}, {}

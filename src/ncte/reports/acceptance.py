@@ -8,6 +8,8 @@ translation is good — it says the pipeline did everything it promised and noth
 * every fix made after review / proofreading / the reader's look was checked against the source and settled;
 * the passes that check the book (proofreading, the reader's look) ran over all of it — a refused or failed stretch
   is not checked — and no review job was blocked or failed on the text that is now current;
+* no whole-book step (the second look, genders, relations, impressions, house style, terms, same-form words) was left
+  partial: a request that failed left what it was about unasked (ADR-102);
 * every person's edit is still the text that will be exported (its source unchanged);
 * the exported EPUB passed validation (when an export result is given).
 
@@ -18,6 +20,7 @@ found) is closed. A rule conflict (a retranslation that came back unchanged: the
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from typing import Any
 
@@ -27,6 +30,7 @@ FIX_OPEN = ("fix_still_wrong", "fix_regressed", "fix_undecided", "fix_unchecked"
 NOT_SEEN = ("review_blocked", "proofread_blocked", "reader_blocked")
 CONFLICT = "rule_conflict"
 SAMPLE = 20
+READ_STEPS = ("verify", "gender_gaps", "relations", "impressions", "house_style", "terms", "false_friends")
 
 
 def _check(units: list[str] | set[str], *, detail: str = "") -> dict[str, Any]:
@@ -67,6 +71,16 @@ def acceptance(conn: sqlite3.Connection, book_id: str, *, proofread: bool = True
         status = last["status"] if last else "not run"
         checks[f"{stage}_complete"] = {"ok": status == "succeeded", "count": 0 if status == "succeeded" else 1,
                                        "units": [], "detail": status}
+    # the whole-book steps after reading and the same-form words: one whose requests failed left what they were about
+    # unasked (``partial``, ADR-102) — not done, whatever came after it
+    partial = []
+    for stage in READ_STEPS:
+        last = conn.execute("SELECT status, checkpoint_json FROM jobs WHERE book_id=? AND stage=? ORDER BY id DESC "
+                            "LIMIT 1", (book_id, stage)).fetchone()
+        if last is not None and last["status"] == "partial":
+            partial.append(f"{stage} ({json.loads(last['checkpoint_json'] or '{}').get('unasked', '?')} unasked)")
+    checks["steps_complete"] = {"ok": not partial, "count": len(partial), "units": [],
+                                **({"detail": ", ".join(partial)} if partial else {})}
     lost = {r["unit_id"] for r in conn.execute(
         "SELECT t.unit_id FROM translations t JOIN units u ON u.id=t.unit_id WHERE u.book_id=? AND t.status='human' AND "
         "t.source_hash!=u.source_hash AND NOT EXISTS (SELECT 1 FROM translations x WHERE x.unit_id=t.unit_id AND "

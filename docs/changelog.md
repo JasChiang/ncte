@@ -1146,3 +1146,11 @@ open workspace/eval/<timestamp>/report.html
 ## 訂閱方案 CLI 的限制寫進 README（2026-10-23，分支 docs-agent-limits-2026-10-23）
 - README〈已知限制〉加上三種訂閱方案 CLI 各自的技術限制。
 - 更正 ADR-072：加了 `--system-prompt` 之後，`claude -p` 不會帶入使用者自己的 `~/.claude/CLAUDE.md`（實測 2.1.309）；`claude_cli` 的說明一併更正。
+
+## 整本步驟沒問到就是 partial、同形詞同時送、修正一起驗收、空答案記用量（2026-10-23，分支 pipeline-coverage-2026-10-23；ADR-102）
+- `context_pipeline`：`_step_due`、`_end_step`（`partial` 與 `unasked_ids`）；`verify_pass`、`gender_gaps_pass`、`relations_pass`、`impressions_pass`、`house_style_pass`、`terms_pass`（`CANDIDATES`）、`false_friends_pass` 記下沒問到的項目、續跑只補那些；`false_friends_pass` 改用 `_ask_groups`，修正走 `_fix_found(side_by_side=True)`；校稿與讀者檢查的修正改走 `_fix_found`。`gender_gaps.requests`、`impressions.requests`、`terms.requests` 的 `only`；`relations.apply(only=…)`。
+- `review`：`_retranslate_with_feedback` 拆成 `_write_fixes`（可同時送各場，`SideBySide`）＋`_settle_fixes`，一批的修正一起驗收；`check_waiting_fixes` 一起問。
+- `errors.EmptyAnswerError` 帶 `usage`、`latency_ms`；`agy_cli`、`claude_cli`、`codex_cli` 空答案時先整理用量；`DbRecorder.failure` 寫入；FakeLLM 的 `empty_answer` 也帶用量。
+- 可驗收報告 `steps_complete`（`acceptance.READ_STEPS`）；網頁 `Runner.progress` 的 `unasked` 與「補問沒問到的項目」。
+- 估算：scratchpad pc（`replay.py` 用那本書資料庫的副本重排修正驗收的分組：43 → 21 個請求）。
+- 測試：`tests/integration/test_pipeline_coverage.py`（新，16 個）、三個 CLI 的單元測試各一個。799 passed、5 skipped；ruff、mypy 通過。

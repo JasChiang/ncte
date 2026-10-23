@@ -1,6 +1,8 @@
 """Error taxonomy (spec §12): program failure / unverifiable model output /
 content uncertainty / unknown billing state are kept distinct."""
 
+from typing import Any
+
 
 class NCTEError(Exception):
     """Base error for user-facing failures."""
@@ -52,7 +54,15 @@ class ModelOutputError(LLMError):
 class EmptyAnswerError(ModelOutputError):
     """A CLI source's turn ended with no answer at all (e.g. the agent tried a tool it may not use and gave up).
 
-    Nothing in the answer to correct: the same request is simply asked again, a few times (``context_pipeline``)."""
+    Nothing in the answer to correct: the same request is simply asked again, a few times (``context_pipeline``).
+    The turn still ran: ``usage`` (tokens, the plan's windows, as the CLI reported them) and ``latency_ms`` are what it
+    took, kept on the failed request's row so the plan and cost reports count it (ADR-102)."""
+
+    def __init__(self, message: str = "empty answer", *, usage: dict[str, Any] | None = None,
+                 latency_ms: int | None = None) -> None:
+        super().__init__(message)
+        self.usage = usage
+        self.latency_ms = latency_ms
 
 
 class BudgetExceededError(NCTEError):

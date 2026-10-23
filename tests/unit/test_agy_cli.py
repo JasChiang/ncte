@@ -309,3 +309,17 @@ def test_agy_sends_five_at_a_time_unless_the_number_is_set():
     cfg = Config.model_validate({"openrouter": {"max_concurrency": 2}})
     use_agy_models(cfg)
     assert cfg.openrouter.max_concurrency == 2
+
+
+def test_an_empty_answer_carries_what_the_turn_took(monkeypatch, tmp_path):
+    """ADR-102: a turn that came back empty still ran and was counted against the plan (27 in a whole-book run, none of
+    them in the reports): its tokens, the plan's windows and its time go with the error, for the request's row."""
+    from ncte.errors import EmptyAnswerError
+
+    fake = Fake([(0, {"conversation_id": "c-1", "status": "SUCCESS", "response": "\n", "usage": USAGE}, "")])
+    with pytest.raises(EmptyAnswerError) as err:
+        _client(monkeypatch, tmp_path, fake).complete(_req())
+    u = err.value.usage
+    assert u is not None and u["prompt_tokens"] == 7700 and u["completion_tokens"] == 300
+    assert u["reasoning_tokens"] == 250 and u["plan"]["source"] == "agy"
+    assert err.value.latency_ms is not None
