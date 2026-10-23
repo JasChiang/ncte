@@ -17,6 +17,7 @@ from ..epub.units import match_text, shown_excerpt, source_form
 from ..llm.schemas import NamingOutput
 from ..memory.db import utcnow
 from ..memory.repository import (
+    FINDABLE,
     character_basics,
     model_name,  # someone of another time: with the model's reading (ADR-103)
     pair_relations,
@@ -499,7 +500,7 @@ def suspicious_characters(conn: sqlite3.Connection, book_id: str) -> list[dict[s
         base = _HONORIFIC_END.sub("", c["canonical_name"])
         if base != c["canonical_name"] and len(base) >= 1:
             other = conn.execute(f"SELECT canonical_name, id FROM characters WHERE {SERIES_SCOPE} AND id!=? AND "
-                                 "(canonical_name=? OR instr(aliases_json, ?) > 0)",
+                                 f"{FINDABLE} AND (canonical_name=? OR instr(aliases_json, ?) > 0)",
                                  (book_id, c["id"], base, json.dumps(base, ensure_ascii=False))).fetchone()
             out.append({"id": c["id"], "name": c["canonical_name"], "zh": c["display_name_zh"] or "",
                         "also": other[0] if other else "", "also_id": other[1] if other else ""})

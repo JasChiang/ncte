@@ -1211,3 +1211,10 @@ open workspace/eval/<timestamp>/report.html
 - 讀場景：`repository.unconfirmed_card` 以 `reading_key`（場景、寫法、這次讀的第幾個）找回同一張，重讀時加別名與位置、只標沒問過的卡；migration 37 多 `reading_key`、`not_same_json`。
 - `entities.ensure_entity` 只綁沒有標籤的卡。
 - 測試：`tests/integration/test_unconfirmed_review.py`（新，10 個，每個在修改前都失敗）。867 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 第三輪審閱修正（2026-10-23，分支 unnamed-placeholders-2026-10-23）
+- 網頁：`gui/data._names_by_position`（每張卡從各位置起的名字與其他稱呼，用 `character_view`）、`tag`（標籤或時期）；`app.js` 的 `namesAt`／`cardName`／`shownAka`，人物清單、角色頁標題、候選卡、關係圖、稱呼表都依讀到的位置取名字。
+- 另一個時期的卡揭曉名字後標籤是時期（`UPDATE OR IGNORE`），`upsert_character` 遇到 id 被占用時換 id。
+- `characters.reading_keys_json`（取代 `reading_key`，migration 37）：`merge_characters` 把被併卡的鍵與 `not_same_json` 併給留下的卡；`unconfirmed_card` 以鍵找回（含合併後留下的卡），候選扣掉自己與答過的卡；覆核確認同一人時留下的卡記下其他候選為「不是」。揭曉名字時不再另寫 `not_same_json`（合併已帶過去）。
+- 用名字找卡：`repository.FINDABLE`／`findable`，`upsert_character`、`entities`（三處）、`address.name_forms`、`cache.glossary_entries`、`workspace` 系列合併、`naming.suspicious_characters` 都用它；覆核的揭曉合併檢查找一般的卡或有名字的另一時期卡。ADR-103 列出整張表。
+- 測試：`tests/integration/test_unconfirmed_review.py` 新增 6 個（每個都用上一版的程式先跑過、失敗）。873 passed、5 skipped；ruff、mypy 通過。

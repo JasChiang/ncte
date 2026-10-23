@@ -121,8 +121,10 @@ def collect(conn: sqlite3.Connection, book_id: str, max_actions: int = MAX_ACTIO
                       "_version": f"{g['updated_at']}|{g['certainty']}|{g['origin']}"})  # a gender written again is new
     for link in conn.execute("SELECT * FROM entity_links WHERE book_id=? AND origin='scene_analysis' AND "
                              "status='accepted' AND form_type='official'", (book_id,)):
-        c = conn.execute("SELECT * FROM characters WHERE book_id=? AND canonical_name=? AND label=''",
-                         (book_id, link["target_term"])).fetchone()
+        # the card the reveal named: the one a name finds, else one of another time named so (never a card known
+        # only by other cards' words)
+        c = conn.execute("SELECT * FROM characters WHERE book_id=? AND canonical_name=? AND (label='' OR period IS NOT "
+                         "NULL) ORDER BY period IS NOT NULL LIMIT 1", (book_id, link["target_term"])).fetchone()
         if c is None:
             continue
         # the new name and its own aliases were linked at the reveal; the rest came from the merged description
@@ -588,6 +590,13 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             else:  # the same person: one card from here on, its lines and memory moved over
                 keep, drop = _same_as(conn, book_id, card, other)
                 went[drop] = keep
+                # settled: the person is that card, so not the other cards it was asked about (a re-read of the
+                # scene finds the kept card and does not mark it again)
+                row = conn.execute("SELECT not_same_json FROM characters WHERE id=?", (keep,)).fetchone()
+                others = {now(x) for x in item["candidates"]} - {keep}
+                conn.execute("UPDATE characters SET may_be_json=CASE WHEN ? THEN '[]' ELSE may_be_json END, "
+                             "not_same_json=?, updated_at=? WHERE id=?",
+                             (keep == card, json.dumps(sorted({*json.loads(row[0] or "[]"), *others})), utcnow(), keep))
                 stats["same_person_merged"] = stats.get("same_person_merged", 0) + 1
         elif kind == "p":
             if answer.startswith("same:") and answer[5:].strip() in item["candidates"] \

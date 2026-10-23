@@ -176,3 +176,91 @@ def test_a_merge_rewriting_a_mark_bumps_the_marked_card(conn, cfg, fixtures):
     repo.merge_characters(conn, s["a"], s["b"])
     p = _card(conn, s["p"])
     assert repo.may_be(p) == [s["a"]] and p["updated_at"] != "2000-01-01T00:00:00Z"
+
+
+def _reveal(conn, s, ref):
+    book, last = s["book"], s["scenes"][-1]
+    named = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? AND plain_text LIKE '%リリア%' ORDER BY "
+                         "ordinal LIMIT 1", (book.id, last["id"])).fetchone()
+    return _read(conn, book, last, named, name_ja="リリア", same_as_ref=ref)["new_1"], named
+
+
+def _name_at(entry, at):
+    return [n for n in entry["names"] if n["from"] <= at][-1]
+
+
+def test_the_page_names_every_card_as_known_at_the_reading_position(conn, cfg, fixtures):
+    """リリア revealed late for the 「母親」 card: before the reveal the page names the card (and the same card among
+    another card's possible matches) 「母親」, from the reveal on 「リリア」."""
+    s = _setup(conn, cfg, fixtures)
+    cid, named = _reveal(conn, s, s["p"])
+    entry = data.characters(conn, s["book"])["characters"][cid]
+    early, late = _name_at(entry, s["line"]["ordinal"]), _name_at(entry, named["ordinal"])
+    assert early["ja"] == "母親" and "リリア" not in early["aka"] and late["ja"] == "リリア"
+    assert {m["id"] for m in entry["may_be"]} == {s["a"], s["b"]}  # a named card still marked is shown so
+    js = (Path(data.__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
+    assert "nm: cid => d.characters[cid] ? cardName(d.characters[cid], upto) : cid" in js
+
+
+def test_the_page_shows_the_time_of_a_named_card_of_another_time(conn, cfg, fixtures):
+    s = _past_mother(conn, cfg, fixtures)
+    past = _read(conn, s["book"], s["scenes"][1], s["intro"], s["line"], other_person=True, period="前世")["new_1"]
+    cid, _ = _reveal(conn, s, past)
+    assert data.characters(conn, s["book"])["characters"][cid]["tag"] == "前世"
+
+
+def test_a_re_read_after_a_merge_finds_the_card_that_stayed(conn, cfg, fixtures):
+    s = _setup(conn, cfg, fixtures)
+    book, s1 = s["book"], s["scenes"][1]
+    _ask(conn, book.id, [(f"s:{s['p']}", s["a"])])
+    n = conn.execute("SELECT COUNT(*) FROM characters").fetchone()[0]
+    assert _read(conn, book, s1, s["intro"], s["line"])["new_1"] == s["a"]
+    assert conn.execute("SELECT COUNT(*) FROM characters").fetchone()[0] == n
+    assert _speaker(conn, s["line"]["id"]) == s["a"] and not repo.may_be(_card(conn, s["a"]))
+
+
+def test_a_re_read_after_a_reveal_finds_the_named_card_and_keeps_its_answers(conn, cfg, fixtures):
+    s = _setup(conn, cfg, fixtures)
+    book, s1 = s["book"], s["scenes"][1]
+    _ask(conn, book.id, [(f"s:{s['p']}", "different")])
+    cid, _ = _reveal(conn, s, s["p"])
+    c = _card(conn, cid)
+    assert set(json.loads(c["not_same_json"])) == {s["a"], s["b"]} and not repo.may_be(c)
+    assert _read(conn, book, s1, s["intro"], s["line"])["new_1"] == cid
+    assert not repo.may_be(_card(conn, cid))
+
+
+def test_a_card_is_never_its_own_candidate_and_no_empty_mark_is_left(conn, cfg, fixtures):
+    """Only later cards have 「来訪者」: answered "different", the re-read leaves no mark — not even itself."""
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    later = conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq DESC LIMIT 1", (book.id,)).fetchone()
+    tail = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal DESC LIMIT 2",
+                        (book.id, later["id"])).fetchall()
+    ev = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? AND plain_text LIKE '%来訪者%'",
+                      (book.id, later["id"])).fetchone()
+    for n, t in (("乙の母", tail[0]), ("丙の母", tail[1])):
+        repo.upsert_character(conn, book.id, n, name_zh=None, aliases=["来訪者"], unit_id=t["id"], ordinal=t["ordinal"],
+                              origin="test")
+    made = _read(conn, book, later, ev, aliases_ja=["来訪者"])["new_1"]
+    _ask(conn, book.id, [(f"s:{made}", "different")])
+    assert _read(conn, book, later, ev, aliases_ja=["来訪者"])["new_1"] == made
+    assert repo.may_be(_card(conn, made)) == []
+
+
+def test_a_name_finds_neither_a_card_of_another_time_nor_one_known_only_by_others_words(conn, cfg, fixtures):
+    from ncte.memory.address import name_forms
+    from ncte.memory.entities import character_for_form
+
+    s = _past_mother(conn, cfg, fixtures)
+    book = s["book"]
+    past = _read(conn, book, s["scenes"][1], s["intro"], s["line"], other_person=True, period="前世")["new_1"]
+    cid, named = _reveal(conn, s, past)
+    assert repo.period_of(_card(conn, cid)) == "前世"
+    assert character_for_form(conn, book.id, "リリア") is None
+    repo.ensure_glossary(conn, book.id, "リリア", "莉莉亞", category="character", origin="test", first_unit_id=None)
+    ent = conn.execute("SELECT e.character_id FROM entities e JOIN glossary g ON g.entity_id=e.id WHERE "
+                       "g.source_term='リリア'").fetchone()
+    assert ent[0] is None
+    assert "リリア" not in name_forms(conn, book.id)[0]
+    assert repo.upsert_character(conn, book.id, "リリア", name_zh=None, aliases=[], unit_id=named["id"],
+                                 ordinal=named["ordinal"], origin="test")[0] != cid

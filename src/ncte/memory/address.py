@@ -39,8 +39,11 @@ def name_forms(conn: sqlite3.Connection, book_id: str, upto: int | None = None) 
     ``form_senses``, is ambiguous and never attributed automatically. With ``upto`` only characters already known
     at that story position count: 「水野さん」 first named as someone's mother in volume 2 must not take over
     volume 1's 「水野さん」 said to a classmate."""
+    from .repository import FINDABLE
+
+    # a form names only a card a name finds: never one known only by other cards' words, nor one of another time
     chars = conn.execute(f"SELECT id, book_id, canonical_name, aliases_json, known_from_ordinal FROM characters "
-                         f"WHERE {SERIES_SCOPE}", (book_id,)).fetchall()
+                         f"WHERE {SERIES_SCOPE} AND {FINDABLE}", (book_id,)).fetchall()
     if upto is not None:
         hz = pos(conn, book_id, upto)
         chars = [c for c in chars if pos(conn, c["book_id"], c["known_from_ordinal"]) <= hz]

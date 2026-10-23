@@ -24,6 +24,7 @@ from typing import Any
 
 from ..series import SERIES_SCOPE, volumes
 from .db import utcnow
+from .repository import FINDABLE
 
 FORM_TYPES = ("official", "full", "short", "nickname", "alias", "title")
 
@@ -47,7 +48,7 @@ def ensure_entity(conn: sqlite3.Connection, book_id: str, term: str) -> str | No
     if row["entity_id"]:
         return str(row["entity_id"])
     # the card named so; never one only known by other cards' words or one of another time (ADR-103)
-    ch = conn.execute(f"SELECT id FROM characters WHERE {SERIES_SCOPE} AND canonical_name=? AND label=''",
+    ch = conn.execute(f"SELECT id FROM characters WHERE {SERIES_SCOPE} AND canonical_name=? AND {FINDABLE}",
                       (book_id, term)).fetchone()
     eid = _new_entity(conn, book_id, term, row["category"], ch[0] if ch else None)
     conn.execute("UPDATE glossary SET entity_id=? WHERE id=?", (eid, row["id"]))
@@ -263,7 +264,7 @@ def character_for_form(conn: sqlite3.Connection, book_id: str, name: str) -> str
         forms = [r[0] for r in conn.execute(f"SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND entity_id=? "
                                             "ORDER BY form_type!='official'", (book_id, row[0]))]
     # a card known only by other cards' words (ADR-103) is never the one a form finds
-    chars = conn.execute(f"SELECT id, canonical_name, aliases_json FROM characters WHERE {SERIES_SCOPE} AND label=''",
+    chars = conn.execute(f"SELECT id, canonical_name, aliases_json FROM characters WHERE {SERIES_SCOPE} AND {FINDABLE}",
                          (book_id,)).fetchall()
     for f in forms:
         for c in chars:
@@ -279,7 +280,7 @@ def reconcile_characters(conn: sqlite3.Connection, book_id: str) -> int:
 
     # a card known only by other cards' words (ADR-103) is merged by the second look's answer, never by its words
     chars = {r[0]: r[1] for r in conn.execute(f"SELECT canonical_name, id FROM characters WHERE {SERIES_SCOPE} AND "
-                                              "label=''", (book_id,))}
+                                              f"{FINDABLE}", (book_id,))}
     groups: dict[str, list[tuple[str, str]]] = {}
     for term, eid, form in conn.execute(f"SELECT source_term, entity_id, form_type FROM glossary WHERE {SERIES_SCOPE} "
                                         "AND entity_id IS NOT NULL", (book_id,)):

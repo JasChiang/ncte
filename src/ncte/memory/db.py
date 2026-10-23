@@ -744,7 +744,7 @@ CREATE TABLE characters_labelled (
     label TEXT NOT NULL DEFAULT '',
     may_be_json TEXT NOT NULL DEFAULT '[]',
     not_same_json TEXT NOT NULL DEFAULT '[]',
-    reading_key TEXT,
+    reading_keys_json TEXT NOT NULL DEFAULT '[]',
     period TEXT,
     UNIQUE(book_id, canonical_name, label)
 );

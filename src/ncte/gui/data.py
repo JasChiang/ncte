@@ -325,6 +325,9 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
     genders = {g["character_id"]: g for g in conn.execute(
         f"SELECT g.* FROM character_gender g JOIN characters c ON c.id=g.character_id WHERE c.{SERIES_SCOPE}",
         (book.id,))}
+    from ..memory.visibility import form_positions
+
+    forms_at = form_positions(conn, book.id)
     out = {}
     for cid, c in chars.items():
         cv = vols.get(c["book_id"], 1.0)
@@ -340,15 +343,18 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
                     "info": cv == here and info(c["known_from_ordinal"])}  # earlier volumes: never book matter here
         if c["is_narrator"]:
             out[cid]["narrator"] = True
-        from ..memory.repository import card_label, impressions_of, may_be
+        from ..memory.repository import OTHER_PERSON, impressions_of, label_of, may_be, period_of
 
-        if c["label"]:  # one of several cards the book calls by the same words: told apart here only (ADR-103)
-            out[cid]["label"] = card_label(c, out[cid]["zh"])
-            # not yet known whether this is one of those people (the second look asks); each with where it is first
-            # known, so the page names one only once the reading position reaches it
-            if open_ := [{"id": x, "from": chars[x]["known_from_ordinal"] if vols.get(chars[x]["book_id"], 1.0) == here
-                          else -1} for x in may_be(c) if x in chars and vols.get(chars[x]["book_id"], 1.0) <= here]:
-                out[cid]["may_be"] = open_
+        # the name as known at each reading position: a name revealed later is not shown before it (ADR-032/103)
+        out[cid]["names"] = _names_by_position(conn, book.id, c, forms_at, rendering, cv == here)
+        # one of several cards the book calls by the same words, or someone of another time: told apart here only
+        if tag := label_of(c) or ((OTHER_PERSON if period_of(c) == "" else period_of(c)) or ""):
+            out[cid]["tag"] = tag
+        # not yet known whether this is one of those people (the second look asks); each with where it is first
+        # known, so the page names one only once the reading position reaches it
+        if open_ := [{"id": x, "from": chars[x]["known_from_ordinal"] if vols.get(chars[x]["book_id"], 1.0) == here
+                      else -1} for x in may_be(c) if x in chars and vols.get(chars[x]["book_id"], 1.0) <= here]:
+            out[cid]["may_be"] = open_
 
         stretches = impressions_of(conn, cid)
         if stretches:
@@ -403,6 +409,32 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
                      "reason": r["reason"], "evidence": [{"quote": q, "zh": zh_of(q, o) if this else None, "at": o if this else -1}
                                                           for q, o in ev[:3]]})
     return {"characters": out, "address": address, "relations": rels, "scenes": st["scenes"], "chapters": st["chapters"]}
+
+
+def _names_by_position(conn: sqlite3.Connection, book_id: str, c: sqlite3.Row, forms_at: Any,
+                       rendering: dict[str, str], this_volume: bool) -> list[dict[str, Any]]:
+    """A card's name and other names as known from each reading position on (``from``: the position they hold from;
+    -1 for a card of an earlier volume): the page shows a card by the name known where the reader is, never a name
+    revealed later — the same view the model gets (``character_view``)."""
+    from ..memory.visibility import character_view
+    from ..series import pos
+
+    here = pos(conn, book_id, 0)[0]
+    first, linked, held = forms_at
+    forms = [c["canonical_name"], *json.loads(c["aliases_json"] or "[]")]
+    start = c["known_from_ordinal"] if this_volume else -1
+    points = {start} | {p[1] for f in forms for p in (first.get(f), linked.get(f), held.get((c["id"], f)))
+                        if p is not None and p[0] == here and p[1] > start}
+    out: list[dict[str, Any]] = []
+    for at in sorted(points):
+        v = character_view(conn, book_id, c, at, forms_at)
+        if v is None:
+            continue
+        entry = {"from": at, "ja": v["name_ja"], "zh": v["name_zh"] or rendering.get(v["name_ja"]) or v["name_ja"],
+                 "aka": v["aliases_ja"]}
+        if not out or {k: out[-1][k] for k in ("ja", "zh", "aka")} != {k: entry[k] for k in ("ja", "zh", "aka")}:
+            out.append(entry)
+    return out
 
 
 def _excerpt(ja: str, at: int, n: int, zh: str, limit: int = 120) -> str:

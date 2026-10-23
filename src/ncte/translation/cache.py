@@ -14,6 +14,7 @@ import sqlite3
 from typing import Any
 
 from ..memory.db import utcnow
+from ..memory.repository import FINDABLE
 from ..series import SERIES_SCOPE
 
 VALID_MACHINE = ("succeeded", "needs_review")
@@ -27,7 +28,7 @@ def glossary_entries(conn: sqlite3.Connection, book_id: str) -> list[dict[str, A
     aliases: dict[str, list[str]] = {}
     try:
         # the aliases of the card a name names: not of a card only known by other cards' words (ADR-103)
-        for c in conn.execute(f"SELECT canonical_name, aliases_json FROM characters WHERE {SERIES_SCOPE} AND label=''",
+        for c in conn.execute(f"SELECT canonical_name, aliases_json FROM characters WHERE {SERIES_SCOPE} AND {FINDABLE}",
                               (book_id,)):
             aliases[c[0]] = json.loads(c[1])
     except sqlite3.OperationalError:  # pre-migration-2 database

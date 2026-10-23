@@ -28,6 +28,15 @@ def characters(conn: sqlite3.Connection, book_id: str) -> list[sqlite3.Row]:
     return conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE} ORDER BY known_from_ordinal", (book_id,)).fetchall()
 
 
+# A card a name finds (ADR-103): named so — not one known only by words other cards have (``label``), and not one
+# of another time (``period``), which is found by its id. Every lookup of a card by a name or a form uses this.
+FINDABLE = "label='' AND period IS NULL"
+
+
+def findable(c: Any) -> bool:
+    return not label_of(c) and period_of(c) is None
+
+
 def alias_map(rows: list[sqlite3.Row]) -> dict[str, str]:
     """name/alias (ja) → character id. Earlier-known characters win on collisions; a card named so wins over one known
     only by other cards' words (ADR-103); a card for someone of another time (``period``) is never the one its words
@@ -45,7 +54,7 @@ def alias_map(rows: list[sqlite3.Row]) -> dict[str, str]:
 def upsert_character(conn: sqlite3.Connection, book_id: str, name_ja: str, *, name_zh: str | None,
                      aliases: list[str], unit_id: str, ordinal: int, origin: str) -> tuple[str, bool]:
     # a labelled card (ADR-103) is never the card a name finds: it is someone known by words other cards have
-    row = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE} AND canonical_name=? AND label=''",
+    row = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE} AND canonical_name=? AND {FINDABLE}",
                        (book_id, name_ja)).fetchone()
     cid = row["id"] if row else character_id_for(book_id, name_ja)
     if row:
@@ -63,6 +72,10 @@ def upsert_character(conn: sqlite3.Connection, book_id: str, name_ja: str, *, na
                          (json.dumps(merged, ensure_ascii=False), utcnow(), cid))
         note_forms(conn, cid, [name_ja, *aliases], book_id, ordinal)  # seen here with the card
         return cid, False
+    n = 1  # the id the name hashes to may be a card a name no longer finds (one of another time named so)
+    while conn.execute("SELECT 1 FROM characters WHERE id=?", (cid,)).fetchone() is not None:
+        n += 1
+        cid = character_id_for(book_id, f"{name_ja}\0{n}")
     conn.execute(
         "INSERT INTO characters(id, book_id, canonical_name, display_name_zh, aliases_json, known_from_unit_id, "
         "known_from_ordinal, status, origin, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
@@ -197,16 +210,19 @@ def unconfirmed_card(conn: sqlite3.Connection, book_id: str, words: str, *, alia
     reading gives the same words stay two cards. Found again, the card takes the re-read's aliases; the cards a
     "different" answer was about (``not_same_json``) stay answered, and only cards not asked about are marked.
     Returns (id, created)."""
-    row = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE} AND reading_key=?", (book_id, key)).fetchone() \
-        if key else None
+    # the card the proposal became — or the card it was later merged into (a confirmed match, a revealed name), which
+    # keeps the keys of the cards folded into it
+    row = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE} AND EXISTS (SELECT 1 FROM "
+                       "json_each(reading_keys_json) WHERE value=?)", (book_id, key)).fetchone() if key else None
     if row is not None:
         cid = str(row["id"])
         answered = set(json.loads(row["not_same_json"] or "[]"))
         old = json.loads(row["aliases_json"] or "[]")
-        merged = old + [a for a in aliases if a not in old and a != row["canonical_name"]]
+        merged = old + [a for a in dict.fromkeys([words, *aliases]) if a not in old and a != row["canonical_name"]]
+        # never its own candidate; the cards an answer was about stay answered: no mark is left with nothing to ask
         conn.execute("UPDATE characters SET may_be_json=?, aliases_json=?, updated_at=? WHERE id=?",
-                     (json.dumps([x for x in may_be if x not in answered]), json.dumps(merged, ensure_ascii=False),
-                      utcnow(), cid))
+                     (json.dumps([x for x in may_be if x not in answered and x != cid]),
+                      json.dumps(merged, ensure_ascii=False), utcnow(), cid))
         note_forms(conn, cid, [words, *aliases], book_id, ordinal)
         return cid, False
     holders = sum(1 for c in characters(conn, book_id) if words == c["canonical_name"] or words in json.loads(
@@ -219,10 +235,11 @@ def unconfirmed_card(conn: sqlite3.Connection, book_id: str, words: str, *, alia
     cid = character_id_for(book_id, f"{words}\0{n}")
     conn.execute(
         "INSERT INTO characters(id, book_id, canonical_name, display_name_zh, aliases_json, known_from_unit_id, "
-        "known_from_ordinal, status, origin, created_at, updated_at, is_group, label, may_be_json, reading_key) "
+        "known_from_ordinal, status, origin, created_at, updated_at, is_group, label, may_be_json, reading_keys_json) "
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (cid, book_id, words, None, json.dumps([a for a in aliases if a != words], ensure_ascii=False), unit_id,
-         ordinal, "partial", origin, utcnow(), utcnow(), int(is_group), str(n), json.dumps(may_be), key))
+         ordinal, "partial", origin, utcnow(), utcnow(), int(is_group), str(n), json.dumps(may_be),
+         json.dumps([key] if key else [])))
     note_forms(conn, cid, [words, *aliases], book_id, ordinal)
     return cid, True
 
@@ -448,6 +465,13 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
                      "aliases_json=?, updated_at=? WHERE id=?",
                      (drop["canonical_name"], drop["display_name_zh"],
                       json.dumps(list(dict.fromkeys(renamed)), ensure_ascii=False), utcnow(), keep_id))
+    # the proposals the dropped card was made for are the kept card's now (reading the scene again finds it), and so are
+    # the cards it was answered not to be
+    row = conn.execute("SELECT reading_keys_json, not_same_json FROM characters WHERE id=?", (keep_id,)).fetchone()
+    for col, have in (("reading_keys_json", row[0]), ("not_same_json", row[1])):
+        both = [x for x in dict.fromkeys([*json.loads(have or "[]"), *json.loads(drop[col] or "[]")])
+                if x not in (keep_id, drop_id)]
+        conn.execute(f"UPDATE characters SET {col}=? WHERE id=?", (json.dumps(both, ensure_ascii=False), keep_id))
     # cards marked as maybe the dropped one (ADR-103) may now be the kept one, and an answer about the dropped one is
     # about the kept one; a card is never maybe itself
     for col in ("may_be_json", "not_same_json"):

@@ -646,12 +646,14 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             repo.merge_characters(conn, cid, same)
             if open_ := [x for x in repo.may_be(old) if x != cid]:
                 # a name tells who she is called, not which of the cards with the same words she is: still asked
-                conn.execute("UPDATE characters SET may_be_json=?, not_same_json=? WHERE id=?",
-                             (json.dumps(open_), old["not_same_json"], cid))
+                # (the cards it was answered not to be came over with the merge)
+                conn.execute("UPDATE characters SET may_be_json=? WHERE id=?", (json.dumps(open_), cid))
             if repo.period_of(old) is not None:
                 # a name revealed for someone of another time (リリア, the past life's 「母親」): still of that time —
                 # never a present person found by the words, and the same card when that time's words are read again
-                conn.execute("UPDATE characters SET period=? WHERE id=? AND period IS NULL", (repo.period_of(old), cid))
+                # its label is its time, as for every card of another time: the name alone finds the present one
+                conn.execute("UPDATE OR IGNORE characters SET period=?, label=? WHERE id=? AND period IS NULL",
+                             (repo.period_of(old), repo.period_of(old) or repo.OTHER_PERSON, cid))
             # the new name and its own aliases (「王女」) are known from the reveal, not from the description's scene
             # (the description itself stays known from its own scene)
             for form in own:

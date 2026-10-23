@@ -529,7 +529,7 @@ async function readingDataFor(id, what) {
   const label = POSIDX >= story.length ? "全書（不隱藏）" : `第 ${POSIDX + 1} 個場景之前・${(d.chapters.find(c => c.index === story[POSIDX].ch) || {}).title || ""}`;
   $("#posl").textContent = label;
   pos.oninput = () => { POSIDX = +pos.value; route(); };
-  return {d, upto, seen: story.filter(s => s.a <= upto), nm: cid => (d.characters[cid] || {}).label || (d.characters[cid] || {}).zh || cid};
+  return {d, upto, seen: story.filter(s => s.a <= upto), nm: cid => d.characters[cid] ? cardName(d.characters[cid], upto) : cid};
 }
 function topChars(d, seen, upto, n) {
   const cnt = {}; seen.forEach(s => s.who.forEach(c => cnt[c] = (cnt[c] || 0) + 1));
@@ -577,7 +577,7 @@ async function peopleView(id) {
   vis.forEach(([k, c]) => groups[c.info ? "info" : tier(c)].push([k, c]));
   if (!peopleState.person || !d.characters[peopleState.person] || d.characters[peopleState.person].from > upto)
     peopleState.person = (groups.main[0] || groups.sub[0] || [])[0];
-  const btn = ([k, c]) => `<button data-k="${esc(k)}" class="${k === peopleState.person ? "on" : ""}">${esc(c.label || c.zh)}<span class="cnt">${c.scenes}</span></button>`;
+  const btn = ([k, c]) => `<button data-k="${esc(k)}" class="${k === peopleState.person ? "on" : ""}">${esc(cardName(c, upto))}<span class="cnt">${c.scenes}</span></button>`;
   let card = `<p class="muted">還沒有角色。讀的階段會一路記下角色，讀完整本後這裡會列出每個人的稱呼、關係與事實。</p>`;
   const p = d.characters[peopleState.person];
   if (p) {
@@ -587,9 +587,9 @@ async function peopleView(id) {
     const co = {}; seen.forEach(s => { if (s.who.includes(pid)) s.who.forEach(o => { if (o !== pid) co[o] = (co[o] || 0) + 1; }); });
     const F = p.facts.filter(f => f.at <= upto), EX = p.examples.filter(e => e.at <= upto);
     const ftype = {objective: "客觀", character_belief: "角色認為", narrator_claim: "敘述者說"};
-    card = `<div class="row" style="align-items:baseline;gap:10px"><h2 style="margin:0">${esc(p.label || p.zh)}</h2><span class="ja">${esc(p.ja)}</span>${readingsTag(p.readings)}
+    card = `<div class="row" style="align-items:baseline;gap:10px"><h2 style="margin:0">${esc(cardName(p, upto))}</h2><span class="ja">${esc(namesAt(p, upto).ja || p.ja)}</span>${(namesAt(p, upto).ja || p.ja) === p.ja ? readingsTag(p.readings) : ""}
       <span class="muted small">初登場 §${p.from}・出場 ${p.scenes} 場景・台詞 ${p.lines} 句</span></div>
-      ${p.aka.length ? `<div class="muted small">其他稱呼：${p.aka.map(a => `<span class="ja">${esc(a.ja)}</span>${readingsTag(a.readings)}${a.zh && a.zh !== a.ja ? `（${esc(a.zh)}）` : ""}`).join("・")}</div>` : ""}
+      ${shownAka(p, upto).length ? `<div class="muted small">其他稱呼：${shownAka(p, upto).map(a => `<span class="ja">${esc(a.ja)}</span>${readingsTag(a.readings)}${a.zh && a.zh !== a.ja ? `（${esc(a.zh)}）` : ""}`).join("・")}</div>` : ""}
       ${(p.first_person || []).length ? `<div class="small" style="margin-top:4px">自稱：${p.first_person.map(([w, n]) => `<span class="form-tag"><span class="ja">${esc(w)}</span><span class="n">×${n}</span></span>`).join(" ")}</div>` : ""}
       ${genderLine(p, upto)}
       ${groupLine(p, d, nm, upto)}
@@ -622,6 +622,19 @@ async function peopleView(id) {
 // relations of one person as known at the slider position (begun, not yet replaced), each with its source quote
 // a source line with the translation of its paragraph under it (both languages, for comparison)
 // the readings the source annotates on a name (彩葉《いろは》): small, next to the name
+// a card's names as known at the reading position (``names``: from where each holds, ADR-103): a name revealed later
+// is never shown before it; a card one of several with the same words, or of another time, carries its tag
+function namesAt(c, upto = Infinity) {
+  return (c.names || []).filter(n => n.from <= upto).pop() || (c.names || [])[0] || {};
+}
+function cardName(c, upto = Infinity) {
+  const n = namesAt(c, upto), base = n.zh || n.ja || c.zh || c.ja;
+  return c.tag ? `${base}（${c.tag}）` : base;
+}
+function shownAka(c, upto) {
+  const n = namesAt(c, upto);
+  return n.aka ? c.aka.filter(a => n.aka.includes(a.ja)) : c.aka;
+}
 function readingsTag(r) { return (r || []).length ? ` <span class="muted small" title="原文標註的讀音">《${r.map(esc).join("、")}》</span>` : ""; }
 function bi(ja, zh, cls = "") {
   return `<span class="bi ${cls}"><span class="ja">${esc(ja || "")}</span>${zh ? `<span class="zh">${esc(zh)}</span>` : ""}</span>`;
@@ -961,7 +974,7 @@ function graphSide(d, nm, upto, pairScenes, addr, cnt) {
   if (G.focus && d.characters[G.focus]) {
     const c = d.characters[G.focus];
     const partners = Object.entries(pairScenes).filter(([k]) => k.split("|").includes(G.focus)).map(([k, ss]) => [k.split("|").find(x => x !== G.focus), ss.length]).sort((x, y) => y[1] - x[1]);
-    return `<strong>${esc(c.zh)}</strong> <span class="ja muted">${esc(c.ja)}</span><div class="muted small">${cnt[G.focus] || 0} 個場景</div>
+    return `<strong>${esc(cardName(c, upto))}</strong> <span class="ja muted">${esc(namesAt(c, upto).ja || c.ja)}</span><div class="muted small">${cnt[G.focus] || 0} 個場景</div>
       <div style="margin-top:8px">${partners.map(([o, n]) => `<div>${esc(nm(o))} <span class="muted small">${n} 個場景</span></div>`).join("") || '<div class="muted">—</div>'}</div>
       <p><a href="#" data-profile="${esc(G.focus)}">看角色檔案</a></p>`;
   }
@@ -970,7 +983,7 @@ function graphSide(d, nm, upto, pairScenes, addr, cnt) {
 // ------------------------------------------------------------ names & address terms
 async function glossaryView(id) {
   const [g, d] = await Promise.all([loadBook(id, "glossary"), loadBook(id, "characters")]);
-  const nm = c => (d.characters[c] || {}).label || (d.characters[c] || {}).zh || c;
+  const nm = c => d.characters[c] ? cardName(d.characters[c]) : c;
   view.innerHTML = `<div class="row"><div class="card" style="flex:1 1 440px"><strong>名詞表</strong> <span class="muted small">${g.length} 筆</span>
       <input type="search" id="gq" placeholder="搜尋日文或中文" style="margin-left:8px"><div class="scroll"><table id="gt"></table></div></div>
     <div class="card" style="flex:1 1 440px"><strong>誰怎麼叫誰</strong> <span class="muted small">${d.address.length} 組</span><div class="scroll"><table>
