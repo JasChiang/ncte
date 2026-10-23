@@ -721,7 +721,36 @@ ALTER TABLE character_gender ADD COLUMN basis TEXT;
          "in it): a check that never answered is asked again from this (ADR-100)", """
 ALTER TABLE translations ADD COLUMN fix_json TEXT;
 """),
+    (37, "a card for a person known only by words other cards have (several unnamed mothers called 母親): its name stays "
+         "the book's words, a program label tells the cards apart (never a name), and the cards it may be are marked "
+         "for the second look (ADR-103)", """
+CREATE TABLE characters_labelled (
+    id TEXT PRIMARY KEY,
+    book_id TEXT NOT NULL REFERENCES books(id),
+    canonical_name TEXT NOT NULL,
+    display_name_zh TEXT,
+    aliases_json TEXT NOT NULL DEFAULT '[]',
+    known_from_unit_id TEXT,
+    known_from_ordinal INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'partial',
+    origin TEXT NOT NULL,
+    speech_profile_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    is_narrator INTEGER NOT NULL DEFAULT 0,
+    is_group INTEGER NOT NULL DEFAULT 0,
+    label TEXT NOT NULL DEFAULT '',
+    may_be_json TEXT NOT NULL DEFAULT '[]',
+    UNIQUE(book_id, canonical_name, label)
+);
+INSERT INTO characters_labelled(id, book_id, canonical_name, display_name_zh, aliases_json, known_from_unit_id, known_from_ordinal, status, origin, speech_profile_json, created_at, updated_at, is_narrator, is_group) SELECT id, book_id, canonical_name, display_name_zh, aliases_json, known_from_unit_id, known_from_ordinal, status, origin, speech_profile_json, created_at, updated_at, is_narrator, is_group FROM characters;
+DROP TABLE characters;
+ALTER TABLE characters_labelled RENAME TO characters;
+"""),
 ]
+# migrations that rebuild a table other tables refer to: run with foreign keys off (they cannot be switched inside a
+# transaction), checked before committing
+REBUILDS = {37}
 
 
 def _reindex_units_fts(conn: sqlite3.Connection) -> None:
@@ -809,18 +838,27 @@ def migrate(conn: sqlite3.Connection) -> int:
     for version, desc, sql in MIGRATIONS:
         if version <= ver:
             continue
+        fk = conn.execute("PRAGMA foreign_keys").fetchone()[0] if version in REBUILDS else 0
+        if fk:
+            conn.execute("PRAGMA foreign_keys=OFF")
         conn.execute("BEGIN IMMEDIATE")
         try:
+            broken = len(conn.execute("PRAGMA foreign_key_check").fetchall()) if version in REBUILDS else 0
             for stmt in _split_sql(sql):
                 conn.execute(stmt)
             if version in POST_MIGRATION:
                 POST_MIGRATION[version](conn)
+            if version in REBUILDS and len(conn.execute("PRAGMA foreign_key_check").fetchall()) > broken:
+                raise sqlite3.IntegrityError(f"migration {version} left rows pointing at missing rows")
             conn.execute("INSERT INTO schema_migrations(version, description, applied_at) VALUES (?,?,?)",
                          (version, desc, utcnow()))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
+        finally:
+            if fk:
+                conn.execute("PRAGMA foreign_keys=ON")
         ver = version
     return ver
 

@@ -529,7 +529,7 @@ async function readingDataFor(id, what) {
   const label = POSIDX >= story.length ? "全書（不隱藏）" : `第 ${POSIDX + 1} 個場景之前・${(d.chapters.find(c => c.index === story[POSIDX].ch) || {}).title || ""}`;
   $("#posl").textContent = label;
   pos.oninput = () => { POSIDX = +pos.value; route(); };
-  return {d, upto, seen: story.filter(s => s.a <= upto), nm: cid => (d.characters[cid] || {}).zh || cid};
+  return {d, upto, seen: story.filter(s => s.a <= upto), nm: cid => (d.characters[cid] || {}).label || (d.characters[cid] || {}).zh || cid};
 }
 function topChars(d, seen, upto, n) {
   const cnt = {}; seen.forEach(s => s.who.forEach(c => cnt[c] = (cnt[c] || 0) + 1));
@@ -577,7 +577,7 @@ async function peopleView(id) {
   vis.forEach(([k, c]) => groups[c.info ? "info" : tier(c)].push([k, c]));
   if (!peopleState.person || !d.characters[peopleState.person] || d.characters[peopleState.person].from > upto)
     peopleState.person = (groups.main[0] || groups.sub[0] || [])[0];
-  const btn = ([k, c]) => `<button data-k="${esc(k)}" class="${k === peopleState.person ? "on" : ""}">${esc(c.zh)}<span class="cnt">${c.scenes}</span></button>`;
+  const btn = ([k, c]) => `<button data-k="${esc(k)}" class="${k === peopleState.person ? "on" : ""}">${esc(c.label || c.zh)}<span class="cnt">${c.scenes}</span></button>`;
   let card = `<p class="muted">還沒有角色。讀的階段會一路記下角色，讀完整本後這裡會列出每個人的稱呼、關係與事實。</p>`;
   const p = d.characters[peopleState.person];
   if (p) {
@@ -587,7 +587,7 @@ async function peopleView(id) {
     const co = {}; seen.forEach(s => { if (s.who.includes(pid)) s.who.forEach(o => { if (o !== pid) co[o] = (co[o] || 0) + 1; }); });
     const F = p.facts.filter(f => f.at <= upto), EX = p.examples.filter(e => e.at <= upto);
     const ftype = {objective: "客觀", character_belief: "角色認為", narrator_claim: "敘述者說"};
-    card = `<div class="row" style="align-items:baseline;gap:10px"><h2 style="margin:0">${esc(p.zh)}</h2><span class="ja">${esc(p.ja)}</span>${readingsTag(p.readings)}
+    card = `<div class="row" style="align-items:baseline;gap:10px"><h2 style="margin:0">${esc(p.label || p.zh)}</h2><span class="ja">${esc(p.ja)}</span>${readingsTag(p.readings)}
       <span class="muted small">初登場 §${p.from}・出場 ${p.scenes} 場景・台詞 ${p.lines} 句</span></div>
       ${p.aka.length ? `<div class="muted small">其他稱呼：${p.aka.map(a => `<span class="ja">${esc(a.ja)}</span>${readingsTag(a.readings)}${a.zh && a.zh !== a.ja ? `（${esc(a.zh)}）` : ""}`).join("・")}</div>` : ""}
       ${(p.first_person || []).length ? `<div class="small" style="margin-top:4px">自稱：${p.first_person.map(([w, n]) => `<span class="form-tag"><span class="ja">${esc(w)}</span><span class="n">×${n}</span></span>`).join(" ")}</div>` : ""}
@@ -629,8 +629,10 @@ function bi(ja, zh, cls = "") {
 function groupLine(p, d, nm) {
   // a group card and who it is made of; a member shows the groups it belongs to (people not shown yet are left out)
   const link = ids => (ids || []).filter(k => d.characters[k]).map(k => `<a href="#" data-k="${esc(k)}">${esc(nm(k))}</a>`).join("・");
-  const members = link(p.members), of = link(p.member_of);
-  return (members ? `<div class="small" style="margin-top:4px">成員：${members}</div>` : "")
+  const members = link(p.members), of = link(p.member_of), maybe = link(p.may_be);
+  // a card for someone the book calls by words other cards have: whether it is one of them is not known yet (ADR-103)
+  return (maybe ? `<div class="small" style="margin-top:4px">身分未確認：可能和 ${maybe} 是同一人（讀完後的覆核會再確認）</div>` : "")
+    + (members ? `<div class="small" style="margin-top:4px">成員：${members}</div>` : "")
     + (of ? `<div class="small" style="margin-top:4px">屬於：${of}</div>` : "");
 }
 
@@ -966,7 +968,7 @@ function graphSide(d, nm, upto, pairScenes, addr, cnt) {
 // ------------------------------------------------------------ names & address terms
 async function glossaryView(id) {
   const [g, d] = await Promise.all([loadBook(id, "glossary"), loadBook(id, "characters")]);
-  const nm = c => (d.characters[c] || {}).zh || c;
+  const nm = c => (d.characters[c] || {}).label || (d.characters[c] || {}).zh || c;
   view.innerHTML = `<div class="row"><div class="card" style="flex:1 1 440px"><strong>名詞表</strong> <span class="muted small">${g.length} 筆</span>
       <input type="search" id="gq" placeholder="搜尋日文或中文" style="margin-left:8px"><div class="scroll"><table id="gt"></table></div></div>
     <div class="card" style="flex:1 1 440px"><strong>誰怎麼叫誰</strong> <span class="muted small">${d.address.length} 組</span><div class="scroll"><table>

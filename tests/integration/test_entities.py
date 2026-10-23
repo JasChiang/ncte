@@ -348,7 +348,8 @@ def test_words_of_an_earlier_card_mean_it_only_when_the_model_says_nothing_other
     """ADR-101: a new character whose words are not in its evidence but are a card's seen in an earlier scene is that
     card — the program's shortcut, on the record (``matched_by_words``). The model's own word on who this is wins: a
     past life's 「母親」 (``other_person``, ``period``) or a group is not merged into the card; and words two cards have
-    are not for the program to choose between (handled as any words not in the evidence: rejected here)."""
+    are not for the program to choose between: the person gets a card of their own, marked as maybe one of them
+    (ADR-103)."""
     from ncte.analysis.scene import apply_scene_analysis
     from ncte.llm.schemas import SceneAnalysisOutput
     from ncte.memory import repository as repo
@@ -362,9 +363,8 @@ def test_words_of_an_earlier_card_mean_it_only_when_the_model_says_nothing_other
                       (book.id, later["id"])).fetchone()[0]
     mother, _ = repo.upsert_character(conn, book.id, "母親", name_zh=None, aliases=["義母上"], unit_id=first["id"],
                                       ordinal=first["ordinal"], origin="test")
-    for name in ("男甲", "男乙"):
-        repo.upsert_character(conn, book.id, name, name_zh=None, aliases=["黒衣の男"], unit_id=first["id"],
-                              ordinal=first["ordinal"], origin="test")
+    men = [repo.upsert_character(conn, book.id, name, name_zh=None, aliases=["黒衣の男"], unit_id=first["id"],
+                                 ordinal=first["ordinal"], origin="test")[0] for name in ("男甲", "男乙")]
 
     def read(**nc: object) -> tuple[dict[str, str], dict[str, object]]:
         out = {"pov": None, "location": None, "time": None, "participants": [], "utterances": [], "actions": [],
@@ -386,9 +386,10 @@ def test_words_of_an_earlier_card_mean_it_only_when_the_model_says_nothing_other
         refs, got = read(name_ja="母親", **other)
         assert refs.get("new_1") != mother and not got["matched"] and got["rejected"] == 1, other
     refs, got = read(name_ja="黒衣の男")
-    assert "new_1" not in refs and not got["matched"] and got["rejected"] == 1
+    assert not got["matched"] and got["rejected"] == 0 and got["unconfirmed"] == 1
+    card = conn.execute("SELECT * FROM characters WHERE id=?", (refs["new_1"],)).fetchone()
+    assert card["canonical_name"] == "黒衣の男" and card["label"] == "3" and sorted(repo.may_be(card)) == sorted(men)
     reasons = [r[0] for r in conn.execute("SELECT reason FROM memory_rejections WHERE book_id=? ORDER BY id", (book.id,))]
-    assert reasons[-1].endswith("the words name several known characters")
     assert reasons[0].endswith("the words name a known character the model says this is not")
 
 
@@ -431,8 +432,9 @@ def test_a_known_card_reached_through_an_alias_follows_the_models_word_on_who_it
 
 def test_words_two_cards_have_are_not_for_the_program_to_pick_between(conn, cfg, fixtures):
     """Two earlier cards both known as 「来訪者」: a new person known in the scene by those words (standing in for a
-    name the model gave that is not in the evidence, or as the name itself) is not put on either card — rejected, with
-    the reason; one the model says is someone else (another time) still gets a card of its own."""
+    name the model gave that is not in the evidence, or as the name itself) is not put on either card: a card of its
+    own, named by those words, labelled and marked as maybe one of them (ADR-103); one the model says is someone else
+    (another time) still gets a card of its own, unmarked."""
     from ncte.analysis.scene import apply_scene_analysis
     from ncte.llm.schemas import SceneAnalysisOutput
     from ncte.memory import repository as repo
@@ -457,13 +459,13 @@ def test_words_two_cards_have_are_not_for_the_program_to_pick_between(conn, cfg,
         apply_scene_analysis(conn, book.id, sc, SceneAnalysisOutput.model_validate(out), refs=refs)
         return refs
 
-    for name in ("母親", "来訪者"):
-        assert "new_1" not in read(name_ja=name), name
-    reasons = [r[0] for r in conn.execute("SELECT reason FROM memory_rejections WHERE book_id=? ORDER BY id",
-                                          (book.id,))]
-    assert reasons[0].startswith("the words name several known characters (an alias")
-    assert reasons[1] == "the words name several known characters"
-    assert read(name_ja="母親", period="前世")["new_1"] not in mothers
+    made = {read(name_ja=name)["new_1"] for name in ("母親", "来訪者")}
+    assert len(made) == 1 and not made & mothers  # read again: the card it made there
+    card = conn.execute("SELECT * FROM characters WHERE id=?", (made.pop(),)).fetchone()
+    assert (card["canonical_name"], card["label"], set(repo.may_be(card))) == ("来訪者", "3", mothers)
+    assert not conn.execute("SELECT 1 FROM memory_rejections WHERE book_id=?", (book.id,)).fetchone()
+    past = conn.execute("SELECT * FROM characters WHERE id=?", (read(name_ja="母親", period="前世")["new_1"],)).fetchone()
+    assert past["id"] not in mothers and not repo.may_be(past)
 
 
 def test_only_cards_seen_before_the_scene_decide_whose_words_these_are(conn, cfg, fixtures):
@@ -511,7 +513,8 @@ def test_only_cards_seen_before_the_scene_decide_whose_words_these_are(conn, cfg
 
 def test_words_only_cards_known_later_have_are_one_of_them_only_when_one_has_them(conn, cfg, fixtures):
     """No card seen before the scene has 「来訪者」: one card first known later with it is that person found earlier (a
-    re-read); two are not for the program to pick between — rejected, as for two cards seen before."""
+    re-read); two are not for the program to pick between — a card of its own marked as maybe one of them, as for two
+    cards seen before (ADR-103)."""
     import sqlite3
 
     from ncte.analysis.scene import apply_scene_analysis
@@ -544,7 +547,7 @@ def test_words_only_cards_known_later_have_are_one_of_them_only_when_one_has_the
     assert read()["new_1"] == one
     conn.execute("UPDATE characters SET known_from_unit_id=?, known_from_ordinal=? WHERE id=?",
                  (tail[0]["id"], tail[0]["ordinal"], one))  # known later again, as before the read
-    card("丙の母", tail[1])
-    assert "new_1" not in read()
-    assert conn.execute("SELECT reason FROM memory_rejections WHERE book_id=? ORDER BY id DESC LIMIT 1",
-                        (book.id,)).fetchone()[0].startswith("the words name several known characters")
+    two = card("丙の母", tail[1])
+    made = conn.execute("SELECT * FROM characters WHERE id=?", (read()["new_1"],)).fetchone()
+    assert made["id"] not in (one, two) and set(repo.may_be(made)) == {one, two} and made["label"]
+    assert made["known_from_ordinal"] < tail[0]["ordinal"]  # where the scene shows the person; the others stay later

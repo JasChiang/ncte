@@ -164,6 +164,12 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
             if imp.get("other_times"):
                 card["voice_other_times"] = imp["other_times"]
         present.append(card)
+    # two people the book calls by the same words (two unnamed mothers): told apart by where each was first seen, and
+    # a line of theirs by the card's id — never by a label or a name the program made up (ADR-103)
+    shared = vis.shared_names({card["character_id"]: names[card["character_id"]] for card in present})
+    for card in present:
+        if card["character_id"] in shared:
+            card["first_seen"] = vis.first_seen(conn, next(c for c in chars if c["id"] == card["character_id"]))
     # relations among the people of this scene, as the story has shown them so far (ADR-039): how they talk to each other
     ids = {c["character_id"] for c in present}
     for r in conn.execute("SELECT * FROM relations WHERE book_id=? AND since_ordinal<=? AND (until_ordinal IS NULL OR "
@@ -196,6 +202,8 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
         else:
             item = {"unit_id": u["unit_id"], "quote_index": u["quote_index"], "quote": u["quote_text"][:60],
                     "speaker": names.get(sid) if sid else None, "status": u["status"]}
+        if sid in shared:  # which of the cards with this name: its card's id
+            item["speaker_id"] = sid
         to = [names[x] for x in json.loads(u["addressee_ids_json"] or "[]") if x in names]
         if to:  # who the line is said to: 你 or 妳 follows that person, not the last woman mentioned
             item["to"] = to

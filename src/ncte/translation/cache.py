@@ -26,7 +26,9 @@ def glossary_entries(conn: sqlite3.Connection, book_id: str) -> list[dict[str, A
                         (book_id,)).fetchall()
     aliases: dict[str, list[str]] = {}
     try:
-        for c in conn.execute(f"SELECT canonical_name, aliases_json FROM characters WHERE {SERIES_SCOPE}", (book_id,)):
+        # the aliases of the card a name names: not of a card only known by other cards' words (ADR-103)
+        for c in conn.execute(f"SELECT canonical_name, aliases_json FROM characters WHERE {SERIES_SCOPE} AND label=''",
+                              (book_id,)):
             aliases[c[0]] = json.loads(c[1])
     except sqlite3.OperationalError:  # pre-migration-2 database
         pass

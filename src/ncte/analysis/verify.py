@@ -7,6 +7,8 @@ revealed, and actions the reading inferred and gave to someone absent from the s
 The answers never become facts: a speaker stays ``inferred``; a doubtful inferred gender is dropped (the
 translation then uses 你); a merge judged "different" stops counting the merged description as this character
 (its forms leave the aliases) and becomes a finding for the user — lines moved by the merge are not moved back.
+A card made for someone known only by words other cards have is asked which of them it is, or someone else
+(``same_person``, ADR-103): the model's answer, resting on cited paragraphs, merges it or clears its mark.
 """
 
 from __future__ import annotations
@@ -32,10 +34,16 @@ ADDRESS_LINES = 2  # lines shown per form
 
 
 def _names(conn: sqlite3.Connection, book_id: str) -> dict[str, str]:
+    from ..memory.visibility import first_seen, shared_names
     from ..series import SERIES_SCOPE
 
-    return {r["id"]: r["canonical_name"] + (f"（{r['display_name_zh']}）" if r["display_name_zh"] else "")
-            for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,))}
+    rows = {r["id"]: r for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,))}
+    names = {cid: r["canonical_name"] + (f"（{r['display_name_zh']}）" if r["display_name_zh"] else "")
+             for cid, r in rows.items()}
+    # cards the book calls by the same words (two unnamed mothers): told apart by the book's own text where each was
+    # first seen, never by a label (ADR-103)
+    return {cid: f"{n}〔初見：{first_seen(conn, rows[cid])}〕" if cid in shared else n
+            for shared in [shared_names(names)] for cid, n in names.items()}
 
 
 def _window(conn: sqlite3.Connection, book_id: str, ordinal: int, full: set[int] | None = None) -> list[str]:
@@ -111,7 +119,7 @@ def collect(conn: sqlite3.Connection, book_id: str, max_actions: int = MAX_ACTIO
                       "_version": f"{g['updated_at']}|{g['certainty']}|{g['origin']}"})  # a gender written again is new
     for link in conn.execute("SELECT * FROM entity_links WHERE book_id=? AND origin='scene_analysis' AND "
                              "status='accepted' AND form_type='official'", (book_id,)):
-        c = conn.execute("SELECT * FROM characters WHERE book_id=? AND canonical_name=?",
+        c = conn.execute("SELECT * FROM characters WHERE book_id=? AND canonical_name=? AND label=''",
                          (book_id, link["target_term"])).fetchone()
         if c is None:
             continue
@@ -154,6 +162,7 @@ def collect(conn: sqlite3.Connection, book_id: str, max_actions: int = MAX_ACTIO
     # the few of each other kind first, then the lines, so many lines never push the rest out
     items = fresh([i for i in items if i["kind"] != "speaker"] + [i for i in items if i["kind"] == "speaker"])[:MAX_ITEMS]
     items += fresh(narrator_items(conn, book_id, names))
+    items += fresh(same_person_items(conn, book_id, names))
     items += fresh(identity_items(conn, book_id, names))
     return items
 
@@ -169,6 +178,8 @@ def answer_valid(item: dict[str, Any], answer: str) -> bool:
         return answer in ("female", "male")
     if kind == "merge":
         return answer in ("same", "different", "unsure")
+    if kind == "same_person":
+        return answer == "different" or answer in cands
     if kind == "narration":
         return answer in ("first", "third", "unclear")
     if kind == "question":
@@ -213,7 +224,8 @@ def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
         return (0 if c["is_group"] else 1, len(json.loads(c["aliases_json"] or "[]")), c["n"])
 
     out = []
-    for c in sorted((r for r in rows if r["id"] in cards and (r["n"] or r["k"])), key=order):
+    # a card marked as maybe one of a few cards with the same words is asked that (``same_person_items``) instead
+    for c in sorted((r for r in rows if r["id"] in cards and (r["n"] or r["k"]) and not repo.may_be(r)), key=order):
         others = {k: v for k, v in cards.items() if k != c["id"]}
         ctx = _window(conn, book_id, c["known_from_ordinal"])
         called_by = [f"{names.get(a['speaker_id'], '?')}：{a['form_ja']}" for a in conn.execute(
@@ -226,6 +238,67 @@ def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
                 "SELECT member_id FROM group_members WHERE group_id=?", (c["id"],)) if g[0] in cards]
         out.append(item)
     return out  # every card is asked, a batch at a time (about US$0.001 each)
+
+
+SAME_LINES = 4  # a card's lines shown for the same-person question, each with its paragraph
+
+
+def same_person_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]) -> list[dict[str, Any]]:
+    """Each card made for a person the reading took as new but knew only by words other cards have (two unnamed
+    mothers, each 「母親」; ADR-103): is it one of those cards, or someone else? The card and each candidate are shown
+    by the book's own text — the paragraphs around where each was first seen and a few of their lines, every paragraph
+    with a code — so cards with the same name are told apart without a made-up name. A "same" or "different" answer
+    cites the paragraphs it rests on; unanswered, the card stays marked."""
+    out = []
+    for c in conn.execute("SELECT * FROM characters WHERE book_id=? AND may_be_json!='[]' ORDER BY known_from_ordinal",
+                          (book_id,)).fetchall():
+        may = [x for x in repo.may_be(c) if x in names and x != c["id"]]
+        if not may:
+            continue
+        codes: dict[str, str] = {}
+        rows = {r["id"]: r for r in conn.execute(f"SELECT * FROM characters WHERE id IN ({','.join('?' * len(may))})",
+                                                 may)}
+        out.append({"ref": f"s:{c['id']}", "kind": "same_person", "name": names[c["id"]],
+                    "card": _card_text(conn, c, codes),
+                    "candidates": {x: names[x] for x in may if x in rows},
+                    "candidate_cards": {x: _card_text(conn, rows[x], codes) for x in may if x in rows},
+                    "_codes": codes, "_version": f"{c['updated_at']}|{','.join(may)}"})
+    return out
+
+
+def _coded(conn: sqlite3.Connection, book_id: str, ordinals: list[int], mark: int,
+           codes: dict[str, str]) -> list[dict[str, str]]:
+    """These paragraphs, each with a code (``codes``: code → unit id, shared by the whole item); the marked one whole,
+    the others by their opening."""
+    out: list[dict[str, str]] = []
+    for r in conn.execute(f"SELECT id, ordinal, plain_text FROM units WHERE book_id=? AND translatable=1 AND "
+                          f"ordinal IN ({','.join('?' * len(ordinals))}) ORDER BY ordinal", (book_id, *ordinals)):
+        code = next((k for k, v in codes.items() if v == r["id"]), None) or f"s{len(codes) + 1}"
+        codes[code] = r["id"]
+        whole = r["ordinal"] == mark
+        out.append({"p": code, "text": ("▶ " if whole else "")
+                    + match_text(r["plain_text"])[:FULL_CHARS if whole else AROUND_CHARS]})
+    return out
+
+
+def _card_text(conn: sqlite3.Connection, row: sqlite3.Row, codes: dict[str, str]) -> dict[str, Any]:
+    """A card as the book shows it: the paragraphs around where it was first seen, and the paragraphs of a few of its
+    lines further on (in the volume it was first seen in, an earlier one's card too)."""
+    at, book_id = row["known_from_ordinal"], row["book_id"]
+    lines = [r[0] for r in conn.execute(
+        "SELECT DISTINCT un.ordinal FROM utterances u JOIN units un ON un.id=u.unit_id WHERE u.speaker_id_nullable=? "
+        "AND un.book_id=? ORDER BY un.ordinal LIMIT ?", (row["id"], book_id, SAME_LINES)) if abs(r[0] - at) > CONTEXT_UNITS]
+    out: dict[str, Any] = {"first_seen": _coded(conn, book_id, list(range(at - CONTEXT_UNITS, at + CONTEXT_UNITS + 1)),
+                                                at, codes)}
+    if lines:
+        out["lines"] = [p for o in lines for p in _coded(conn, book_id, [o], o, codes)]
+    return out
+
+
+def _rests_on(item: dict[str, Any], a: Any) -> bool:
+    """A same-person answer that changes the cards cites at least one of the paragraphs it was shown."""
+    return item.get("kind") != "same_person" or a.answer.strip() == "unknown" or any(
+        x in item.get("_codes", {}) for x in a.evidence)
 
 
 def question_items(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
@@ -352,7 +425,8 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
     from ..memory.db import utcnow as _now
 
     for a in parsed.items:
-        if (seen := by_ref.get(a.ref)) is not None and seen.get("_fp") and answer_valid(seen, a.answer.strip()):
+        if (seen := by_ref.get(a.ref)) is not None and seen.get("_fp") and answer_valid(seen, a.answer.strip()) \
+                and _rests_on(seen, a):  # an answer without the passage it rests on is asked again
             fp = seen["_fp_all"] if a.answer.strip() == "unknown" and seen.get("_fp_all") else seen["_fp"]
             conn.execute("INSERT OR REPLACE INTO verify_answers(book_id, ref, fingerprint, answer, created_at) VALUES "
                          "(?,?,?,?,?)", (book_id, a.ref, fp, a.answer.strip()[:120], _now()))
@@ -451,6 +525,19 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             if answer in item["candidates"] and answer != key:  # 「姉ちゃん」 in the sister's story is 高木
                 _narrator_is(conn, book_id, key, answer)
                 stats["identities_merged"] = stats.get("identities_merged", 0) + 1
+        elif kind == "s":  # a card known by words other cards have: one of them, or someone else (ADR-103)
+            c = conn.execute("SELECT * FROM characters WHERE id=? AND book_id=?", (key, book_id)).fetchone()
+            if c is None or not repo.may_be(c) or not answer_valid(item, answer) or not _rests_on(item, a) \
+                    or answer == "unknown":
+                left = "same_person_open" if answer == "unknown" else "ignored"
+                stats[left] = stats.get(left, 0) + 1
+                continue  # stays marked: asked again when the card or the cards it may be change
+            if answer == "different":
+                conn.execute("UPDATE characters SET may_be_json='[]', updated_at=? WHERE id=?", (utcnow(), key))
+                stats["same_person_different"] = stats.get("same_person_different", 0) + 1
+            else:  # the same person: one card from here on, its lines and memory moved over
+                _same_as(conn, book_id, key, answer)
+                stats["same_person_merged"] = stats.get("same_person_merged", 0) + 1
         elif kind == "p":
             if answer.startswith("same:") and answer[5:].strip() in item["candidates"]:
                 repo.merge_characters(conn, answer[5:].strip(), key)  # one group known by two descriptions
@@ -499,3 +586,24 @@ def _narrator_is(conn: sqlite3.Connection, book_id: str, placeholder: str, named
         record_link(conn, book_id, form, c["canonical_name"], "alias" if form != c["canonical_name"] else "official",
                     origin="narrator_match", status="accepted", unit_id=unit[0] if unit else None, quote=None,
                     ordinal=c["known_from_ordinal"])
+
+
+def _same_as(conn: sqlite3.Connection, book_id: str, card: str, other: str) -> None:
+    """The second look found the card known by other cards' words to be ``other`` (ADR-103): folded into it, lines and
+    memory with it. When ``other`` was first seen later than this card, its own names stay hidden until its own first
+    appearance: only the words this card was known by are known from here (ADR-032)."""
+    from ..memory.entities import record_link
+    from ..series import pos
+
+    c = conn.execute("SELECT * FROM characters WHERE id=?", (card,)).fetchone()
+    o = conn.execute("SELECT * FROM characters WHERE id=?", (other,)).fetchone()
+    if c is None or o is None:
+        return
+    later = pos(conn, o["book_id"], o["known_from_ordinal"]) > pos(conn, c["book_id"], c["known_from_ordinal"])
+    mine = {c["canonical_name"], *json.loads(c["aliases_json"] or "[]")}
+    own = [f for f in [o["canonical_name"], *json.loads(o["aliases_json"] or "[]")] if f not in mine]
+    repo.merge_characters(conn, other, card)
+    for form in own if later else []:
+        record_link(conn, book_id, form, o["canonical_name"], "alias" if form != o["canonical_name"] else "official",
+                    origin="same_person", status="accepted", unit_id=o["known_from_unit_id"], quote=None,
+                    ordinal=o["known_from_ordinal"])

@@ -40,7 +40,9 @@ def alias_map(rows: list[sqlite3.Row]) -> dict[str, str]:
 
 def upsert_character(conn: sqlite3.Connection, book_id: str, name_ja: str, *, name_zh: str | None,
                      aliases: list[str], unit_id: str, ordinal: int, origin: str) -> tuple[str, bool]:
-    row = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE} AND canonical_name=?", (book_id, name_ja)).fetchone()
+    # a labelled card (ADR-103) is never the card a name finds: it is someone known by words other cards have
+    row = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE} AND canonical_name=? AND label=''",
+                       (book_id, name_ja)).fetchone()
     cid = row["id"] if row else character_id_for(book_id, name_ja)
     if row:
         # seen earlier in the story (e.g. volume 1 translated after volume 2): move the first appearance back
@@ -61,6 +63,53 @@ def upsert_character(conn: sqlite3.Connection, book_id: str, name_ja: str, *, na
         (cid, book_id, name_ja, name_zh, json.dumps([a for a in aliases if a != name_ja], ensure_ascii=False),
          unit_id, ordinal, "partial", origin, utcnow(), utcnow()))
     return cid, True
+
+
+def unconfirmed_card(conn: sqlite3.Connection, book_id: str, words: str, *, aliases: list[str], may_be: list[str],
+                     unit_id: str, ordinal: int, is_group: bool, origin: str) -> tuple[str, bool]:
+    """A card for a person the model reads as new but knows only by words other cards have (several unnamed mothers,
+    each 「母親」 in the book): named by those words, as the book names them, and marked as maybe one of ``may_be`` —
+    the second look asks the model which, or whether someone else (ADR-103). The program does not pick.
+
+    Its ``label`` (「3」: the third card known by these words when it was made) only tells the cards apart where a
+    person picks among them (``card_label``); it is not the book's words, so it is never a name or an alias, never a
+    glossary term and never sent as a name. Reading the scene again finds the card it made there (same words, same
+    first paragraph). Returns (id, created)."""
+    row = conn.execute(f"SELECT id FROM characters WHERE {SERIES_SCOPE} AND canonical_name=? AND label!='' AND "
+                       "known_from_unit_id=?", (book_id, words, unit_id)).fetchone()
+    if row is not None:
+        conn.execute("UPDATE characters SET may_be_json=?, updated_at=? WHERE id=?",
+                     (json.dumps(may_be), utcnow(), row[0]))
+        return str(row[0]), False
+    holders = sum(1 for c in characters(conn, book_id) if words == c["canonical_name"] or words in json.loads(
+        c["aliases_json"] or "[]"))
+    taken = {r[0] for r in conn.execute(f"SELECT label FROM characters WHERE {SERIES_SCOPE} AND canonical_name=?",
+                                        (book_id, words))}
+    n = max(holders, 1) + 1
+    while str(n) in taken:
+        n += 1
+    cid = character_id_for(book_id, f"{words}\0{n}")
+    conn.execute(
+        "INSERT INTO characters(id, book_id, canonical_name, display_name_zh, aliases_json, known_from_unit_id, "
+        "known_from_ordinal, status, origin, created_at, updated_at, is_group, label, may_be_json) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (cid, book_id, words, None, json.dumps([a for a in aliases if a != words], ensure_ascii=False), unit_id,
+         ordinal, "partial", origin, utcnow(), utcnow(), int(is_group), str(n), json.dumps(may_be)))
+    return cid, True
+
+
+def card_label(c: Any, name: str | None = None) -> str:
+    """How a person picking among cards tells them apart (the web page, a report): the card's name, and for a card
+    known by words other cards have, its number (「母親（3）」). Never sent to a model as a name, never a glossary term,
+    never in a translation (ADR-103)."""
+    shown = name or c["display_name_zh"] or c["canonical_name"]
+    label = c["label"] if "label" in c.keys() else ""
+    return f"{shown}（{label}）" if label else shown
+
+
+def may_be(c: Any) -> list[str]:
+    """The cards an unconfirmed card may be the same person as (ADR-103); empty once the second look answered."""
+    return [str(x) for x in json.loads((c["may_be_json"] if "may_be_json" in c.keys() else None) or "[]")]
 
 
 def ensure_glossary(conn: sqlite3.Connection, book_id: str, source: str, target: str, *, category: str,
@@ -253,6 +302,12 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
         conn.execute("UPDATE characters SET book_id=?, known_from_unit_id=?, known_from_ordinal=? WHERE id=?",
                      (drop["book_id"], drop["known_from_unit_id"], drop["known_from_ordinal"], keep_id))
     conn.execute("DELETE FROM characters WHERE id=?", (drop_id,))
+    # cards marked as maybe the dropped one (ADR-103) may now be the kept one; a card is never maybe itself
+    for row in conn.execute("SELECT id, may_be_json FROM characters WHERE instr(may_be_json, ?) > 0",
+                            (drop_id,)).fetchall():
+        ids = [keep_id if x == drop_id else x for x in json.loads(row["may_be_json"])]
+        conn.execute("UPDATE characters SET may_be_json=? WHERE id=?",
+                     (json.dumps([x for x in dict.fromkeys(ids) if x != row["id"]]), row["id"]))
     refresh_profiles(conn, keep["book_id"])
 
 

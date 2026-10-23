@@ -1184,3 +1184,13 @@ open workspace/eval/<timestamp>/report.html
 
 ## ADR-101 第五輪審閱修正（2026-10-23，分支 combo-check-2026-10-23）
 - `scene.apply_scene_analysis`：這一場以前沒有卡有這個寫法時，看所有卡（`owners`，含後面才出現的）：只有一張才是它，兩張以上拒絕。測試：`test_entities.py::test_words_only_cards_known_later_have_are_one_of_them_only_when_one_has_them`。重讀時別名跟著卡提早顯示的既有問題記在 todo 與 ADR-101 限制，沒改。847 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 幾張卡都有的寫法，新人物另開一張標「可能是同一人」的卡（2026-10-23，分支 unnamed-placeholders-2026-10-23）
+- migration 37：重建 `characters`，多 `label`（程式給的編號，一般的卡是空字串）與 `may_be_json`（可能是哪幾張卡），唯一鍵改為（書、卡名、`label`）。`db.migrate` 的 `REBUILDS`：重建被外鍵指向的資料表時暫時關掉外鍵、結束前比對 `foreign_key_check`。
+- `scene.apply_scene_analysis`：寫法是兩張以上看得到的卡（或沒有看得到的、兩張以上後面才出現的卡）的寫法時，不再拒絕，改由 `repository.unconfirmed_card` 另開一張卡（卡名是原文的寫法、`label`、`may_be_json`；重讀同一場找回同一張），台詞照常有說話者；模型的 `same_as_ref` 指向其中一張時就是那張。寫法不在證據、別名也不在、但有兩張以上看得到的卡有它時也一樣。場景紀錄 `state_json.unconfirmed_cards`（`RECORD_ONLY`）。揭曉名字時標記留到有名字的卡上。
+- 覆核：`verify.same_person_items`（`s:<卡>`，每段有代號的第一次出現段落與台詞段落）、`answer_valid`、`apply`（某張卡 → `_same_as` 合併，晚出現的卡自己的名字以原本位置記連結；`different` → 清掉標記；`unknown` 留著；沒引段落的回答不採用也不記為答過）；有標記的卡不另問 `identity`；`_names` 同名的卡加「〔初見：…〕」。提示詞 `verify` 多 `same_person`。
+- 分辨同名的卡：`visibility.first_seen`、`shared_names`；翻譯的人物卡（`retrieval.memory_context`）與讀場景、整理記憶的 `known_characters` 對同名的卡附 `first_seen`，翻譯的台詞附 `speaker_id`；提示詞 `translate`、`scene_analyze`、`scene_read`、`memory_update` 說明這兩個欄位。標籤不送給模型。
+- 只找一般的卡：`upsert_character`、`entities.ensure_entity`／`character_for_form`／`reconcile_characters`、`workspace` 系列合併、`cache.glossary_entries` 的別名、覆核揭曉合併的卡、`codex.build_index`；`forget_scene_cards` 對有標籤的卡不刪名詞表、清掉其他卡指向它的標記；`merge_characters` 把指向被併卡的標記改指保留的卡。
+- 網頁：角色清單與角色頁顯示「母親（3）」（`repository.card_label`）與「身分未確認：可能和…是同一人」。
+- 測試：`tests/integration/test_unconfirmed_cards.py`（新，6 個：建卡與標記、標籤不進名字／名詞表／請求、覆核答同一人合併與台詞搬移、答不同清掉標記與 unknown 留著、揭曉名字只從揭曉處顯示、migration 重建保留資料與外鍵）；`test_entities.py` 三個 ADR-101 測試改成新行為。853 passed、5 skipped；ruff、mypy 通過。
+- 重現：`source .venv/bin/activate && pytest tests/integration/test_unconfirmed_cards.py tests/integration/test_entities.py`。

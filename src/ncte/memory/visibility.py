@@ -156,3 +156,24 @@ def visible_names(conn: sqlite3.Connection, book_id: str, upto: int,
     forms_at = form_positions(conn, book_id) if forms_at is None else forms_at
     return {c["id"]: v["name_zh"] or v["name_ja"] for c in visible_characters(conn, book_id, upto)
             if (v := character_view(conn, book_id, c, upto, forms_at)) is not None}
+
+
+FIRST_SEEN_CHARS = 60
+
+
+def first_seen(conn: sqlite3.Connection, c: Any) -> str:
+    """The opening of the paragraph a card was first seen in: what tells two cards the book calls by the same words
+    apart (two unnamed mothers, each 「母親」) where a model must pick one — the book's own text, never a label or a
+    name the program made up (ADR-103). Never after the card's first appearance, so it reveals nothing."""
+    from ..epub.units import match_text
+
+    row = conn.execute("SELECT plain_text FROM units WHERE id=?", (c["known_from_unit_id"],)).fetchone()
+    return match_text(row[0]).strip(" 　")[:FIRST_SEEN_CHARS] if row is not None else ""
+
+
+def shared_names(names: dict[str, str]) -> set[str]:
+    """The ids whose name another id in ``names`` has too (cards told apart by ``first_seen``, ADR-103)."""
+    seen: dict[str, int] = {}
+    for n in names.values():
+        seen[n] = seen.get(n, 0) + 1
+    return {cid for cid, n in names.items() if seen[n] > 1}

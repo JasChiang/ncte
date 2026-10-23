@@ -132,8 +132,9 @@ def chapters(conn: sqlite3.Connection, book: Book) -> list[dict[str, Any]]:
 def units(conn: sqlite3.Connection, book: Book, *, start: int | None = None, end: int | None = None,
           filt: str = "all", limit: int = 400) -> dict[str, Any]:
     best = latest_texts(conn, book.id)
-    names = {r["id"]: r["display_name_zh"] or r["canonical_name"]
-             for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book.id,))}
+    from ..memory.repository import card_label
+
+    names = {r["id"]: card_label(r) for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book.id,))}
     q = ("SELECT * FROM units WHERE book_id=? AND translatable=1 AND kind IN ('text','heading') AND spine_index IS NOT NULL")
     params: list[Any] = [book.id]
     if start is not None and end is not None:
@@ -339,7 +340,12 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
                     "info": cv == here and info(c["known_from_ordinal"])}  # earlier volumes: never book matter here
         if c["is_narrator"]:
             out[cid]["narrator"] = True
-        from ..memory.repository import impressions_of
+        from ..memory.repository import card_label, impressions_of, may_be
+
+        if c["label"]:  # one of several cards the book calls by the same words: told apart here only (ADR-103)
+            out[cid]["label"] = card_label(c, out[cid]["zh"])
+            if open_ := [x for x in may_be(c) if x in chars]:
+                out[cid]["may_be"] = open_  # not yet known whether this is one of those people (the second look asks)
 
         stretches = impressions_of(conn, cid)
         if stretches:

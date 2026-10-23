@@ -382,8 +382,9 @@ def _merge_duplicates(conn: sqlite3.Connection, moved: str) -> dict[str, int]:
         loser = other if (g["verified"] and not other["verified"]) else g
         conn.execute("DELETE FROM glossary WHERE id=?", (loser["id"],))
         merged["glossary_merged"] += 1
-    for c in conn.execute("SELECT * FROM characters WHERE book_id=?", (moved,)).fetchall():
-        other = conn.execute("SELECT * FROM characters WHERE book_id!=? AND canonical_name=? AND book_id IN "
+    # cards known only by other cards' words (ADR-103) are not the same person by their words: they stay apart
+    for c in conn.execute("SELECT * FROM characters WHERE book_id=? AND label=''", (moved,)).fetchall():
+        other = conn.execute("SELECT * FROM characters WHERE book_id!=? AND canonical_name=? AND label='' AND book_id IN "
                              "(SELECT id FROM books WHERE series_id=(SELECT series_id FROM books WHERE id=?))",
                              (moved, c["canonical_name"], moved)).fetchone()
         if other is None:

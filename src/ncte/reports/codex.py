@@ -38,8 +38,11 @@ def _book_labels(conn: sqlite3.Connection, book_id: str) -> dict[float, str]:
 def build_index(conn: sqlite3.Connection, book_id: str, upto: Pos = INF_POS) -> list[dict[str, Any]]:
     units = [u for u in _series_units(conn, book_id) if u[0] < upto]
     ents = {r["id"]: r for r in conn.execute(f"SELECT * FROM entities WHERE {SERIES_SCOPE}", (book_id,))}
-    chars = {r["canonical_name"]: r for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,))}
-    cname = {r["id"]: r["display_name_zh"] or r["canonical_name"] for r in chars.values()}
+    every = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,)).fetchall()
+    # a name's card is the one named so, not one only known by other cards' words (ADR-103: those come first, so the
+    # card named so is the one kept)
+    chars = {r["canonical_name"]: r for r in sorted(every, key=lambda r: r["label"] == "")}
+    cname = {r["id"]: r["display_name_zh"] or r["canonical_name"] for r in every}
     vols = volumes(conn)
     called: dict[str, list[dict[str, Any]]] = {}  # addressee id → forms others (or they themself) use
     for a in conn.execute(f"SELECT * FROM address_terms WHERE {SERIES_SCOPE}", (book_id,)):

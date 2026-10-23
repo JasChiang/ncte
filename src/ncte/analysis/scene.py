@@ -205,7 +205,7 @@ MIN_FORM_LEN = 2  # words a person is known by, besides a name the model gives: 
 # program took for an earlier card by the words it gives (``matched_by_words``), and the label the model gave a person
 # the book does not name (``model_labels``: the model's description, not the book's words — never a name, an alias,
 # evidence or a glossary term)
-RECORD_ONLY = ("matched_by_words", "model_labels")
+RECORD_ONLY = ("matched_by_words", "model_labels", "unconfirmed_cards")
 
 
 _KIND_ORDER = ("name", "nickname", "title", "description")
@@ -259,8 +259,8 @@ def forget_scene_cards(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Ro
                "(x.ordinal NOT BETWEEN ? AND ? OR u.status='human_verified')", cid, lo, hi) \
                 or has("SELECT 1 FROM character_gender WHERE character_id=? AND origin='human'", cid) \
                 or has("SELECT 1 FROM naming_proposals WHERE kind='character' AND ref=? AND status='decided'", cid) \
-                or has("SELECT 1 FROM glossary WHERE book_id=? AND category='character' AND source_term=? AND "
-                       "(verified=1 OR origin='user')", book_id, c["canonical_name"]) \
+                or (not c["label"] and has("SELECT 1 FROM glossary WHERE book_id=? AND category='character' AND "
+                                           "source_term=? AND (verified=1 OR origin='user')", book_id, c["canonical_name"])) \
                 or has("SELECT 1 FROM relations WHERE (a_id=? OR b_id=?) AND origin!='llm'", cid, cid):
             continue
         memory = [("SELECT 1 FROM facts WHERE (subject=? OR object_ref=?) AND retracted_by IS NULL AND "
@@ -292,9 +292,15 @@ def forget_scene_cards(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Ro
                     "DELETE FROM group_members WHERE group_id=? OR member_id=?",
                     "DELETE FROM relations WHERE a_id=? OR b_id=?"):
             conn.execute(sql, (cid, cid))
-        conn.execute("DELETE FROM glossary WHERE book_id=? AND category='character' AND source_term=? AND verified=0 AND "
-                     "coalesce(origin,'')!='user'", (book_id, c["canonical_name"]))
+        if not c["label"] and not has(f"SELECT 1 FROM characters WHERE {SERIES_SCOPE} AND canonical_name=? AND id!=?",
+                                      book_id, c["canonical_name"], cid):
+            # the words' entry; a card known by other cards' words (ADR-103) never made one, and the others keep it
+            conn.execute("DELETE FROM glossary WHERE book_id=? AND category='character' AND source_term=? AND verified=0 "
+                         "AND coalesce(origin,'')!='user'", (book_id, c["canonical_name"]))
         conn.execute("DELETE FROM characters WHERE id=?", (cid,))
+        for row in conn.execute("SELECT id, may_be_json FROM characters WHERE instr(may_be_json, ?) > 0", (cid,)).fetchall():
+            conn.execute("UPDATE characters SET may_be_json=? WHERE id=?",
+                         (json.dumps([x for x in json.loads(row[1]) if x != cid]), row[0]))
         dropped.append(cid)
     return dropped
 
@@ -327,15 +333,18 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
     extra.update(story_so_far(conn, book_id, scene))
     if "kind" in scene.keys() and scene["kind"] and scene["kind"] != "present":
         extra["scene_kind"] = scene["kind"]  # flashback / parallel / summary / other, as the scene was cut
+    views = [(c, v) for c in known if (v := vis.character_view(conn, book_id, c, scene["start_ordinal"] - 1, forms_at))]
+    # cards the book calls by the same words (two unnamed mothers): told apart by where each was first seen (ADR-103)
+    shared = vis.shared_names({c["id"]: v["name_ja"] for c, v in views})
     return {
         **extra,
         "task": "scene_analyze", "scene_id": scene["id"],
         "units": [{"unit_id": r["id"], "source": r["plain_text"]} for r in rows],
         "quotes": q_payload,
         "known_characters": [{"character_id": c["id"], **v, "speech_profile": json.loads(c["speech_profile_json"] or "{}"),
-                              **({"relations": kin[c["id"]]} if kin.get(c["id"]) else {})}
-                             for c in known
-                             if (v := vis.character_view(conn, book_id, c, scene["start_ordinal"] - 1, forms_at))],
+                              **({"relations": kin[c["id"]]} if kin.get(c["id"]) else {}),
+                              **({"first_seen": vis.first_seen(conn, c)} if c["id"] in shared else {})}
+                             for c, v in views],
         "glossary": [g for g in glossary if any(str(g.get("ja", "")) in f for f in seen)],
     }
 
@@ -434,6 +443,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     names_of: dict[str, list[str]] = {c["id"]: [c["canonical_name"], *json.loads(c["aliases_json"])] for c in known}
     matched: list[dict[str, str]] = []  # new characters taken for an earlier card by their words (on the record)
     labels: dict[str, str] = {}  # the model's own label of a person the book does not name, by its ref
+    unconfirmed_cards: list[dict[str, Any]] = []  # cards made for people known by several cards' words (ADR-103)
 
     def rej(item: object, reason: str) -> None:
         stats["rejected"] += 1
@@ -463,6 +473,35 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                     known_by.setdefault(f, set()).add(card["id"])
         group_cards = {c["id"] for c in known if "is_group" in c.keys() and c["is_group"]}
         reveals: list[tuple[str, str, str, Any, list[str]]] = []
+
+        def _aliases(nc: Any, name: str) -> list[str]:
+            # the model says what each alias is; a common noun (「少女」「兵士」) names anyone and is not kept
+            # (the generic word list stays as a check for the model's omissions)
+            common = {source_form(k.ja) for k in nc.alias_kinds if k.kind == "common"}
+            return [a for a in dict.fromkeys(source_form(x) for x in nc.aliases_ja)
+                    if a and a != name and len(a) <= MAX_NAME_LEN and a not in PRONOUNS and a not in common
+                    and _standalone(a, scene_text, [name, *existing_alias,
+                                                    *(source_form(x.name_ja) for x in parsed.new_characters)])]
+
+        def unconfirmed(nc: Any, name: str, first: UnitText, cards: set[str], aliases: list[str]) -> None:
+            """A new person known by words several cards have: the model's ``same_as_ref`` naming one of them is the
+            model's reading of who this is; otherwise a card of its own, named by the book's words, labelled to tell
+            it apart and marked as maybe one of those cards for the second look (ADR-103)."""
+            same = _revealed(known, book_id, nc.same_as_ref)
+            if same in cards:
+                ref_map[nc.temp_id] = same
+                names_of.setdefault(same, []).append(name)
+                matched.append({"ref": nc.temp_id, "name_ja": name, "character_id": same, "by": "same_as_ref"})
+                return
+            order = {c["id"]: i for i, c in enumerate(cards_now)}
+            cid, created = repo.unconfirmed_card(
+                conn, book_id, name, aliases=aliases, may_be=sorted(cards, key=lambda x: order.get(x, len(order))),
+                unit_id=first.id, ordinal=first.ordinal, is_group=bool(nc.group), origin="scene_analysis")
+            stats["new_characters"] += int(created)
+            stats["unconfirmed"] = stats.get("unconfirmed", 0) + 1
+            ref_map[nc.temp_id] = ref_map[cid] = cid
+            names_of[cid] = [name, *aliases]
+            unconfirmed_cards.append({"ref": nc.temp_id, "character_id": cid, "may_be": sorted(cards)})
         for nc in parsed.new_characters:
             name = source_form(nc.name_ja)  # a name quoted with its reading (婆《ばあ》) is the text's 婆
             ev_ids = [u for u in nc.evidence_unit_ids if u in unit_text]
@@ -487,6 +526,12 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                     stats["matched_by_words"] = stats.get("matched_by_words", 0) + 1
                     continue
                 said = _said_alias(nc, [unit_src[u] for u in ev_ids])
+                if said is None and ev_ids and len(cards) > 1 and not nc.other_person and not nc.period.strip():
+                    # words an earlier scene gave several people (two unnamed mothers, each 「母親」), checked where
+                    # they were read: which of them this is — or someone else — is the model's call, asked in the
+                    # second look; the person gets a card of their own meanwhile, so their lines keep a speaker
+                    unconfirmed(nc, name, next(t for t in texts if t.id in ev_ids), cards, [])
+                    continue
                 if said is None:  # none of the words the person is given is in the book: the hallucination guard
                     rej(nc.model_dump(), "name_ja not found verbatim in evidence units (possible hallucination)"
                         + ("; the words name several known characters" if len(cards) > 1 else
@@ -514,8 +559,9 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             # Seen by none, the cards first known later decide the same way: one is that person found earlier
             seen = known_by.get(name, set()) or owners.get(name, set())
             if not other and len(seen) > 1:
-                rej(nc.model_dump(), "the words name several known characters"
-                    + (" (an alias standing in for name_ja, which is not in the evidence)" if substituted else ""))
+                # several people known by these words: not for the program to pick between (ADR-101), and not a
+                # reason to lose the person either — a card of its own, marked as maybe one of them (ADR-103)
+                unconfirmed(nc, name, first, seen, _aliases(nc, name))
                 continue
             if len(seen) == 1:
                 existing_alias[name] = next(iter(seen))
@@ -544,13 +590,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                                           ordinal=first.ordinal, origin="scene_analysis")
                 names_of[existing_alias[name]] = [name]
                 continue
-            # the model says what each alias is; a common noun (「少女」「兵士」) names anyone and is not kept
-            # (the generic word list stays as a check for the model's omissions)
-            common = {source_form(k.ja) for k in nc.alias_kinds if k.kind == "common"}
-            aliases = [a for a in dict.fromkeys(source_form(x) for x in nc.aliases_ja)
-                       if a and a != name and len(a) <= MAX_NAME_LEN and a not in PRONOUNS and a not in common
-                       and _standalone(a, scene_text, [name, *existing_alias,
-                                                       *(source_form(x.name_ja) for x in parsed.new_characters)])]
+            aliases = _aliases(nc, name)
             proposed_zh = nc.proposed_name_zh.strip()[:MAX_NAME_LEN] or None
             # described first and named in the same scene (「長い銀髪の美しい女性」 … 「エレナ」): the model marks the
             # words it was introduced by as a description and the name among the aliases; the person is known by the
@@ -585,11 +625,14 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         from ..memory.entities import record_link
 
         for cid, same, name, first, _ev in reveals:
-            old = conn.execute("SELECT canonical_name FROM characters WHERE id=?", (same,)).fetchone()
+            old = conn.execute("SELECT * FROM characters WHERE id=?", (same,)).fetchone()
             if old is None:
                 continue
             own = [name, *json.loads(conn.execute("SELECT aliases_json FROM characters WHERE id=?", (cid,)).fetchone()[0])]
             repo.merge_characters(conn, cid, same)
+            if open_ := [x for x in repo.may_be(old) if x != cid]:
+                # a name tells who she is called, not which of the cards with the same words she is: still asked
+                conn.execute("UPDATE characters SET may_be_json=? WHERE id=?", (json.dumps(open_), cid))
             # the new name and its own aliases (「王女」) are known from the reveal, not from the description's scene
             # (the description itself stays known from its own scene)
             for form in own:
@@ -797,6 +840,8 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
              "quotes": len(quotes), "run_id": run_id}
     if matched:
         state["matched_by_words"] = matched
+    if unconfirmed_cards:
+        state["unconfirmed_cards"] = unconfirmed_cards
     if kept := [{"character_id": ref_map[r], "label": lb} for r, lb in labels.items() if r in ref_map]:
         state["model_labels"] = kept
     conn.execute("UPDATE scenes SET state_json=?, version=? WHERE book_id=? AND id=?",
