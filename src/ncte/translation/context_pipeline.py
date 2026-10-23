@@ -1559,7 +1559,7 @@ class ContextOrchestrator(Orchestrator):
         self.check_budget(est)
         correction = None
         model = self.model_for(stage)
-        wrong = empty = 0
+        wrong = 0
         while True:
             try:
                 parsed, _rid, mode = call_structured(
@@ -1570,18 +1570,12 @@ class ContextOrchestrator(Orchestrator):
                     self.translator.mode = mode
                 return parsed
             except EmptyAnswerError:
-                # no answer at all (a CLI turn that ended empty): nothing to correct, the same request again — two
-                # empty turns in a row happen (2026-10-21: a whole step lost to them), so a few times
-                empty += 1
-                if empty > self.EMPTY_RETRIES:
-                    raise
+                raise  # asked again in call_structured already (translator.EMPTY_RETRIES): nothing to correct
             except ModelOutputError as exc:
                 wrong += 1
                 if wrong == 2:
                     raise
                 correction = str(exc)
-
-    EMPTY_RETRIES = 3  # empty answers asked again, on top of the one corrected retry of a wrong answer
 
     LONG_SCENE = 1.5  # a scene longer than this many times max_scene_units is read in even parts (it stays one scene)
 

@@ -1137,3 +1137,8 @@ open workspace/eval/<timestamp>/report.html
 - 16 個提示詞的開頭；`reader` 的 `unclear` 標準。
 - 抽驗暫存資料：`workspace/exp/persona-ab`（四個工作區副本、`ab.yaml` 關掉校稿等步驟、`run.sh`、`mk.py` 產生盲評檔、`verdict.txt`）。
 - 測試：773 passed、5 skipped；ruff、mypy 通過。
+
+## 修正驗收沒有回答時再問（2026-10-23，分支 fix-check-unanswered-2026-10-23；ADR-100）
+- `translator.call_structured` 重問空答案（`EMPTY_RETRIES`，從 `ContextOrchestrator._llm` 移過來）；`review._check_fixes`／`_ask_fix_checks`（失敗或漏答的段落單獨再問一次）；`review._settle_fixes`、`WrittenFix`（從 `_retranslate_with_feedback` 拆出的結案流程）；`review.check_waiting_fixes`、`Orchestrator.check_waiting_fixes`、`fix_checks_asked`；migration 36 `translations.fix_json`。
+- 實際那本的資料庫（副本）：還在等驗收的 8 段都是 migration 36 之前寫入，沒有紀錄，不會被補問。
+- 測試：`tests/integration/test_fix_check_unanswered.py`（新）。780 passed、5 skipped；ruff、mypy 通過。

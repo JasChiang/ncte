@@ -19,7 +19,7 @@ from pydantic import BaseModel, ValidationError
 
 from ..config import Config, reasoning_param, reasoning_setting
 from ..epub.units import InlineSpec, for_model
-from ..errors import ContentBlockedError, ModelOutputError, RequestRejectedError
+from ..errors import ContentBlockedError, EmptyAnswerError, ModelOutputError, RequestRejectedError
 from ..llm.base import LLMClient, LLMRequest, LLMResponse, StructuredMode
 from ..llm.cost import estimate_tokens
 from ..llm.prompt_loader import Prompt, load_prompt
@@ -138,6 +138,10 @@ def parse_json_output(content: str, model: type[BaseModel],
 
 AUTO_MAX_TOKENS_FLOOR = 16384
 AUTO_MAX_TOKENS_CEIL = 65536
+# an answer that is not there (a CLI turn that ended empty) has nothing to correct: the same request again, a few
+# times — two empty turns in a row happen (2026-10-21: a whole step lost to them; ADR-088). Every step asks through
+# call_structured, so every step gets these (ADR-100), on top of the one corrected retry of a wrong answer
+EMPTY_RETRIES = 3
 
 
 # High reasoning does not scale with the payload: a fix check of 20 short items (3,000 tokens in) thought for
@@ -187,6 +191,7 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
     messages = [{"role": "system", "content": system},
                 {"role": "user", "content": for_model(json.dumps(ids.encode(payload), ensure_ascii=False))}]
     current: StructuredMode = mode
+    empty = 0
     from ..llm.base import MODEL_PARAMS
 
     known = MODEL_PARAMS.get(model)  # a step model that takes no temperature is sent none
@@ -223,6 +228,12 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
                     on_downgrade(f"json_schema rejected by provider; downgraded to json_object: {exc}")
                 continue
             raise
+        except EmptyAnswerError as exc:
+            recorder.failure(rid, exc)
+            empty += 1
+            if empty > EMPTY_RETRIES:
+                raise
+            continue
         except Exception as exc:
             recorder.failure(rid, exc)
             raise

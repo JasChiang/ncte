@@ -717,6 +717,10 @@ ALTER TABLE character_impressions ADD COLUMN toward_revealed_ordinal INTEGER;
          "someone's belief, inferred — kept with the gender, the model's reading", """
 ALTER TABLE character_gender ADD COLUMN basis TEXT;
 """),
+    (36, "what a fix was sent to settle (the text it replaced, the issues with their finding ids, the program's finds "
+         "in it): a check that never answered is asked again from this (ADR-100)", """
+ALTER TABLE translations ADD COLUMN fix_json TEXT;
+"""),
 ]
 
 

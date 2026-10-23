@@ -408,6 +408,7 @@ class Orchestrator:
         self.glossary: list[dict[str, Any]] = []
         self.link_revealed: dict[str, tuple[float, int]] = {}
         self.volume = 1.0
+        self.fix_checks_asked: set[int] = set()  # fixes (translation ids) whose check was asked in this process
 
     # ------------------------------------------------------------ setup
     def _note(self, msg: str) -> None:
@@ -711,6 +712,9 @@ class Orchestrator:
         self._set_run_status("running")
         try:
             self.prepare()
+            o = self.opts  # a run that sends texts back to the translator settles their checks before it ends
+            fixing = not (o.naming_only or o.gender_only or o.house_style_only or o.relations_only or o.verify_only
+                          or o.rebreak_only or o.impressions_only or o.terms_only)
             if self.opts.review_only:
                 self.review_existing()
             elif self.opts.naming_only:
@@ -738,6 +742,8 @@ class Orchestrator:
             else:
                 self.ensure_jobs()
                 self.execute()
+            if fixing and not self._stop_reason:
+                self.check_waiting_fixes()
             status = self._stop_reason or "completed"
         except KeyboardInterrupt:
             status = "interrupted"
@@ -829,6 +835,16 @@ class Orchestrator:
 
     def scan_genders(self) -> None:
         raise NCTEError("gender scan needs context mode")
+
+    def check_waiting_fixes(self) -> dict[str, int]:
+        """ADR-100: a fix still waiting for its check (a check that failed, or was cut off by a pause) is asked once
+        more before the run completes; resumed, the run asks those it left."""
+        from .review import check_waiting_fixes
+
+        stats = check_waiting_fixes(self, set(self.opts.unit_ids) if self.opts.unit_ids else None)
+        if stats.get("asked"):
+            self.log(f"  fixes waiting for their check, asked again: {stats}")
+        return stats
 
     def review(self, unit_ids: list[str]) -> None:
         from .review import review_scope

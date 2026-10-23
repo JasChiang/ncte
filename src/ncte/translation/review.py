@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import dataclass
 from typing import Any
 
 from ..analysis.split_read import call_in_parts
@@ -31,7 +32,7 @@ from ..llm.schemas import FixCheck, FixCheckOutput, ReviewOutput
 from ..memory.db import Transaction, utcnow
 from ..qa.rules import CONFIRM_RULES, CONFIRMED, Finding, worst
 from ..qa.typeset import typeset
-from .cache import glossary_hash, latest_translation, relevant_glossary, settle_translation
+from .cache import glossary_hash, latest_texts, latest_translation, relevant_glossary, settle_translation
 from .translator import BatchResult, UnitInput, call_structured
 
 SEV = {"low": "low", "medium": "medium", "high": "high"}
@@ -498,49 +499,84 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
         _record_conflicts(orch, kept, {u: feedback[u] for u in kept}, stats)
         for u in kept:
             del res.ok[u]
-    new_tid: dict[str, int] = {}
-    mark: dict[str, int | None] = {}
+    fixes: list[WrittenFix] = []
     with orch.lock, Transaction(orch.conn):
         for uid, ur in res.ok.items():
             r = by_id[uid]
+            old = current[uid]
+            # what the check needs if it does not answer now (ADR-100): the text replaced, the issues sent with their
+            # finding ids, what the program's rules found in the new text
+            record = {"before_id": old["id"] if old is not None else None, "before": before[uid],
+                      "issues": feedback[uid], "findings": [{"type": f.type, "severity": f.severity,
+                                                             "evidence": f.evidence} for f in ur.findings]}
             # not the book's text until the fix is checked
-            new_tid[uid] = int(orch.conn.execute(
+            tid = int(orch.conn.execute(
                 "INSERT INTO translations(unit_id, target_lang, text, source_hash, prompt_version, model_id, "
-                "glossary_version, mode, status, run_id, request_id, flags_json, notes_json, created_at, translator_note) "
-                "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "glossary_version, mode, status, run_id, request_id, flags_json, notes_json, created_at, translator_note, "
+                "fix_json) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (uid, orch.cfg.app.language, ur.text, r["source_hash"], orch.prompt.version_id, orch.model,
                  glossary_hash(relevant_glossary(orch.glossary, r["plain_text"])), orch.opts.mode, "needs_review",
                  orch.run_id, ur.request_id, json.dumps(ur.flags + ["review_retranslation"], ensure_ascii=False),
-                 json.dumps(ur.stored_notes(), ensure_ascii=False), utcnow(), ur.translator_note or None)).lastrowid)
+                 json.dumps(ur.stored_notes(), ensure_ascii=False), utcnow(), ur.translator_note or None,
+                 json.dumps(record, ensure_ascii=False))).lastrowid)
             # written with the new text: stopped before the check answers, the fix shows as not checked (2.7)
-            mark[uid] = orch._finding(uid, "fix_unchecked", "medium", "the fix was written; its check against the "
-                                      "source had not answered yet", translation_id=new_tid[uid])
+            mark = orch._finding(uid, "fix_unchecked", "medium", "the fix was written; its check against the "
+                                 "source had not answered yet", translation_id=tid)
+            fixes.append(WrittenFix(r, tid, mark, orch.run_id, old, before[uid],
+                                    exported_text(ur.text, ur.translator_note, "needs_review"), feedback[uid],
+                                    ur.findings))
         for uid in res.failed:
             stats["still_flagged"] += 1
             stats["pending"] += 1
             orch._finding(uid, "review_retranslation_failed", "high", res.failed[uid][:300])
+    _settle_fixes(orch, fixes, stats)
+
+
+@dataclass
+class WrittenFix:
+    """A fix written as ``needs_review``, waiting for its check: the unit, the new text (``tid``; ``after`` as it goes
+    into the book) with its ``fix_unchecked`` mark and the run that wrote it, the text it replaced (``old``, ``before``),
+    the issues it was sent to fix (with their finding ids) and what the program's rules found in it."""
+    row: sqlite3.Row
+    tid: int
+    mark: int | None
+    run_id: str
+    old: sqlite3.Row | None
+    before: str
+    after: str
+    issues: list[dict[str, Any]]
+    findings: list[Finding]
+
+
+def _settle_fixes(orch: Any, fixes: list[WrittenFix], stats: dict[str, int], *, again: bool = False) -> None:
+    """Check each fix against the source and settle it by the answer. ``again``: fixes an earlier check left without
+    an answer (ADR-100); the program's finds in the new text may be on record already and are not written twice."""
+    if not fixes:
+        return
     checking = orch.cfg.review.fix_check
     # what the word rules found in a new text goes to the fix check with it (it reads the source; 「村長」 in a line
     # that names him, a title the house style asks for): the program does not overrule the check on a word
-    word_flags = {u: [f for f in ur.findings if f.type in CONFIRM_RULES and f.severity in ("high", "error")]
-                  for u, ur in res.ok.items()} if checking else {}
-    checks = _check_fixes(orch, [(by_id[u], before[u], exported_text(res.ok[u].text, res.ok[u].translator_note,
-                                                                     "needs_review"), feedback[u], word_flags.get(u, []))
-                                 for u in res.ok]) if checking else {}
+    word_flags = {x.row["id"]: [f for f in x.findings if f.type in CONFIRM_RULES and f.severity in ("high", "error")]
+                  for x in fixes} if checking else {}
+    checks = _check_fixes(orch, [(x.row, x.before, x.after, x.issues, word_flags.get(x.row["id"], []))
+                                 for x in fixes]) if checking else {}
+    if checking:
+        orch.fix_checks_asked.update(x.tid for x in fixes)
     with orch.lock, Transaction(orch.conn):
-        for uid, ur in res.ok.items():
-            tid = new_tid[uid]
-            fids = [i["finding_id"] for i in feedback[uid] if i.get("finding_id")]
+        for x in fixes:
+            uid, tid, mark = x.row["id"], x.tid, x.mark
+            fids = [i["finding_id"] for i in x.issues if i.get("finding_id")]
             judged = word_flags.get(uid, [])
-            outcome = fix_outcome(checks.get(uid), program_high=worst(f for f in ur.findings if f not in judged) == "high",
+            outcome = fix_outcome(checks.get(uid), program_high=worst(f for f in x.findings if f not in judged) == "high",
                                   checked=checking)
             if outcome == "issue_invalid":
                 # the old text already said what the source says: it stays, the new one is not used (least
                 # intervention — two readings the source allows are not an error to fix)
                 orch.conn.execute("UPDATE translations SET status='unneeded_fix' WHERE id=?", (tid,))
                 orch.conn.executemany("UPDATE qa_findings SET status='dismissed_by_check' WHERE id=? AND status='open'",
-                                      [(f,) for f in fids + [mark[uid]] if f])
-                old = current.get(uid)
+                                      [(f,) for f in fids + [mark] if f])
+                old = orch.conn.execute("SELECT id, status FROM translations WHERE id=?",
+                                        (x.old["id"],)).fetchone() if x.old is not None else None
                 if old is not None and old["status"] == "needs_review":
                     # still waiting while another serious finding on the unit is open: the job waits with it
                     if not orch.conn.execute("SELECT 1 FROM qa_findings WHERE unit_id=? AND status='open' AND "
@@ -548,7 +584,7 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
                         settle_translation(orch.conn, old["id"])
                 else:
                     orch.conn.execute("UPDATE jobs SET status='succeeded' WHERE run_id=? AND stage='translate' AND "
-                                      "target_id=?", (orch.run_id, uid))
+                                      "target_id=?", (x.run_id, uid))
                 stats["issue_invalid"] += 1
                 stats["resolved"] += 1
                 continue
@@ -556,14 +592,17 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
                 orch.conn.execute("UPDATE translations SET status='succeeded' WHERE id=?", (tid,))
                 orch.conn.executemany(
                     "UPDATE qa_findings SET status=? WHERE id=? AND status='open'",
-                    [("resolved", f) for f in fids + [mark[uid]] if f])
+                    [("resolved", f) for f in fids + [mark] if f])
                 orch.conn.execute("UPDATE jobs SET status='succeeded' WHERE run_id=? AND stage='translate' AND "
-                                  "target_id=?", (orch.run_id, uid))
+                                  "target_id=?", (x.run_id, uid))
                 stats[outcome] += 1
                 stats["resolved"] += 1
             else:
                 if outcome == "regressed":  # the fix broke something else: the old text stays the book's
                     orch.conn.execute("UPDATE translations SET status='rejected_fix' WHERE id=?", (tid,))
+                elif again:  # waiting, as it was written, even if a look since found nothing else on it
+                    orch.conn.execute("UPDATE translations SET status='needs_review' WHERE id=? AND status='succeeded'",
+                                      (tid,))
                 stats["still_flagged"] += 1
                 stats["pending"] += 1
                 c = checks.get(uid)
@@ -571,13 +610,61 @@ def _retranslate_with_feedback(orch: Any, rows: list[sqlite3.Row], feedback: dic
                 orch.conn.execute("UPDATE qa_findings SET type=?, severity=?, evidence=? WHERE id=?",
                                   (f"fix_{outcome}", "high" if outcome in ("still_wrong", "regressed") else "medium",
                                    (f"{c.reason} {c.new_error}".strip() if c else
-                                    "the fix was not checked against the source")[:400], mark[uid]))
-            for f in ur.findings:
+                                    "the fix was not checked against the source" +
+                                    (" (asked again after the run; still no answer)" if again else ""))[:400], mark))
+            for f in x.findings:
                 if f.severity in ("high", "medium"):
-                    fid = orch._finding(uid, f"after_review:{f.type}", f.severity, f.evidence, translation_id=tid)
+                    # a check that failed before wrote these already (a pause cut off before them did not)
+                    had = orch.conn.execute(
+                        "SELECT id FROM qa_findings WHERE unit_id=? AND translation_id=? AND type=? AND evidence=? AND "
+                        "status='open'", (uid, tid, f"after_review:{f.type}", f.evidence)).fetchone() if again else None
+                    fid = had[0] if had else orch._finding(uid, f"after_review:{f.type}", f.severity, f.evidence,
+                                                           translation_id=tid)
                     if outcome == "fixed" and f in judged:  # the check saw it with the source and found no error
                         orch.conn.execute("UPDATE qa_findings SET status='dismissed_by_check' WHERE id=?", (fid,))
 
+
+def check_waiting_fixes(orch: Any, unit_ids: set[str] | None = None) -> dict[str, int]:
+    """ADR-100: fixes whose check never answered — it failed, or a pause cut it off — on texts that are still the
+    book's (the ``fix_unchecked`` mark open; a later review that found nothing may have cleared ``needs_review``, the
+    fix was still never checked against the source) are checked once more, a scene at a time, from what was
+    recorded with the fix, and settled as the first check would have settled them. A fix whose check was asked in this
+    process already (the first check and its one more try) is not asked again here; still without an answer, it stays
+    open. A fix written before the record was kept (``fix_json`` empty) cannot be put to the check and stays open."""
+    stats = new_stats(asked=0, unrecorded=0)
+    if not orch.cfg.review.fix_check:
+        return stats
+    from ..exporter import exported_text
+
+    conn: sqlite3.Connection = orch.conn
+    with orch.lock:
+        best = latest_texts(conn, orch.book.id)
+        waiting = conn.execute(
+            "SELECT t.*, f.id AS mark FROM translations t JOIN units u ON u.id=t.unit_id JOIN qa_findings f "
+            "ON f.translation_id=t.id AND f.unit_id=t.unit_id WHERE u.book_id=? AND f.type='fix_unchecked' AND "
+            "f.status='open' ORDER BY u.ordinal, t.id", (orch.book.id,)).fetchall()
+        groups: dict[str, list[WrittenFix]] = {}
+        for t in waiting:
+            uid = t["unit_id"]
+            # a newer text (another fix, a person's) is the book's now: this one is history
+            if best.get(uid) is None or best[uid]["id"] != t["id"] or t["id"] in orch.fix_checks_asked or (
+                    unit_ids is not None and uid not in unit_ids):
+                continue
+            if t["fix_json"] is None:
+                stats["unrecorded"] += 1
+                continue
+            rec = json.loads(t["fix_json"])
+            row = conn.execute("SELECT * FROM units WHERE id=?", (uid,)).fetchone()
+            old = conn.execute("SELECT * FROM translations WHERE id=?",
+                               (rec["before_id"],)).fetchone() if rec["before_id"] is not None else None
+            groups.setdefault(row["scene_id"] or "", []).append(WrittenFix(
+                row, t["id"], t["mark"], t["run_id"], old, rec["before"],
+                exported_text(t["text"], t["translator_note"], "needs_review"), rec["issues"],
+                [Finding(f["type"], f["severity"], f["evidence"], uid) for f in rec["findings"]]))
+    for group in groups.values():  # one scene at a time, as the fixes were made
+        stats["asked"] += len(group)
+        _settle_fixes(orch, group, stats, again=True)
+    return stats
 
 def _record_conflicts(orch: Any, tids: dict[str, int], feedback: dict[str, list[dict[str, Any]]],
                       stats: dict[str, int]) -> None:
@@ -677,83 +764,111 @@ def _claim(x: dict[str, Any]) -> str:
     return (f"{kind}: {x.get('evidence', '')}" + (f" → {suggestion}" if suggestion else ""))[:500]
 
 
-def _check_fixes(orch: Any, fixes: list[tuple[sqlite3.Row, str, str, list[dict[str, Any]], list[Finding]]]
-                 ) -> dict[str, FixCheck]:
-    """One look per fix, against the source: did the new text fix what was found? Units the check could not answer
-    for (refused, failed, left out) are missing from the result and stay open."""
+FixItem = tuple[sqlite3.Row, str, str, list[dict[str, Any]], list[Finding]]
+
+
+def _check_fixes(orch: Any, fixes: list[FixItem]) -> dict[str, FixCheck]:
+    """One look per fix, against the source: did the new text fix what was found? A fix the check did not answer for
+    (its request failed after the empty answers asked again, or the answer left it out) is sent once more on its own,
+    as proofreading does with a paragraph left without a verdict (ADR-089, ADR-100); one the content filter refused is
+    not. Units still without an answer are missing from the result and stay open."""
     out: dict[str, FixCheck] = {}
     if not fixes:
         return out
+    prompt = load_prompt("fix_check")
+    again: list[FixItem] = []
+    failures: list[tuple[int | None, list[str]]] = []
+    for i in range(0, len(fixes), FIX_CHECK_BATCH):
+        chunk = fixes[i:i + FIX_CHECK_BATCH]
+        left, failed = _ask_fix_checks(orch, prompt, chunk, out)
+        if failed is not None:
+            failures.append((failed, [r["id"] for r, *_ in chunk]))
+        # a lone fix whose request failed would be the same request again: only a part of a larger one, or a fix
+        # the answer left out, is asked on its own
+        again += [x for x in left if len(chunk) > 1 or failed is None]
+    if again:
+        orch.log(f"  fix check: {len(again)} fix(es) without an answer, each asked once more on its own")
+    for x in again:
+        _ask_fix_checks(orch, prompt, [x], out, retry=True)
+    with orch.lock:  # a failed request whose fixes were all answered on their own lost nothing
+        orch.conn.executemany("UPDATE qa_findings SET status='resolved' WHERE id=? AND status='open'",
+                              [(fid,) for fid, units in failures if fid and all(u in out for u in units)])
+    return out
+
+
+def _ask_fix_checks(orch: Any, prompt: Any, chunk: list[FixItem], out: dict[str, FixCheck], *,
+                    retry: bool = False) -> tuple[list[FixItem], int | None]:
+    """One fix check request about ``chunk`` (halved when the content filter refuses it); the answers go into
+    ``out``. Returns the fixes asked but not answered (not the refused ones), and the ``fix_check_failed`` finding
+    when the request failed."""
     from ..analysis import proofread
     from ..memory.repository import line_relations
     from ..memory.retrieval import unit_actions
 
-    prompt = load_prompt("fix_check")
     conn: sqlite3.Connection = orch.conn
-    for i in range(0, len(fixes), FIX_CHECK_BATCH):
-        chunk = fixes[i:i + FIX_CHECK_BATCH]
+    with orch.lock:
+        items = []
+        actions = unit_actions(conn, orch.book.id, [r["id"] for r, *_ in chunk])
+        for r, before, after, issues, flags in chunk:
+            item: dict[str, Any] = {
+                "unit_id": r["id"], "source": r["source_text"], "before": before, "after": after,
+                "issues": [_claim(x) for x in issues],
+                # as far as review and the retranslation see, with the current text and who speaks
+                "around": _surroundings(conn, orch.book.id, [r])}
+            if flags:
+                item["program_flags"] = [{"rule": f.type, "evidence": f.evidence[:200]} for f in flags]
+            if lines := _lines(conn, r["id"]):  # 你／妳 and who-did-what issues need who speaks to whom
+                item["lines"] = lines
+                # how those two are related as of this paragraph: 你／您, honorifics, how heavy a form is
+                if rel := line_relations(conn, orch.book.id, r["id"], r["ordinal"], _scene_names(conn, r["id"])):
+                    item["relation"] = rel
+            if r["id"] in actions:  # who does what where the source leaves the subject out, as read
+                item["actions"] = actions[r["id"]]
+            items.append(item)
+        # the people of these lines, as known there (name, gender, narrator): the same cards proofreading reads
+        who = {x for r, *_ in chunk for x in _people(conn, r["id"])}
+        part = [{"ja": r["plain_text"], "_who": sorted(who), "_at": r["ordinal"]} for r, *_ in chunk]
+        cast = proofread.cast(conn, orch.book.id, part)
+        # the decided names of these paragraphs and how their speakers call their people, as proofreading has them
+        names_and_forms = proofread.renderings(conn, orch.book.id, part, glossary=orch.glossary,
+                                               volume=orch.volume, revealed=orch.link_revealed,
+                                               compact=orch.cfg.translation.compact_payload)
+    payload: dict[str, Any] = {"task": "fix_check", "items": items, **names_and_forms}
+    if orch.cfg.context.term_definitions:  # what the terms in these paragraphs mean, as shown there (ADR-069)
+        from ..memory.terms import definitions_for
+
         with orch.lock:
-            items = []
-            actions = unit_actions(conn, orch.book.id, [r["id"] for r, *_ in chunk])
-            for r, before, after, issues, flags in chunk:
-                item: dict[str, Any] = {
-                    "unit_id": r["id"], "source": r["source_text"], "before": before, "after": after,
-                    "issues": [_claim(x) for x in issues],
-                    # as far as review and the retranslation see, with the current text and who speaks
-                    "around": _surroundings(conn, orch.book.id, [r])}
-                if flags:
-                    item["program_flags"] = [{"rule": f.type, "evidence": f.evidence[:200]} for f in flags]
-                if lines := _lines(conn, r["id"]):  # 你／妳 and who-did-what issues need who speaks to whom
-                    item["lines"] = lines
-                    # how those two are related as of this paragraph: 你／您, honorifics, how heavy a form is
-                    if rel := line_relations(conn, orch.book.id, r["id"], r["ordinal"], _scene_names(conn, r["id"])):
-                        item["relation"] = rel
-                if r["id"] in actions:  # who does what where the source leaves the subject out, as read
-                    item["actions"] = actions[r["id"]]
-                items.append(item)
-            # the people of these lines, as known there (name, gender, narrator): the same cards proofreading reads
-            who = {x for r, *_ in chunk for x in _people(conn, r["id"])}
-            part = [{"ja": r["plain_text"], "_who": sorted(who), "_at": r["ordinal"]} for r, *_ in chunk]
-            cast = proofread.cast(conn, orch.book.id, part)
-            # the decided names of these paragraphs and how their speakers call their people, as proofreading has them
-            names_and_forms = proofread.renderings(conn, orch.book.id, part, glossary=orch.glossary,
-                                                   volume=orch.volume, revealed=orch.link_revealed,
-                                                   compact=orch.cfg.translation.compact_payload)
-        payload: dict[str, Any] = {"task": "fix_check", "items": items, **names_and_forms}
-        if orch.cfg.context.term_definitions:  # what the terms in these paragraphs mean, as shown there (ADR-069)
-            from ..memory.terms import definitions_for
+            defs = {d["ja"]: d for r, *_ in chunk for d in definitions_for(conn, orch.book.id, r["plain_text"],
+                                                                           r["ordinal"])}
+        if defs:
+            payload["term_definitions"] = list(defs.values())
+    if cast:
+        # with the way of speaking and the house style's habits, as proofreading has them: a tone or voice fix
+        # is judged against the same card it was found with
+        payload["characters"] = [{k: v for k, v in c.items() if k in ("name", "ja", "gender", "narrator", "voice",
+                                                                      "habits")} for c in cast]
+    est = orch._estimate(payload, 200 * len(items), "fix_check")
+    orch.check_budget(est)  # out of budget: the run stops; the new texts stay needs_review and the issues open
 
-            with orch.lock:
-                defs = {d["ja"]: d for r, *_ in chunk for d in definitions_for(conn, orch.book.id, r["plain_text"],
-                                                                               r["ordinal"])}
-            if defs:
-                payload["term_definitions"] = list(defs.values())
-        if cast:
-            # with the way of speaking and the house style's habits, as proofreading has them: a tone or voice fix
-            # is judged against the same card it was found with
-            payload["characters"] = [{k: v for k, v in c.items() if k in ("name", "ja", "gender", "narrator", "voice",
-                                                                          "habits")} for c in cast]
-        est = orch._estimate(payload, 200 * len(items), "fix_check")
-        orch.check_budget(est)  # out of budget: the run stops; the new texts stay needs_review and the issues open
+    def ask(pl: dict[str, Any], est: float = est) -> Any:
+        return call_structured(orch.client, orch.recorder, stage="fix_check", model=orch.model_for("fix_check"),
+                               prompt=prompt, payload=pl, mode=orch.mode_for(orch.model_for("fix_check")), cfg=orch.cfg,
+                               unit_ids=[x["unit_id"] for x in pl["items"]], est_cost=est, on_downgrade=orch._note)[0]
 
-        def ask(pl: dict[str, Any], est: float = est) -> Any:
-            return call_structured(orch.client, orch.recorder, stage="fix_check", model=orch.model_for("fix_check"),
-                                   prompt=prompt, payload=pl, mode=orch.mode_for(orch.model_for("fix_check")), cfg=orch.cfg,
-                                   unit_ids=[x["unit_id"] for x in pl["items"]], est_cost=est, on_downgrade=orch._note)[0]
-
-        blocked: list[str] = []
-        try:
-            parsed = call_in_parts(ask, payload, "items", blocked, min_part=1)
-        except FatalAPIError:
-            raise
-        except (LLMError, ModelOutputError) as exc:
-            orch._finding(None, "fix_check_failed", "medium", f"{len(items)} units: {exc}"[:400])
-            continue
-        if parsed is None:
-            continue
-        assert isinstance(parsed, FixCheckOutput)
-        asked = {x["unit_id"] for x in items} - set(blocked)
-        for c in parsed.checks:
-            if c.unit_id in asked and c.unit_id not in out:
-                out[c.unit_id] = c
-    return out
+    blocked: list[str] = []
+    try:
+        parsed = call_in_parts(ask, payload, "items", blocked, min_part=1)
+    except FatalAPIError:
+        raise
+    except (LLMError, ModelOutputError) as exc:
+        fid = orch._finding(None, "fix_check_failed", "medium",
+                            f"{len(items)} units{' (asked again on its own)' if retry else ''}: {exc}"[:400])
+        return list(chunk), fid
+    if parsed is None:
+        return [], None
+    assert isinstance(parsed, FixCheckOutput)
+    asked = {x["unit_id"] for x in items} - set(blocked)
+    for c in parsed.checks:
+        if c.unit_id in asked and c.unit_id not in out:
+            out[c.unit_id] = c
+    return [x for x in chunk if x[0]["id"] in asked and x[0]["id"] not in out], None
