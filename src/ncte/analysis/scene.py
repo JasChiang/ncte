@@ -447,7 +447,12 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         ref_map[NEW_NARRATOR] = cid
         names_of[cid] = []
     if parsed is not None:
-        existing_alias = repo.alias_map(repo.characters(conn, book_id))
+        cards_now = repo.characters(conn, book_id)
+        existing_alias = repo.alias_map(cards_now)
+        owners: dict[str, set[str]] = {}  # whose words each form is: two cards with it are not for the program to pick
+        for card in cards_now:
+            for f in [card["canonical_name"], *json.loads(card["aliases_json"])]:
+                owners.setdefault(f, set()).add(card["id"])
         forms_at = vis.form_positions(conn, book_id)
         known_by: dict[str, set[str]] = {}  # the words each person is known by so far, and whose they are
         for card in known:
@@ -501,6 +506,10 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             # words standing in for the model's name follow what the model said of who this is, as the earlier-card
             # shortcut does: another time is another person, and a group is not a person's card (or the other way)
             other = nc.other_person or (substituted and bool(nc.period.strip()))
+            if not other and len(owners.get(name, ())) > 1:  # the model's name, or the book's words standing in for it
+                rej(nc.model_dump(), "the words name several known characters"
+                    + (" (an alias standing in for name_ja, which is not in the evidence)" if substituted else ""))
+                continue
             held = conn.execute("SELECT is_group FROM characters WHERE id=?",
                                 (existing_alias[name],)).fetchone() if substituted and name in existing_alias else None
             if held is not None and not other and bool(nc.group) != bool(held[0]):

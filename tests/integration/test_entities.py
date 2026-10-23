@@ -427,3 +427,40 @@ def test_a_known_card_reached_through_an_alias_follows_the_models_word_on_who_it
         assert got != mother, other
         assert conn.execute("SELECT canonical_name FROM characters WHERE id=?", (got,)).fetchone()[0].startswith("来訪者（")
     assert read(group=True).get("new_1") != mother
+
+
+def test_words_two_cards_have_are_not_for_the_program_to_pick_between(conn, cfg, fixtures):
+    """Two earlier cards both known as 「来訪者」: a new person known in the scene by those words (standing in for a
+    name the model gave that is not in the evidence, or as the name itself) is not put on either card — rejected, with
+    the reason; one the model says is someone else (another time) still gets a card of its own."""
+    from ncte.analysis.scene import apply_scene_analysis
+    from ncte.llm.schemas import SceneAnalysisOutput
+    from ncte.memory import repository as repo
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    scenes = conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq", (book.id,)).fetchall()
+    first = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal LIMIT 1",
+                         (book.id, scenes[0]["id"])).fetchone()
+    later = scenes[-1]
+    ev = conn.execute("SELECT id FROM units WHERE book_id=? AND scene_id=? AND plain_text LIKE '%来訪者%'",
+                      (book.id, later["id"])).fetchone()[0]
+    mothers = {repo.upsert_character(conn, book.id, n, name_zh=None, aliases=["来訪者"], unit_id=first["id"],
+                                     ordinal=first["ordinal"], origin="test")[0] for n in ("甲の母", "乙の母")}
+
+    def read(**nc: object) -> dict[str, str]:
+        out = {"pov": None, "location": None, "time": None, "participants": [], "utterances": [], "actions": [],
+               "props": [], "uncertainties": [],
+               "new_characters": [{"temp_id": "new_1", "aliases_ja": ["来訪者"], "proposed_name_zh": "",
+                                   "evidence_unit_ids": [ev], **nc}]}
+        refs: dict[str, str] = {}
+        sc = conn.execute("SELECT * FROM scenes WHERE id=?", (later["id"],)).fetchone()
+        apply_scene_analysis(conn, book.id, sc, SceneAnalysisOutput.model_validate(out), refs=refs)
+        return refs
+
+    for name in ("母親", "来訪者"):
+        assert "new_1" not in read(name_ja=name), name
+    reasons = [r[0] for r in conn.execute("SELECT reason FROM memory_rejections WHERE book_id=? ORDER BY id",
+                                          (book.id,))]
+    assert reasons[0].startswith("the words name several known characters (an alias")
+    assert reasons[1] == "the words name several known characters"
+    assert read(name_ja="母親", period="前世")["new_1"] not in mothers

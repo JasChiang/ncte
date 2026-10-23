@@ -1175,3 +1175,6 @@ open workspace/eval/<timestamp>/report.html
 - `relations_pass`：以配對記下被擋的（`refused`），補問被擋的配對不列入清單。`terms_pass`：找漏掉的術語只有真的回答才算補到（`named_asked`）。`_end_step(renew=…)`：同形詞只看新譯段落時不關掉之前的 `_blocked`。
 - `_late_answers_translated`：`_after_translation` 記下當時最新譯文 id，全書機器譯文都比它新時（執行結束前、標題等也翻完之後）標 superseded。
 - 測試：`test_entities.py`（1）、`test_in_source.py`（1）、`test_pipeline_coverage.py`（5）。844 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-101 第三輪審閱修正（2026-10-23，分支 combo-check-2026-10-23）
+- `scene.apply_scene_analysis`：寫法（名字本身或代替名字的別名）屬於幾張卡時拒絕（`owners`），不再由 `alias_map` 取最早的那張；`other_person`／`period` 的照舊另建一張卡。測試：`test_entities.py::test_words_two_cards_have_are_not_for_the_program_to_pick_between`。845 passed、5 skipped；ruff、mypy 通過。
