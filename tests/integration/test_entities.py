@@ -507,3 +507,44 @@ def test_only_cards_seen_before_the_scene_decide_whose_words_these_are(conn, cfg
     assert read(name_ja="来訪者", period="前世")["new_1"] not in (seen, ahead)
     other = card("丙の母", first)  # two cards seen before the scene: a time alone still names someone else
     assert read(name_ja="来訪者", period="前世")["new_1"] not in (seen, ahead, other)
+
+
+def test_words_only_cards_known_later_have_are_one_of_them_only_when_one_has_them(conn, cfg, fixtures):
+    """No card seen before the scene has 「来訪者」: one card first known later with it is that person found earlier (a
+    re-read); two are not for the program to pick between — rejected, as for two cards seen before."""
+    import sqlite3
+
+    from ncte.analysis.scene import apply_scene_analysis
+    from ncte.llm.schemas import SceneAnalysisOutput
+    from ncte.memory import repository as repo
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    later = conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq DESC LIMIT 1", (book.id,)).fetchone()
+    tail = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal DESC LIMIT 2",
+                        (book.id, later["id"])).fetchall()
+    ev = conn.execute("SELECT id FROM units WHERE book_id=? AND scene_id=? AND plain_text LIKE '%来訪者%'",
+                      (book.id, later["id"])).fetchone()[0]
+
+    def card(name: str, at: sqlite3.Row) -> str:
+        return repo.upsert_character(conn, book.id, name, name_zh=None, aliases=["来訪者"], unit_id=at["id"],
+                                     ordinal=at["ordinal"], origin="test")[0]
+
+    def read() -> dict[str, str]:
+        out = {"pov": None, "location": None, "time": None, "participants": [], "utterances": [], "actions": [],
+               "props": [], "uncertainties": [],
+               "new_characters": [{"temp_id": "new_1", "name_ja": "母親", "aliases_ja": ["来訪者"],
+                                   "proposed_name_zh": "", "evidence_unit_ids": [ev]}]}
+        refs: dict[str, str] = {}
+        sc = conn.execute("SELECT * FROM scenes WHERE id=?", (later["id"],)).fetchone()
+        apply_scene_analysis(conn, book.id, sc, SceneAnalysisOutput.model_validate(out), refs=refs)
+        return refs
+
+    one = card("乙の母", tail[0])
+    assert all(t["ordinal"] > later["start_ordinal"] for t in tail)
+    assert read()["new_1"] == one
+    conn.execute("UPDATE characters SET known_from_unit_id=?, known_from_ordinal=? WHERE id=?",
+                 (tail[0]["id"], tail[0]["ordinal"], one))  # known later again, as before the read
+    card("丙の母", tail[1])
+    assert "new_1" not in read()
+    assert conn.execute("SELECT reason FROM memory_rejections WHERE book_id=? ORDER BY id DESC LIMIT 1",
+                        (book.id,)).fetchone()[0].startswith("the words name several known characters")

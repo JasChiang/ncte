@@ -1181,3 +1181,6 @@ open workspace/eval/<timestamp>/report.html
 
 ## ADR-101 第四輪審閱修正（2026-10-23，分支 combo-check-2026-10-23）
 - `scene.apply_scene_analysis`：寫法是否有歧義只看這一場以前看得到的卡（`known_by`），看得到的唯一一張優先於後面才出現的卡；只寫 `period` 也當另一個人。測試：`test_entities.py::test_only_cards_seen_before_the_scene_decide_whose_words_these_are`。846 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-101 第五輪審閱修正（2026-10-23，分支 combo-check-2026-10-23）
+- `scene.apply_scene_analysis`：這一場以前沒有卡有這個寫法時，看所有卡（`owners`，含後面才出現的）：只有一張才是它，兩張以上拒絕。測試：`test_entities.py::test_words_only_cards_known_later_have_are_one_of_them_only_when_one_has_them`。重讀時別名跟著卡提早顯示的既有問題記在 todo 與 ADR-101 限制，沒改。847 passed、5 skipped；ruff、mypy 通過。

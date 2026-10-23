@@ -449,7 +449,12 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     if parsed is not None:
         # every card of the series, seen or not yet (a card first read later is the same person found earlier: it
         # keeps the earliest appearance); which of them a form names here is decided by ``known_by`` below
-        existing_alias = repo.alias_map(repo.characters(conn, book_id))
+        cards_now = repo.characters(conn, book_id)
+        existing_alias = repo.alias_map(cards_now)
+        owners: dict[str, set[str]] = {}  # every card with each form, seen or not yet
+        for card in cards_now:
+            for f in [card["canonical_name"], *json.loads(card["aliases_json"])]:
+                owners.setdefault(f, set()).add(card["id"])
         forms_at = vis.form_positions(conn, book_id)
         known_by: dict[str, set[str]] = {}  # the words each person is known by so far, and whose they are
         for card in known:
@@ -505,8 +510,9 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             # (the prompt asks for a time only of someone else: 「前世」 with or without ``other_person``)
             other = nc.other_person or bool(nc.period.strip())
             # the model's name, or the book's words standing in for it, among the people seen before this scene: two
-            # cards with it are not for the program to pick between; one is the card (not one first seen later)
-            seen = known_by.get(name, set())
+            # cards with it are not for the program to pick between; one is the card (not one first seen later).
+            # Seen by none, the cards first known later decide the same way: one is that person found earlier
+            seen = known_by.get(name, set()) or owners.get(name, set())
             if not other and len(seen) > 1:
                 rej(nc.model_dump(), "the words name several known characters"
                     + (" (an alias standing in for name_ja, which is not in the evidence)" if substituted else ""))
