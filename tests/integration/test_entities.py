@@ -390,3 +390,40 @@ def test_words_of_an_earlier_card_mean_it_only_when_the_model_says_nothing_other
     reasons = [r[0] for r in conn.execute("SELECT reason FROM memory_rejections WHERE book_id=? ORDER BY id", (book.id,))]
     assert reasons[-1].endswith("the words name several known characters")
     assert reasons[0].endswith("the words name a known character the model says this is not")
+
+
+def test_a_known_card_reached_through_an_alias_follows_the_models_word_on_who_it_is(conn, cfg, fixtures):
+    """The book's words among the aliases (ADR-101) may be an earlier card's too: a past life's 「母親」 known in the
+    scene by 「来訪者」 — the present mother's other words — is not merged into her; it gets a card of its own with its
+    time (as a past one named in its evidence does), and one the model reads as a group where the card is a person is
+    not taken for that card."""
+    from ncte.analysis.scene import apply_scene_analysis
+    from ncte.llm.schemas import SceneAnalysisOutput
+    from ncte.memory import repository as repo
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    scenes = conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq", (book.id,)).fetchall()
+    first = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal LIMIT 1",
+                         (book.id, scenes[0]["id"])).fetchone()
+    later = scenes[-1]
+    ev = conn.execute("SELECT id FROM units WHERE book_id=? AND scene_id=? AND plain_text LIKE '%来訪者%'",
+                      (book.id, later["id"])).fetchone()[0]
+    mother, _ = repo.upsert_character(conn, book.id, "母親", name_zh=None, aliases=["来訪者"], unit_id=first["id"],
+                                      ordinal=first["ordinal"], origin="test")
+
+    def read(**nc: object) -> dict[str, str]:
+        out = {"pov": None, "location": None, "time": None, "participants": [], "utterances": [], "actions": [],
+               "props": [], "uncertainties": [],
+               "new_characters": [{"temp_id": "new_1", "name_ja": "母親", "aliases_ja": ["来訪者"],
+                                   "proposed_name_zh": "", "evidence_unit_ids": [ev], **nc}]}
+        refs: dict[str, str] = {}
+        sc = conn.execute("SELECT * FROM scenes WHERE id=?", (later["id"],)).fetchone()
+        apply_scene_analysis(conn, book.id, sc, SceneAnalysisOutput.model_validate(out), refs=refs)
+        return refs
+
+    assert read()["new_1"] == mother  # nothing said otherwise: the card with those words
+    for other in ({"period": "前世"}, {"other_person": True}):
+        got = read(**other)["new_1"]
+        assert got != mother, other
+        assert conn.execute("SELECT canonical_name FROM characters WHERE id=?", (got,)).fetchone()[0].startswith("来訪者（")
+    assert read(group=True).get("new_1") != mother

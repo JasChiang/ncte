@@ -442,3 +442,104 @@ def test_a_fatal_error_in_one_scenes_fix_keeps_the_fixes_the_others_finished(con
     resume_run(conn, cfg, rid, FakeLLM(responders={**RESPONDERS, "false_friends": _differs}))
     assert not conn.execute("SELECT 1 FROM qa_findings WHERE run_id=? AND type='fix_unchecked' AND status='open'",
                             (rid,)).fetchone()
+
+
+def test_what_answered_before_a_part_failed_is_kept_and_not_asked_again(conn, cfg, fixtures):
+    """[a, b, c] refused → [a] answered, [b, c] failed: the answer for a is kept and only b and c are asked again
+    (in halves), not the whole request split anew ([a, b] and [c] asked a twice, under another request)."""
+    from ncte.errors import ContentBlockedError, EmptyAnswerError
+
+    sent: list[list[str]] = []
+
+    def verify(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+        refs = [i["ref"] for i in payload["items"]]
+        sent.append(refs)
+        if len(refs) == 3:
+            raise ContentBlockedError("HTTP 403 content filter: fake PROHIBITED_CONTENT")
+        if len(refs) == 2:
+            raise EmptyAnswerError("empty answer")
+        return {"items": []}
+
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "verify": verify}),
+                            mode="context")
+    a, b, c = sent[0]
+    assert sum(a in refs for refs in sent) == 2  # the whole request (refused) and its own part, nothing more
+    assert [b] in sent and [c] in sent
+    assert _job(conn, rid, "verify")[0] == "succeeded"
+
+
+def test_a_pair_refused_when_asked_again_is_a_limit_not_left_unasked(conn, cfg, fixtures):
+    """A pair whose request failed and whose second request (the recheck) the content filter refused stayed unasked
+    for ever: the refusal counts by the pair, in either round."""
+    from ncte.errors import ContentBlockedError, EmptyAnswerError
+
+    first: list[str] = []
+
+    def answer(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+        pairs = [(p["a"], p["b"]) for p in payload["pairs"]]
+        if not first:
+            first.append(json.dumps(pairs))
+        if payload.get("recheck") and json.dumps(pairs) == first[0]:
+            raise ContentBlockedError("HTTP 403 content filter: fake PROHIBITED_CONTENT")
+        if json.dumps(pairs) == first[0]:
+            raise EmptyAnswerError("empty answer")
+        return _base("relations")(payload, req)
+
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "relations": answer}),
+                            mode="context")
+    status, cp = _job(conn, rid, "relations")
+    assert status == "succeeded" and "unasked_ids" not in cp
+    assert acceptance(conn, book.id)["limits"]["count"] >= 1
+
+
+def test_a_refused_request_for_missing_terms_is_not_answered_after_the_translation(conn, cfg, fixtures):
+    """A resume whose request for missing terms was refused got no answer: nothing was answered after the
+    translation."""
+    from ncte.errors import ContentBlockedError, EmptyAnswerError
+
+    def candidates(fail: type[Exception]) -> Any:
+        def answer(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+            if payload.get("task") == "term_candidates":
+                raise fail("HTTP 403 content filter: fake" if fail is ContentBlockedError else "empty answer")
+            return _base("terms")(payload, req)
+        return answer
+
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"],
+                            FakeLLM(responders={**RESPONDERS, "terms": candidates(EmptyAnswerError)}), mode="context")
+    assert _job(conn, rid, "terms")[1]["unasked_ids"] == ["(naming missing terms)"]
+    resume_run(conn, cfg, rid, FakeLLM(responders={**RESPONDERS, "terms": candidates(ContentBlockedError)}))
+    assert _job(conn, rid, "terms")[0] == "succeeded"
+    assert acceptance(conn, book.id)["answered_after_translation"]["count"] == 0
+
+
+def test_same_form_words_looked_at_since_a_mark_keep_earlier_refusals(conn, cfg, fixtures):
+    """A later run looks only at what was translated since: the words refused before were not looked at again, so
+    their refusal stays a listed limit."""
+    from ncte.errors import ContentBlockedError
+
+    first: list[str] = []
+
+    def refuse(payload: dict[str, Any], req: Any) -> dict[str, Any]:
+        words = [w["ja"] for w in payload["words"]]
+        if not first:
+            first.append(words[0])
+        if first[0] in words:
+            raise ContentBlockedError("HTTP 403 content filter: fake PROHIBITED_CONTENT")
+        return _base("false_friends")(payload, req)
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "false_friends": refuse}),
+                          mode="context")
+    assert {i["step"] for i in acceptance(conn, book.id)["limits"]["items"]} == {"false_friends"}
+    _, r2, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context")
+    assert _job(conn, r2, "false_friends")[0] == "succeeded"
+    assert {i["step"] for i in acceptance(conn, book.id)["limits"]["items"]} == {"false_friends"}
+
+
+def test_answers_after_the_translation_are_history_once_the_book_is_translated_with_them(conn, cfg, fixtures):
+    book, rid, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS,
+                                                                  faults={"verify": ["empty_answer"] * 99}),
+                            mode="context")
+    resume_run(conn, cfg, rid, FakeLLM(responders=RESPONDERS))
+    assert acceptance(conn, book.id)["answered_after_translation"]["count"] == 1
+    run_book(conn, cfg, fixtures["basic"], FakeLLM(responders=RESPONDERS), mode="context", force=True)
+    assert acceptance(conn, book.id)["answered_after_translation"]["count"] == 0

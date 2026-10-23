@@ -263,3 +263,13 @@ def test_the_model_label_of_an_unnamed_person_is_kept_as_its_description_only(bo
     scene = conn.execute("SELECT * FROM scenes WHERE id=?", (scene["id"],)).fetchone()
     payload = build_memory_payload(conn, book_id, scene, [])
     assert "主人公の好敵手" not in json.dumps(payload, ensure_ascii=False)
+
+
+def test_a_memory_prop_or_name_link_is_found_in_one_paragraph(book):
+    """The scene's paragraphs were joined before looking: the heading's 強敵 and the next paragraph's reading とも made
+    「強敵とも」. Props and name links are looked for a paragraph at a time, as the scene analysis does."""
+    conn, book_id, scene, ids = book
+    assert memory_prop(conn, book_id, scene, ids, {"term": "強敵とも"}) is None
+    assert name_link(conn, book_id, scene, ids, {"term": "強敵とも", "name": SHOWN["name"],
+                                                 "quote": SHOWN["quote"]}) is None
+    assert memory_prop(conn, book_id, scene, ids, {"term": "とも"}) == "とも"

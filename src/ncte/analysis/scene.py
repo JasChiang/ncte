@@ -459,6 +459,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         for nc in parsed.new_characters:
             name = source_form(nc.name_ja)  # a name quoted with its reading (婆《ばあ》) is the text's 婆
             ev_ids = [u for u in nc.evidence_unit_ids if u in unit_text]
+            substituted = False  # known by the book's words among its aliases, not by the name the model gave
             if not _valid_name(name):
                 rej(nc.model_dump(), "invalid character name")
                 continue
@@ -489,6 +490,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 # the book's words and are not kept; the card's rendering is chosen for its words, as for any card
                 labels[nc.temp_id] = name  # kept as the model's description only (``RECORD_ONLY``)
                 name, nc = said, nc.model_copy(update={"proposed_name_zh": ""})
+                substituted = True
             first = next(t for t in texts if in_source(name, unit_src[t.id]))
             if name not in existing_alias:
                 from ..memory.entities import character_for_form
@@ -496,7 +498,16 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 via_entity = character_for_form(conn, book_id, name)
                 if via_entity:  # a known name form of an existing character (full name, nickname …)
                     existing_alias[name] = via_entity
-            if nc.other_person and (name in existing_alias or nc.period.strip()):
+            # words standing in for the model's name follow what the model said of who this is, as the earlier-card
+            # shortcut does: another time is another person, and a group is not a person's card (or the other way)
+            other = nc.other_person or (substituted and bool(nc.period.strip()))
+            held = conn.execute("SELECT is_group FROM characters WHERE id=?",
+                                (existing_alias[name],)).fetchone() if substituted and name in existing_alias else None
+            if held is not None and not other and bool(nc.group) != bool(held[0]):
+                rej(nc.model_dump(), "name_ja not found verbatim in evidence units; its words name a known character "
+                                     "the model says this is not")
+                continue
+            if other and (name in existing_alias or nc.period.strip()):
                 # 「母親」 of a past life is not the mother of this one: a card of its own, named with its time, and the
                 # bare word stays with the card it had (the reader tells them apart by the cards it is given) — also
                 # when the past one is met first in the scene, so the order of mention does not decide who is who

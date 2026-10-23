@@ -1167,3 +1167,11 @@ open workspace/eval/<timestamp>/report.html
 - 可驗收報告：`steps_complete` 不看 skipped；新增 `limits`、`answered_after_translation`（不影響可驗收），`summary` 一併列出。網頁「補問沒問到的項目」的說明。
 - `review`：`_fix_chunks`、`fix_check_chars`（修正驗收以 20 段與 2×`fix_batch_chars` 字切，依故事順序）；`_write_fixes` 遇到致命錯誤或預算用完時先寫入已完成的各場（`_write_finished`）再丟出。
 - 測試：`tests/unit/test_units.py`（1）、`tests/integration/test_in_source.py`（3）、`tests/integration/test_entities.py`（1）、`tests/integration/test_pipeline_coverage.py`（7 步驟 ×2 的參數化 2 個與另外 4 個）。837 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-101、ADR-102 第二輪審閱修正（2026-10-23，分支 combo-check-2026-10-23）
+- `scene.apply_scene_analysis`：以別名代替名字（`substituted`）時，`period` 也當成另一個人（帶時間的另一張卡），是否群體和已知卡不同就拒絕。
+- `memory_update.apply_memory_update`：道具、名稱連結的字詞一段一段找（`in_scene`），不再接成整場。
+- `split_read.call_in_parts(failures=…)`：一部分請求失敗時留下已回答的部分；`_ask_groups` 只把失敗的部分再分兩半問，兩半之間暫停就留給續跑。
+- `relations_pass`：以配對記下被擋的（`refused`），補問被擋的配對不列入清單。`terms_pass`：找漏掉的術語只有真的回答才算補到（`named_asked`）。`_end_step(renew=…)`：同形詞只看新譯段落時不關掉之前的 `_blocked`。
+- `_late_answers_translated`：`_after_translation` 記下當時最新譯文 id，全書機器譯文都比它新時（執行結束前、標題等也翻完之後）標 superseded。
+- 測試：`test_entities.py`（1）、`test_in_source.py`（1）、`test_pipeline_coverage.py`（5）。844 passed、5 skipped；ruff、mypy 通過。

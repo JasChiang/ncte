@@ -14,7 +14,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from ..epub.units import source_form
-from ..errors import ContentBlockedError
+from ..errors import ContentBlockedError, FatalAPIError, LLMError
 
 MIN_PART = 4  # units: a refused part this small is not split further
 
@@ -144,11 +144,14 @@ def _label(item: Any) -> str:
 
 
 def call_in_parts(call: Callable[[dict[str, Any]], Any], payload: dict[str, Any], key: str | tuple[str, ...],
-                  blocked: list[str], *, min_part: int = MIN_PART) -> Any:
+                  blocked: list[str], *, min_part: int = MIN_PART,
+                  failures: list[tuple[dict[str, Any], LLMError]] | None = None) -> Any:
     """``call(payload)``; when the content filter refuses it, the list under ``key`` is halved until each part goes
     through or is small enough to give up on (its items — unit ids, refs, pairs — go to ``blocked``). The parts'
     answers are merged. None when nothing went through. Several keys (``("names", "address")``): the longest list is
-    halved and the other lists go with the first half only, so nothing is asked twice."""
+    halved and the other lists go with the first half only, so nothing is asked twice. ``failures``: a part whose
+    request failed otherwise (not fatal) is kept there with its error instead of raising, so the parts that answered
+    are not lost with it (the caller asks the failed ones again)."""
     keys = (key,) if isinstance(key, str) else key
     split = max(keys, key=lambda k: len(payload.get(k) or []))
     items = payload.get(split) or []
@@ -158,10 +161,17 @@ def call_in_parts(call: Callable[[dict[str, Any]], Any], payload: dict[str, Any]
         if len(items) <= min_part:
             blocked.extend(_label(i) for k in keys for i in payload.get(k) or [])
             return None
+    except FatalAPIError:
+        raise
+    except LLMError as exc:
+        if failures is None:
+            raise
+        failures.append((payload, exc))
+        return None
     half = max(1, len(items) // 2)
     first = {**payload, split: items[:half]}
     second = {**payload, split: items[half:], **{k: [] for k in keys if k != split}}
     parts = [p for chunk in (first, second)
              if any(chunk.get(k) for k in keys)
-             and (p := call_in_parts(call, chunk, key, blocked, min_part=min_part)) is not None]
+             and (p := call_in_parts(call, chunk, key, blocked, min_part=min_part, failures=failures)) is not None]
     return merge_outputs(parts) if parts else None

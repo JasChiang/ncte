@@ -324,7 +324,7 @@ class ContextOrchestrator(Orchestrator):
         return job is not None and job["status"] in ("pending", "running")
 
     def _end_step(self, stage: str, stats: dict[str, Any], unasked: list[str], record_job: bool,
-                  extra: dict[str, Any] | None = None, answered: int | None = None) -> None:
+                  extra: dict[str, Any] | None = None, answered: int | None = None, renew: bool = True) -> None:
         """A whole-book step after reading is done: ``succeeded``, or ``partial`` when a request failed (after the tries
         every request gets, and its items asked once more in halves) and left items unasked, with them in the
         checkpoint (``unasked_ids``) for a resumed run to ask, and nothing else (ADR-102). Not answered is not looked
@@ -333,23 +333,41 @@ class ContextOrchestrator(Orchestrator):
         ``answered``: items a resumed run asked again and got answers to (None: the step was done whole, and what an
         earlier run's look at it was refused is history); when the translation has already read the book without
         them, a finding says so (``*_after_translation``) — proofreading reads the book with them, and a new run
-        translates with them. The same-form words come after the translation by design: never said of them."""
+        translates with them. The same-form words come after the translation by design: never said of them.
+        ``renew``: the step looked at everything (not only what was translated since a mark), so an earlier run's
+        refusals are history; otherwise they stay."""
         stats["unasked"] = len(unasked)
         if record_job:
             self._set_job(stage, self.book.id, "partial" if unasked else "succeeded", None,
                           {**stats, **(extra or {}), **({"unasked_ids": unasked} if unasked else {})})
-        if answered is None:
+        if answered is None and renew:
             with self.lock:
                 self.conn.execute("UPDATE qa_findings SET status='superseded' WHERE book_id=? AND type=? AND "
                                   "status='open' AND run_id!=?", (self.book.id, f"{stage}_blocked", self.run_id))
         elif answered and stage != "false_friends" and self._translated_before():
+            # the book's newest translation when they came: a paragraph translated after it had them
             self._finding(None, f"{stage}_after_translation", "low",
                           f"{answered} item(s) of {stage} were answered after the book was translated: the translation "
-                          f"did not have them (proofreading reads the book with them; a new run translates with them)")
+                          f"did not have them (proofreading reads the book with them; a new run translates with them)",
+                          translation_id=self._last_translation_id())
             self.log(f"  {stage}: {answered} item(s) answered after the translation, which did not have them")
         if unasked:
             self.log(f"  {stage}: {len(unasked)} item(s) not asked (the request failed)"
                      + (f": ncte resume --run-id {self.run_id} asks only them" if record_job else ""))
+
+    def _late_answers_translated(self) -> None:
+        """Answers a resumed run got after the translation (``*_after_translation``, marked with the book's newest
+        translation then) are history once every paragraph's machine translation is newer than that: the book has
+        been translated with them. A person's text does not count (it never read the notes); a paragraph translated
+        before them keeps them open."""
+        from .cache import latest_texts
+
+        with self.lock:
+            made = [t["id"] for t in latest_texts(self.conn, self.book.id).values() if t["status"] != "human"]
+            if made:
+                self.conn.execute("UPDATE qa_findings SET status='superseded' WHERE book_id=? AND status='open' AND "
+                                  "unit_id IS NULL AND type LIKE '%\\_after\\_translation' ESCAPE '\\' AND "
+                                  "translation_id < ?", (self.book.id, min(made)))
 
     def _translated_before(self) -> bool:
         """The translation has read the book before now: this run translated some of it, or translates nothing more
@@ -431,33 +449,37 @@ class ContextOrchestrator(Orchestrator):
         are back."""
         out: list[Asked | None] = [None] * len(payloads)
 
-        def ask(pl: dict[str, Any], blocked: list[str]) -> Any:
-            return call_in_parts(lambda p: self._llm(stage, prompt, p, [], reuse=True), pl, key, blocked, min_part=1)
+        def ask(pl: dict[str, Any], blocked: list[str], failures: list[tuple[dict[str, Any], LLMError]]) -> Any:
+            return call_in_parts(lambda p: self._llm(stage, prompt, p, [], reuse=True), pl, key, blocked, min_part=1,
+                                 failures=failures)
 
         def work(i: int) -> Asked:
             blocked: list[str] = []
-            try:
-                return ask(payloads[i], blocked), blocked, None, []
-            except FatalAPIError:
-                raise
-            except LLMError as exc:
-                error: LLMError = exc
-            items = payloads[i].get(key) or []
-            half = (len(items) + 1) // 2
-            parts = [items[:half], items[half:]] if len(items) > 1 else [items]
-            self.log(f"  {what}: a request failed ({type(error).__name__}); its {len(items)} item(s) asked once more"
-                     + (" in two halves" if len(parts) > 1 else ""))
-            got, failed = [], []
-            for part in parts:
-                try:
-                    if (parsed := ask({**payloads[i], key: part}, blocked)) is not None:
-                        got.append(parsed)
-                except FatalAPIError:
-                    raise
-                except LLMError as exc:
-                    error = exc
+            failures: list[tuple[dict[str, Any], LLMError]] = []
+            got = [p] if (p := ask(payloads[i], blocked, failures)) is not None else []
+            if not failures:
+                return (got[0] if got else None), blocked, None, []
+            # what failed (the request, or a part of it the content filter's halving made), asked once more in
+            # halves; what answered is kept and not asked again
+            again = [part for pl, _ in failures for items in [pl.get(key) or []]
+                     for part in ([items[:(len(items) + 1) // 2], items[(len(items) + 1) // 2:]] if len(items) > 1
+                                  else [items])]
+            error = failures[-1][1]
+            n = sum(len(p) for p in again)
+            self.log(f"  {what}: a request failed ({type(error).__name__}); its {n} item(s) not answered asked once "
+                     "more" + (" in halves" if len(again) > len(failures) else ""))
+            failed: list[str] = []
+            for part in again:
+                if self._stop_reason:  # paused meanwhile: left for the resumed run, as any item not asked
                     failed += [x for x in map(_label, part) if x not in blocked]
-            blocked[:] = dict.fromkeys(blocked)  # an item refused before the failure is refused again in its half
+                    continue
+                still: list[tuple[dict[str, Any], LLMError]] = []
+                if (p := ask({**payloads[i], key: part}, blocked, still)) is not None:
+                    got.append(p)
+                for pl, exc in still:
+                    error = exc
+                    failed += [x for x in map(_label, pl.get(key) or []) if x not in blocked]
+            blocked[:] = dict.fromkeys(blocked)
             return (merge_outputs(got) if got else None), blocked, error if failed else None, failed
 
         def done(i: int, r: Asked) -> None:
@@ -560,6 +582,7 @@ class ContextOrchestrator(Orchestrator):
             self.reader_pass()
         if not self._stop_reason:
             self.run_meta()
+        self._late_answers_translated()  # what this run translated and fixed had the answers it was given
 
     REVIEW_TRIES = 3  # runs a failed review is tried in before it is left for a person
 
@@ -752,6 +775,7 @@ class ContextOrchestrator(Orchestrator):
         cut: list[bool] = []  # stopped with pairs left unasked
         failed: set[str] = set()  # pairs of a request that failed, …
         answered: set[str] = set()  # … unless a later request about them (asked again) answered
+        refused: set[str] = set()  # … or refused (a known limit, in either round: never unasked)
 
         def ask(groups: list[tuple[dict[str, Any], dict[str, Any]]]) -> None:
             answers, stopped = self._ask_groups("relations", prompt, [req for req, _ in groups], "pairs", "relations")
@@ -763,6 +787,7 @@ class ContextOrchestrator(Orchestrator):
                     self._finding(None, "relations_blocked", "low",
                                   f"the content filter refused the material of {len(blocked)} pair(s)")
                 ids = {k: "|".join(v) for k, v in lookup["_pairs"].items()}
+                refused.update(ids[k] for k in blocked if k in ids)  # by the pair: the codes differ in the recheck
                 if exc is not None:  # those pairs keep no relation this time
                     self._finding(None, "relations_failed", "medium",
                                   f"{len(left)} pair(s) not asked: {str(exc)[:260]}")
@@ -792,7 +817,7 @@ class ContextOrchestrator(Orchestrator):
                                     only=None if only is None else [(p["a"], p["b"]) for p in pairs])
         counts = {"relations": n, "pairs": len(pairs), **stats} if only is None else \
             {**saved, "relations": saved.get("relations", 0) + n, "pairs_asked_again": len(pairs)}
-        self._end_step("relations", counts, sorted(failed - answered), record_job,
+        self._end_step("relations", counts, sorted(failed - answered - refused), record_job,
                        answered=None if only is None else len(answered))
         missing = stats.get("known_from_missing", 0)
         self.log(f"relations: {n} ({len(pairs)} pairs asked, {len(again)} asked again"
@@ -850,6 +875,7 @@ class ContextOrchestrator(Orchestrator):
         only = saved.pop("unasked_ids", None)  # resumed after a partial step: only what it did not ask
         unasked: list[str] = []
         named: list[str] = []
+        named_asked = 0  # the request for missing terms, answered (refused, failed or not needed: not)
         if self.cfg.context.term_candidates and (only is None or CANDIDATES in only):
             # ADR-073: terms the reading left out of the glossary
             with self.lock:
@@ -859,6 +885,7 @@ class ContextOrchestrator(Orchestrator):
                     got = self._ask_once_more("terms", load_prompt("terms_candidates"), ask[0], "naming missing terms")
                     with self.lock:
                         named = terms.take_candidates(self.conn, self.book.id, got, ask[1])
+                    named_asked = 1
                 except FatalAPIError:
                     raise
                 except ContentBlockedError as exc:  # refused again if asked again: a known limit (ADR-102)
@@ -900,7 +927,7 @@ class ContextOrchestrator(Orchestrator):
                 for k, v in terms.apply(self.conn, self.book.id, results, self.run_id).items():
                     stats[k] = stats.get(k, 0) + v
         self._end_step("terms", stats, unasked, record_job, answered=None if only is None else
-                       asked + int(CANDIDATES in only) - len(unasked) - refused)
+                       asked + named_asked - len([t for t in unasked if t != CANDIDATES]) - refused)
         self.log(f"terms: {stats}")
         return stats
 
@@ -1173,7 +1200,7 @@ class ContextOrchestrator(Orchestrator):
         self._end_step("false_friends", stats, unasked, record_job,
                        extra={"upto_translation_id": upto if upto is not None else self._last_translation_id(),
                               **({"since_translation_id": since} if since is not None else {})},
-                       answered=None if only is None else len(words) - len(unasked))
+                       answered=None if only is None else len(words) - len(unasked), renew=since is None)
         self.log(f"same-form words: {stats}")
         return stats
 

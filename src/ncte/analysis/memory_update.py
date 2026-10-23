@@ -198,7 +198,10 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
     from ..memory.entities import link
 
     stats["name_links"] = 0
-    scene_plain = "".join(text_of.values())
+
+    def in_scene(words: str) -> bool:  # a paragraph at a time: never across two (強敵 + 別人《とも》 is not 強敵とも)
+        return any(in_source(words, t) for t in text_of.values())
+
     for nl in parsed.name_links:
         ev = [u for u in nl.evidence_unit_ids if u in text_of]
         term, same_as = source_form(nl.term), source_form(nl.same_as)
@@ -207,7 +210,7 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         if not ev or not in_source(nl.evidence_quote, "".join(text_of[u] for u in ev)):
             rej(nl.model_dump(), "name link evidence_quote not found verbatim")
             continue
-        if not in_source(term, scene_plain) or (not in_source(same_as, scene_plain) and same_as not in known_terms):
+        if not in_scene(term) or (not in_scene(same_as) and same_as not in known_terms):
             rej(nl.model_dump(), "name link terms must occur verbatim in the scene (or be known forms)")
             continue
         if term == same_as or len(term) < 2:
@@ -327,7 +330,7 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
 
     for p in parsed.prop_states:
         prop = source_form(p.name_ja)  # the source's Japanese, without a reading it was quoted with
-        if not in_source(prop, scene_plain):
+        if not in_scene(prop):
             rej(p.model_dump(), "prop not mentioned in scene")
             continue
         holder = p.holder_ref if p.holder_ref in chars else None
