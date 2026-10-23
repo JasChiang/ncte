@@ -149,12 +149,17 @@ def test_same_form_words_are_asked_side_by_side_with_the_same_requests(conn, cfg
     monkeypatch.setattr(ff, "requests", requests)
     lock = threading.Lock()
     flying = [0, 0]  # in flight now, most at once
+    both = threading.Barrier(2, timeout=10)  # the first two meet only when both are in flight (not a timing guess)
+    first = [0]
 
     def answer(payload: dict[str, Any], req: Any) -> dict[str, Any]:
         with lock:
             flying[0] += 1
             flying[1] = max(flying)
-        time.sleep(0.05)
+            first[0] += 1
+            wait = first[0] <= 2
+        if wait:
+            both.wait()
         with lock:
             flying[0] -= 1
         return {"words": [{"ref": w["ref"], "verdict": "same", "reason": "t", "evidence": [w["examples"][0]["ref"]]}
