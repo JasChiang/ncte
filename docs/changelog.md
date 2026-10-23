@@ -1231,3 +1231,10 @@ open workspace/eval/<timestamp>/report.html
 - `scene.apply_scene_analysis`：揭曉合併順著同一次讀場景前面的合併找到現在的卡（`went`），已是同一張就略過、卡不在就略過，不再因為互指（A 是 B、B 是 A）或鏈（A 是 B、C 是 A）而中斷。
 - ADR-103 的表補上三個只比對字面、不是找卡的地方（編標籤號、改名前的唯一鍵檢查、敘述者佔位卡）與理由。
 - 測試：`test_unconfirmed_review.py` 新增 2 個（互指、鏈；改之前都失敗）。880 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 實測修正（2026-10-23，分支 unnamed-placeholders-2026-10-23；合成測試書的 Claude 方案實跑）
+- 整理記憶：`GlossaryCandidate`、`NameLink` 多 `character_ref`；`memory_update._card_for` 以 id 找卡（字成為它的寫法），沒有 id 時字也屬於另一時期／有標籤的卡或好幾張卡就拒絕並寫明理由，屬於一張名字找得到的卡就是那張（不另建）；名稱連結對到另一時期或有標籤的卡時不建實體連結。提示詞 `memory_update`、`scene_read` 說明 `character_ref`。
+- `merge_characters`、`fold_card_records`：敘述者佔位名（`repository.placeholder_name`）不成為別名、不帶寫法位置。
+- `segment_units`：模型在章標題後立刻切的場景點忽略（標題跟著後面的文字，人工切開照舊）；`ContextOrchestrator._no_story`：沒有正文段落的場景不送讀場景與整理記憶。
+- 整理記憶：一個字的稱呼有自己的拒絕理由。
+- 測試：`tests/integration/test_unconfirmed_realrun.py`（新，6 個；改之前都失敗）。886 passed、5 skipped；ruff、mypy 通過。

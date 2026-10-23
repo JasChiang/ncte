@@ -217,6 +217,7 @@ class GlossaryCandidate(_M):
     target_term: str
     category: Literal["character", "place", "item", "skill", "organization", "term"]
     evidence_unit_ids: list[str]
+    character_ref: str = ""  # a person's name: the known character it names (ADR-103: by id, not by the words)
 
 
 class NameLink(_M):
@@ -227,6 +228,7 @@ class NameLink(_M):
     note: str  # e.g. the wordplay behind a nickname
     evidence_unit_ids: list[str]
     evidence_quote: str
+    character_ref: str = ""  # a person's names: the known character they name (ADR-103: by id, not by the words)
 
 
 class AddressTermOut(_M):

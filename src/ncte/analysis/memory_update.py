@@ -122,6 +122,34 @@ def forget_scene(conn: sqlite3.Connection, book_id: str, sid: str, *, summaries:
         conn.execute("DELETE FROM memory_rejections WHERE book_id=? AND scene_id=?", (book_id, sid))
 
 
+def _card_for(conn: sqlite3.Connection, book_id: str, term: str, ref: str, chars: dict[str, Any], unit_id: str,
+              ordinal: int, *, also: str = "") -> tuple[str | None, str | None]:
+    """Which card a person's name the memory step reports belongs to (ADR-103): (card or None, reason it cannot be
+    told or None). The card the model names by id is that card — the words become its form, known from here. Without
+    an id the words decide only when they are not also a card's of another time or one known only by other cards'
+    words (those are found by id, never by the words), and not several cards'; words no card has: None (a new card)."""
+    if ref and ref in chars:
+        c = chars[ref]
+        aliases = json.loads(c["aliases_json"] or "[]")
+        if term not in (c["canonical_name"], *aliases):
+            conn.execute("UPDATE characters SET aliases_json=?, updated_at=? WHERE id=?",
+                         (json.dumps([*aliases, term], ensure_ascii=False), utcnow(), ref))
+            repo.note_forms(conn, ref, [term], book_id, ordinal)
+        return ref, None
+
+    def has(c: Any, w: str) -> bool:
+        return bool(w) and (w == c["canonical_name"] or w in json.loads(c["aliases_json"] or "[]"))
+
+    owners = [c for c in chars.values() if has(c, term) or has(c, also)]
+    if any(not repo.findable(c) for c in owners):
+        return None, ("the words are also those of a card of another time or of one known only by other cards' words: "
+                      "which card is not given (character_ref)")
+    held = {c["id"] for c in owners if has(c, term)}
+    if len(held) > 1:
+        return None, "several cards have these words: which card is not given (character_ref)"
+    return (next(iter(held)) if held else None), None
+
+
 def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, parsed: MemoryUpdateOutput,
                         *, run_id: str | None = None) -> dict[str, int]:
     sid = scene["id"]
@@ -193,9 +221,13 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
             continue
         first = min((u for u in ev if in_source(term, text_of[u])), key=lambda u: ordinal[u])
         if g.category == "character" and len(term) <= 24 and term not in PRONOUNS:
-            _, created = repo.upsert_character(conn, book_id, term, name_zh=g.target_term, aliases=[],
-                                               unit_id=first, ordinal=ordinal[first], origin="memory_update")
-            stats["characters"] += int(created)
+            who, why = _card_for(conn, book_id, term, g.character_ref, chars, first, ordinal[first])
+            if why:  # the words do not tell which card: left unresolved, with the reason (the rendering is kept)
+                rej(g.model_dump(), why)
+            elif who is None:  # a person no card has these words for: a card of their own
+                _, created = repo.upsert_character(conn, book_id, term, name_zh=g.target_term, aliases=[],
+                                                   unit_id=first, ordinal=ordinal[first], origin="memory_update")
+                stats["characters"] += int(created)
         if repo.ensure_glossary(conn, book_id, term, g.target_term, category=g.category,
                                 origin="memory_update", first_unit_id=first):
             stats["glossary"] += 1
@@ -229,6 +261,17 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
             repo.ensure_glossary(conn, book_id, term, nl.term_zh.strip()[:24],
                                  category=target_cat[0] if target_cat else "term", origin="memory_update",
                                  first_unit_id=first)
+        # whose names these are: the card the model names (by id); by the words only when no card of another time and no
+        # card known only by other cards' words has them (a name link joins the entity named by the words, which is
+        # always a card a name finds — the past life's 澄枝 must not join the present mother's 「母親」)
+        who, why = _card_for(conn, book_id, term, nl.character_ref, chars, first, ordinal[first], also=same_as)
+        if why:
+            rej(nl.model_dump(), why)
+            continue
+        if who is not None and not repo.findable(chars.get(who) or conn.execute(
+                "SELECT * FROM characters WHERE id=?", (who,)).fetchone()):
+            stats["name_links"] += 1  # the form is that card's now (by id); the entity named by the words is not it
+            continue
         if link(conn, book_id, term, same_as, nl.form_type, origin="llm", unit_id=first,
                 quote=source_form(nl.evidence_quote), ordinal=ordinal[first], note=nl.note[:200] or None) == "accepted":
             stats["name_links"] += 1
@@ -251,8 +294,11 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         if at.speaker_ref not in chars or at.addressee_ref not in chars:
             rej(at.model_dump(), "address term: speaker/addressee must be known character ids")
             continue
+        if len(term) < 2:  # 「母」「父」 alone names anyone: not kept as a form of address (as other forms, ADR-101)
+            rej(at.model_dump(), "address term: a single character is not kept as a form of address")
+            continue
         if not ev or len(quote) < 2 or not in_source(quote, "".join(text_of[u] for u in ev)) \
-                or not in_source(term, quote) or len(term) < 2:
+                or not in_source(term, quote):
             rej(at.model_dump(), "address term: term/evidence_quote not found verbatim")
             continue
         # the line(s) the evidence is in: a use observed there (counted once per line)

@@ -56,7 +56,10 @@ def segment_units(rows: list[sqlite3.Row], overrides: dict[str, str], max_units:
             reason = "chapter" if chapters else "document"
             decided_chapter = chapters.get(r["id"], False)
         elif decided_chapter:
-            if overrides.get(r["id"]) == "split" or breaks.get(r["id"]) == "llm":
+            # a model's cut right after the chapter heading would leave the heading a scene of its own (read and
+            # summarised alone): the heading stays with the text after it, as in a chapter the model did not cut. A
+            # person's split is kept
+            if overrides.get(r["id"]) == "split" or (breaks.get(r["id"]) == "llm" and cur is not None and cur.has_body):
                 reason = "manual" if overrides.get(r["id"]) == "split" else "llm"
         elif r["resource_href"] != prev_href:
             reason = "document"

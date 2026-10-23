@@ -140,7 +140,8 @@ def fold_card_records(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> N
     """A card folded into another: its forms keep where they were first seen, its notes come along."""
     for f, b, o in conn.execute("SELECT form, book_id, ordinal FROM character_forms WHERE character_id=?",
                                 (drop_id,)).fetchall():
-        note_forms(conn, keep_id, [f], b, o)
+        if not placeholder_name(f):
+            note_forms(conn, keep_id, [f], b, o)
     conn.execute("DELETE FROM character_forms WHERE character_id=?", (drop_id,))
     conn.execute("UPDATE character_notes SET character_id=? WHERE character_id=?", (keep_id, drop_id))
 
@@ -174,6 +175,11 @@ def other_time_card(conn: sqlite3.Connection, book_id: str, words: str, period: 
         (cid, book_id, words, None, "[]", unit_id, ordinal, "partial", origin, utcnow(), utcnow(), label, period))
     note_forms(conn, cid, [words], book_id, ordinal)
     return cid, True
+
+
+def placeholder_name(name: str) -> bool:
+    """The card name the program gives an unnamed first-person narrator (「（敘述者）」「（敘述者2）」, ADR-045)."""
+    return name.startswith("（敘述者")
 
 
 def label_of(c: Any) -> str:
@@ -440,7 +446,8 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
     conn.execute("UPDATE naming_proposals SET ref=? WHERE kind='character' AND ref=?", (keep_id, drop_id))
     aliases = json.loads(keep["aliases_json"])
     for a in [drop["canonical_name"], *json.loads(drop["aliases_json"])]:
-        if a and a != keep["canonical_name"] and a not in aliases:
+        # the unnamed narrator's placeholder (「（敘述者）」) is the program's, never a name of the person (ADR-103)
+        if a and a != keep["canonical_name"] and a not in aliases and not placeholder_name(a):
             aliases.append(a)
     conn.execute("UPDATE characters SET aliases_json=?, updated_at=? WHERE id=?",
                  (json.dumps(aliases, ensure_ascii=False), utcnow(), keep_id))

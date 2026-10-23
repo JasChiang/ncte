@@ -644,12 +644,33 @@ class ContextOrchestrator(Orchestrator):
             if self._stop_reason:
                 break
             self.log(f"read {sid} ({i + 1}/{len(due)})")
+            if self._no_story(sid):
+                continue
             if self.cfg.context.read_in_one_request and self.stage_scene_read(sid):
                 continue
             self.stage_scene_analyze(sid)
             self.stage_memory_update(sid)
         if due:
             self.refresh_readings()
+
+    def _no_story(self, sid: str) -> bool:
+        """A scene with no story paragraph (a chapter heading alone, where a person split it off or the chapter has
+        nothing else) is not sent to be read: there is nothing to analyse or remember. It gets the program's analysis
+        (no lines, no people) and both reading steps are done. A model's cut right after a heading no longer makes
+        such a scene (``segment_units``)."""
+        with self.lock:
+            if self.conn.execute("SELECT 1 FROM units WHERE book_id=? AND scene_id=? AND kind='text' LIMIT 1",
+                                 (self.book.id, sid)).fetchone():
+                return False
+            scene = get_scene(self.conn, self.book.id, sid)
+            with Transaction(self.conn):
+                apply_scene_analysis(self.conn, self.book.id, scene, None, run_id=self.run_id)
+        for stage in ("scene_analyze", "memory_update"):
+            job = self._job(stage, sid)
+            if job is not None and job["status"] in ("pending", "running"):
+                self._set_job(stage, sid, "succeeded", None, {"mode": "no_story"})
+        self.log("  no story paragraph (a heading only): not sent to be read")
+        return True
 
     def refresh_readings(self) -> None:
         """The readings the source annotates on each glossary term, collected again (the program's, from the text)."""
