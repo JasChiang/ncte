@@ -228,6 +228,61 @@ def test_revealed_name_merges_the_described_character(conn, cfg, fixtures):
     assert vis.character_view(conn, book.id, lilia, reveal)["name_ja"] == "リリア"
 
 
+def test_an_unnamed_person_is_known_by_the_books_words_and_revealed_later(conn, cfg, fixtures):
+    """ADR-101: a person with no name, given a label of the model's own (「謎の少女」, not in the book) and the book's
+    words among the aliases, is kept under those words — with their lines; a later scene that gives the words again
+    without them in its evidence means that card; the name revealed later is linked to it and shown only from there
+    (ADR-032). A person none of whose words is in the book is still rejected."""
+    from ncte.memory import visibility as vis
+
+    from ..scripted import known, scene_analyze, uid, utt
+
+    def analyze(payload, req):
+        out = scene_analyze(payload, req)
+        if uid(payload, "フードをかぶった少女が立っていた"):
+            out["new_characters"] += [
+                {"temp_id": "new_7", "name_ja": "謎の少女", "aliases_ja": ["フードをかぶった少女", "少女"],
+                 "alias_kinds": [{"ja": "フードをかぶった少女", "kind": "description"}, {"ja": "少女", "kind": "common"}],
+                 "proposed_name_zh": "神祕少女", "evidence_unit_ids": [uid(payload, "フードをかぶった少女が立っていた")]},
+                {"temp_id": "new_8", "name_ja": "謎の男", "aliases_ja": ["黒衣の男"], "proposed_name_zh": "神祕男子",
+                 "evidence_unit_ids": [uid(payload, "フードをかぶった少女が立っていた")]}]
+            u = utt(payload, "その鍵をどこで手に入れたの", "new_7", "inferred", ("action",), "フードをかぶった少女が立っていた")
+            out["utterances"] = [x for x in [*out["utterances"], u] if x]
+        if uid(payload, "そろそろ、帰りましょうか"):  # the next chapter: the words are in the scene before, not here
+            out["new_characters"].append({"temp_id": "new_1", "name_ja": "フードをかぶった少女", "aliases_ja": [],
+                                          "proposed_name_zh": "", "evidence_unit_ids": [uid(payload, "待って")]})
+            out["utterances"] = [x for x in [*out["utterances"], utt(payload, "待って", "new_1", "inferred", ("rhythm",))]
+                                 if x]
+        hood = known(payload, "フードをかぶった少女")
+        for nc in out["new_characters"]:
+            if nc["name_ja"] == "リリア" and hood:
+                nc["same_as_ref"] = hood
+        return out
+
+    book, _, _ = run_book(conn, cfg, fixtures["basic"], FakeLLM(responders={**RESPONDERS, "scene_analyze": analyze}),
+                          mode="context")
+    names = [r[0] for r in conn.execute("SELECT canonical_name FROM characters WHERE book_id=?", (book.id,))]
+    assert "謎の少女" not in names and "フードをかぶった少女" not in names and "リリア" in names
+    assert "謎の男" not in names and "黒衣の男" not in names  # no words of the book: the hallucination guard
+    lilia = conn.execute("SELECT * FROM characters WHERE canonical_name='リリア'").fetchone()
+    assert json.loads(lilia["aliases_json"]).count("フードをかぶった少女") == 1
+    assert "謎の少女" not in json.loads(lilia["aliases_json"]) and "少女" not in json.loads(lilia["aliases_json"])
+    assert conn.execute("SELECT 1 FROM glossary WHERE source_term IN ('謎の少女', 'フードをかぶった少女') OR "
+                        "target_term='神祕少女'").fetchone() is None  # the label's rendering is not the words'
+    lines = {r[0]: (r[1], r[2]) for r in conn.execute(
+        "SELECT ut.quote_text, u.ordinal, ut.speaker_id_nullable FROM utterances ut JOIN units u ON u.id=ut.unit_id")}
+    asked = next(v for k, v in lines.items() if "その鍵をどこで" in k)
+    wait = next(v for k, v in lines.items() if k.startswith("「待って"))
+    assert asked[1] == wait[1] == lilia["id"]
+    # before the reveal she is only the words the book used for her (no spoiler); from the reveal, リリア
+    assert vis.character_view(conn, book.id, lilia, wait[0])["name_ja"] == "フードをかぶった少女"
+    reveal = conn.execute("SELECT ordinal FROM units WHERE plain_text LIKE '%王女リリアだった%'").fetchone()[0]
+    assert vis.character_view(conn, book.id, lilia, reveal)["name_ja"] == "リリア"
+    reasons = [json.loads(r[0]).get("name_ja") for r in conn.execute(
+        "SELECT item_json FROM memory_rejections WHERE reason LIKE 'name_ja not found verbatim%'")]
+    assert "謎の男" in reasons and "謎の少女" not in reasons and "フードをかぶった少女" not in reasons
+
+
 def test_merge_carries_gender_and_address_terms(conn, cfg, fixtures):
     from ncte.memory.address import upsert
     from ncte.memory.repository import gender_at, merge_characters, set_gender, upsert_character

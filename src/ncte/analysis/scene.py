@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Config
-from ..epub.units import in_source, match_text, source_form
+from ..epub.units import in_source, source_form, with_readings
 from ..llm.schemas import SceneAnalysisOutput
 from ..memory import repository as repo
 from ..memory import visibility as vis
@@ -191,6 +191,24 @@ def _standalone(alias: str, text: str, longer_names: list[str]) -> bool:
     return alias in text
 
 
+def _valid_name(name: str) -> bool:
+    return bool(name) and len(name) <= MAX_NAME_LEN and not any(ch in name for ch in "「」『』") and name not in PRONOUNS
+
+
+_KIND_ORDER = ("name", "nickname", "title", "description")
+
+
+def _said_alias(nc: Any, evidence: list[str]) -> str | None:
+    """The book's words a new person is known by when ``name_ja`` is not in its evidence: of the aliases found in the
+    evidence paragraphs, a name first, then a nickname, a title, a description, in the model's order otherwise
+    (what each alias is, is the model's reading). A common noun or a pronoun names anyone and is never one."""
+    kinds = {source_form(k.ja): k.kind for k in nc.alias_kinds}
+    found = [a for a in dict.fromkeys(source_form(x) for x in nc.aliases_ja)
+             if _valid_name(a) and kinds.get(a) != "common" and any(in_source(a, t) for t in evidence)]
+    order = {a: _KIND_ORDER.index(k) if (k := kinds.get(a)) in _KIND_ORDER else len(_KIND_ORDER) for a in found}
+    return min(found, key=lambda a: order[a]) if found else None
+
+
 def scene_rows(conn: sqlite3.Connection, book_id: str, scene_id: str) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal",
                         (book_id, scene_id)).fetchall()
@@ -276,7 +294,7 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
     # the lines found by their brackets (structure); who says them is the model's reading
     q_payload = [{"unit_id": q.unit_id, "quote_index": q.index, "text": q.text[:200],
                   "continues_previous_quote": q.continuation_of is not None} for q in quotes]
-    scene_text = " ".join(t.text for t in texts)
+    seen = " ".join(with_readings(r["plain_text"]) for r in rows)  # a term is the base text or a reading
     from .narration import hint as narration_hint
 
     prev = conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND seq<? AND version>0 ORDER BY seq DESC LIMIT 1",
@@ -303,7 +321,7 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
                               **({"relations": kin[c["id"]]} if kin.get(c["id"]) else {})}
                              for c in known
                              if (v := vis.character_view(conn, book_id, c, scene["start_ordinal"] - 1, forms_at))],
-        "glossary": [g for g in glossary if str(g.get("ja", "")) in scene_text],
+        "glossary": [g for g in glossary if str(g.get("ja", "")) in seen],
     }
 
 
@@ -391,7 +409,8 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     rows = scene_rows(conn, book_id, sid)
     texts = _unit_texts(rows)
     unit_text = {t.id: t.text for t in texts}
-    scene_text = match_text("\n".join(unit_text.values()))  # what the model's words are looked for in
+    unit_src = {r["id"]: r["plain_text"] for r in rows}  # as stored: the model's words are found in a reading too
+    scene_text = with_readings("\n".join(unit_src.values()))  # what the model's words are looked for in
     stats = {"new_characters": 0, "rejected": 0, "explicit": 0, "inferred": 0, "unknown": 0, "examples": 0,
              "human_kept": 0}
     known = vis.visible_characters(conn, book_id, scene["start_ordinal"] - 1)
@@ -411,17 +430,33 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         names_of[cid] = []
     if parsed is not None:
         existing_alias = repo.alias_map(repo.characters(conn, book_id))
+        forms_at = vis.form_positions(conn, book_id)
+        known_by = {f: c["id"] for c in reversed(known)  # the words each person is known by so far (earliest card wins)
+                    if (view := vis.character_view(conn, book_id, c, scene["start_ordinal"] - 1, forms_at))
+                    for f in [view["name_ja"], *view["aliases_ja"]]}
         reveals: list[tuple[str, str, str, Any, list[str]]] = []
         for nc in parsed.new_characters:
             name = source_form(nc.name_ja)  # a name quoted with its reading (婆《ばあ》) is the text's 婆
             ev_ids = [u for u in nc.evidence_unit_ids if u in unit_text]
-            if not name or len(name) > MAX_NAME_LEN or any(ch in name for ch in "「」『』") or name in PRONOUNS:
+            if not _valid_name(name):
                 rej(nc.model_dump(), "invalid character name")
                 continue
-            if not any(in_source(name, unit_text[u]) for u in ev_ids):
-                rej(nc.model_dump(), "name_ja not found verbatim in evidence units (possible hallucination)")
-                continue
-            first = next(t for t in texts if in_source(name, t.text))
+            if not any(in_source(name, unit_src[u]) for u in ev_ids):
+                if ev_ids and name in known_by:
+                    # words an earlier scene gave a known person (「指示を出していた男」 in the scene before): that card,
+                    # whose words were checked where they were read — before this scene, never after
+                    ref_map[nc.temp_id] = known_by[name]
+                    names_of.setdefault(known_by[name], []).append(name)
+                    continue
+                said = _said_alias(nc, [unit_src[u] for u in ev_ids])
+                if said is None:  # none of the words the person is given is in the book: the hallucination guard
+                    rej(nc.model_dump(), "name_ja not found verbatim in evidence units (possible hallucination)")
+                    continue
+                # no name in the book and a label of the model's own (「人攫いの指示役の男」), with the book's words for
+                # the person among the aliases: the card is known by those words. The label and its rendering are not
+                # the book's words and are not kept; the card's rendering is chosen for its words, as for any card
+                name, nc = said, nc.model_copy(update={"proposed_name_zh": ""})
+            first = next(t for t in texts if in_source(name, unit_src[t.id]))
             if name not in existing_alias:
                 from ..memory.entities import character_for_form
 
@@ -510,7 +545,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             form, who = source_form(of.ja), ref_map.get(of.ref)
             row = conn.execute("SELECT canonical_name, aliases_json FROM characters WHERE id=?", (who,)).fetchone() \
                 if who else None
-            ev = [u for u in of.evidence_unit_ids if u in unit_text and in_source(form, unit_text[u])]
+            ev = [u for u in of.evidence_unit_ids if u in unit_text and in_source(form, unit_src[u])]
             if row is None or of.kind == "common" or not 2 <= len(form) <= MAX_NAME_LEN or form in PRONOUNS \
                     or any(ch in form for ch in "「」『』"):
                 rej(of.model_dump(), "invalid form of a known character")
@@ -536,7 +571,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     amap = repo.alias_map(all_visible)
     quotes = find_quotes(texts)
     position = {t.id: i for i, t in enumerate(texts)}
-    told = [_QUOTED.sub("", clean(t.text)) for t in texts]  # the paragraphs without what is said in them
+    told = [_QUOTED.sub("", unit_src[t.id]) for t in texts]  # the paragraphs without what is said in them
 
     # a first-person scene: the narrator's own words for themself (「と俺は言った」) name the narrator — only for the
     # narrator the model gave for this scene, and only the self-forms the model recorded for that narrator

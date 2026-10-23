@@ -189,6 +189,21 @@ def test_model_words_are_compared_as_the_source_has_them(book, check, kept, show
         assert got == _REJECTED[check]
 
 
+READING = {"name": "あお", "term": "とも", "quote": "ともと呼べる相手"}  # the book's readings, given as they are read
+_AS_READ: dict[Any, Any] = {  # what each check keeps of words the book gives as a reading: the words as given
+    new_character: "とも", alias: ["とも"], other_form: ["とも"], scene_prop: ["とも"], fact: "ともと呼べる相手",
+    glossary: "とも", name_link: "とも→あお", address_term: "とも", wordplay: "とも", gender: "ともと呼べる相手",
+    relation: "ともと呼べる相手", group: "ともと呼べる相手", memory_prop: "とも"}
+
+
+@pytest.mark.parametrize("check", list(_AS_READ), ids=[c.__name__ for c in _AS_READ])
+def test_a_reading_is_the_books_words_too(book, check):
+    """Words the book gives only as a reading (〝下級精霊《ローエレメンタル》〟) are found in the text read with its readings
+    and kept as given (ADR-101)."""
+    conn, book_id, scene, ids = book
+    assert check(conn, book_id, scene, ids, READING) == _AS_READ[check]
+
+
 def test_the_same_name_quoted_with_and_without_its_reading_is_one_person_across_parts():
     part = {"pov": None, "location": None, "time": None, "participants": [], "utterances": [], "actions": [],
             "props": [], "uncertainties": []}

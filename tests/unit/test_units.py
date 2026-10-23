@@ -135,6 +135,27 @@ def test_xpath_stable_and_unique():
                      "/html[1]/body[1]/section[2]/p[1]"]
 
 
+def test_the_text_read_with_its_readings():
+    """A reading is the book's words too (ADR-101): ruby on each character joins up into the word it spells."""
+    from ncte.epub.units import in_source, match_text, read_text, with_readings
+
+    _, us = units("<p>「出でよ、【<ruby>火<rt>サ</rt>の<rt>ラ</rt>下<rt>マ</rt>級<rt>ン</rt>精<rt>ダ</rt>霊<rt>ー</rt></ruby>】」"
+                  "〝<ruby>下級精霊<rt>ローエレメンタル</rt></ruby>〟</p>")
+    text = us[0].plain_text
+    assert match_text(text) == "「出でよ、【火の下級精霊】」〝下級精霊〟"  # term matching elsewhere is unchanged
+    assert read_text(text) == "「出でよ、【サラマンダー】」〝ローエレメンタル〟"
+    assert with_readings(text) == f"{match_text(text)}\n{read_text(text)}"
+    assert with_readings("ただの文") == "ただの文"
+    for words in ("サラマンダー", "ローエレメンタル", "火の下級精霊", "【火《サ》の《ラ》下《マ》級《ン》精《ダ》霊《ー》】"):
+        assert in_source(words, text)
+    assert not in_source("火のサ", text)  # a base and a reading mixed are neither the text nor the text read
+    assert not in_source("サラマンダー", match_text(text))  # with its readings dropped, the text has none
+    from ncte.translation.cache import relevant_glossary
+
+    entries = [{"source_term": t} for t in ("ローエレメンタル", "下級精霊", "レッサーデーモン")]
+    assert [g["source_term"] for g in relevant_glossary(entries, text)] == ["ローエレメンタル", "下級精霊"]
+
+
 def test_the_authors_own_brackets_are_text_and_readings_have_their_own_marks():
     from ncte.epub.units import RUBY_NOTATION, match_text
 
