@@ -447,12 +447,9 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         ref_map[NEW_NARRATOR] = cid
         names_of[cid] = []
     if parsed is not None:
-        cards_now = repo.characters(conn, book_id)
-        existing_alias = repo.alias_map(cards_now)
-        owners: dict[str, set[str]] = {}  # whose words each form is: two cards with it are not for the program to pick
-        for card in cards_now:
-            for f in [card["canonical_name"], *json.loads(card["aliases_json"])]:
-                owners.setdefault(f, set()).add(card["id"])
+        # every card of the series, seen or not yet (a card first read later is the same person found earlier: it
+        # keeps the earliest appearance); which of them a form names here is decided by ``known_by`` below
+        existing_alias = repo.alias_map(repo.characters(conn, book_id))
         forms_at = vis.form_positions(conn, book_id)
         known_by: dict[str, set[str]] = {}  # the words each person is known by so far, and whose they are
         for card in known:
@@ -503,13 +500,19 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 via_entity = character_for_form(conn, book_id, name)
                 if via_entity:  # a known name form of an existing character (full name, nickname …)
                     existing_alias[name] = via_entity
-            # words standing in for the model's name follow what the model said of who this is, as the earlier-card
-            # shortcut does: another time is another person, and a group is not a person's card (or the other way)
-            other = nc.other_person or (substituted and bool(nc.period.strip()))
-            if not other and len(owners.get(name, ())) > 1:  # the model's name, or the book's words standing in for it
+            # what the model said of who this is is followed, as the earlier-card shortcut does: another time is another
+            # person, and a group is not a person's card (or the other way) for words standing in for its name
+            # (the prompt asks for a time only of someone else: 「前世」 with or without ``other_person``)
+            other = nc.other_person or bool(nc.period.strip())
+            # the model's name, or the book's words standing in for it, among the people seen before this scene: two
+            # cards with it are not for the program to pick between; one is the card (not one first seen later)
+            seen = known_by.get(name, set())
+            if not other and len(seen) > 1:
                 rej(nc.model_dump(), "the words name several known characters"
                     + (" (an alias standing in for name_ja, which is not in the evidence)" if substituted else ""))
                 continue
+            if len(seen) == 1:
+                existing_alias[name] = next(iter(seen))
             held = conn.execute("SELECT is_group FROM characters WHERE id=?",
                                 (existing_alias[name],)).fetchone() if substituted and name in existing_alias else None
             if held is not None and not other and bool(nc.group) != bool(held[0]):

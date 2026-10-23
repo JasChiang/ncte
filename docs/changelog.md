@@ -1178,3 +1178,6 @@ open workspace/eval/<timestamp>/report.html
 
 ## ADR-101 第三輪審閱修正（2026-10-23，分支 combo-check-2026-10-23）
 - `scene.apply_scene_analysis`：寫法（名字本身或代替名字的別名）屬於幾張卡時拒絕（`owners`），不再由 `alias_map` 取最早的那張；`other_person`／`period` 的照舊另建一張卡。測試：`test_entities.py::test_words_two_cards_have_are_not_for_the_program_to_pick_between`。845 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-101 第四輪審閱修正（2026-10-23，分支 combo-check-2026-10-23）
+- `scene.apply_scene_analysis`：寫法是否有歧義只看這一場以前看得到的卡（`known_by`），看得到的唯一一張優先於後面才出現的卡；只寫 `period` 也當另一個人。測試：`test_entities.py::test_only_cards_seen_before_the_scene_decide_whose_words_these_are`。846 passed、5 skipped；ruff、mypy 通過。

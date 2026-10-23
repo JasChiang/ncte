@@ -464,3 +464,46 @@ def test_words_two_cards_have_are_not_for_the_program_to_pick_between(conn, cfg,
     assert reasons[0].startswith("the words name several known characters (an alias")
     assert reasons[1] == "the words name several known characters"
     assert read(name_ja="母親", period="前世")["new_1"] not in mothers
+
+
+def test_only_cards_seen_before_the_scene_decide_whose_words_these_are(conn, cfg, fixtures):
+    """A card first known later in the book (a re-read) that also has 「来訪者」 makes the words neither ambiguous nor
+    its own here: the card seen before the scene is the one. A time given alone (「前世」) is someone else, as in the
+    other cases: a card of its own, even where the words are two cards'."""
+    import sqlite3
+
+    from ncte.analysis.scene import apply_scene_analysis
+    from ncte.llm.schemas import SceneAnalysisOutput
+    from ncte.memory import repository as repo
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    scenes = conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq", (book.id,)).fetchall()
+    first = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal LIMIT 1",
+                         (book.id, scenes[0]["id"])).fetchone()
+    later = scenes[-1]
+    last = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal DESC LIMIT 1",
+                        (book.id, later["id"])).fetchone()
+    ev = conn.execute("SELECT id FROM units WHERE book_id=? AND scene_id=? AND plain_text LIKE '%来訪者%'",
+                      (book.id, later["id"])).fetchone()[0]
+
+    def card(name: str, at: sqlite3.Row) -> str:
+        return repo.upsert_character(conn, book.id, name, name_zh=None, aliases=["来訪者"], unit_id=at["id"],
+                                     ordinal=at["ordinal"], origin="test")[0]
+
+    def read(**nc: object) -> dict[str, str]:
+        out = {"pov": None, "location": None, "time": None, "participants": [], "utterances": [], "actions": [],
+               "props": [], "uncertainties": [],
+               "new_characters": [{"temp_id": "new_1", "aliases_ja": ["来訪者"], "proposed_name_zh": "",
+                                   "evidence_unit_ids": [ev], **nc}]}
+        refs: dict[str, str] = {}
+        sc = conn.execute("SELECT * FROM scenes WHERE id=?", (later["id"],)).fetchone()
+        apply_scene_analysis(conn, book.id, sc, SceneAnalysisOutput.model_validate(out), refs=refs)
+        return refs
+
+    seen, ahead = card("甲の母", first), card("乙の母", last)
+    assert last["ordinal"] > later["start_ordinal"]
+    assert read(name_ja="母親")["new_1"] == seen
+    assert read(name_ja="来訪者")["new_1"] == seen
+    assert read(name_ja="来訪者", period="前世")["new_1"] not in (seen, ahead)
+    other = card("丙の母", first)  # two cards seen before the scene: a time alone still names someone else
+    assert read(name_ja="来訪者", period="前世")["new_1"] not in (seen, ahead, other)
