@@ -426,7 +426,8 @@ def test_a_known_card_reached_through_an_alias_follows_the_models_word_on_who_it
     for other in ({"period": "前世"}, {"other_person": True}):
         got = read(**other)["new_1"]
         assert got != mother, other
-        assert conn.execute("SELECT canonical_name FROM characters WHERE id=?", (got,)).fetchone()[0].startswith("来訪者（")
+        assert tuple(conn.execute("SELECT canonical_name, label FROM characters WHERE id=?", (got,)).fetchone()) == \
+            ("来訪者", other.get("period", "另一人"))
     assert read(group=True).get("new_1") != mother
 
 

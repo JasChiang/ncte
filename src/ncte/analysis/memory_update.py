@@ -39,9 +39,11 @@ def build_memory_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
              if (v := vis.character_view(conn, book_id, c, scene["end_ordinal"], forms_at))}
     names = {cid: v["name_zh"] or v["name_ja"] for cid, v in views.items()}
     # cards the book calls by the same words: told apart by where each was first seen (ADR-103)
-    for cid in vis.shared_names({cid: v["name_ja"] for cid, v in views.items()}):
-        views[cid]["first_seen"] = vis.first_seen(conn, conn.execute("SELECT * FROM characters WHERE id=?",
-                                                                     (cid,)).fetchone())
+    if shared := vis.shared_names({cid: v["name_ja"] for cid, v in views.items()}):
+        rows_ = conn.execute(f"SELECT * FROM characters WHERE id IN ({','.join('?' * len(shared))})",
+                             sorted(shared)).fetchall()
+        for cid, hint in vis.tell_apart(conn, book_id, rows_, scene["end_ordinal"]).items():
+            views[cid].update(hint)
     for g in conn.execute("SELECT group_id, member_id FROM group_members WHERE book_id=?", (book_id,)):
         if g[0] in views and g[1] in names:  # a group card shows who it is known to be made of
             views[g[0]].setdefault("members", []).append(names[g[1]])

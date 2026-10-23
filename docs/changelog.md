@@ -1194,3 +1194,11 @@ open workspace/eval/<timestamp>/report.html
 - 網頁：角色清單與角色頁顯示「母親（3）」（`repository.card_label`）與「身分未確認：可能和…是同一人」。
 - 測試：`tests/integration/test_unconfirmed_cards.py`（新，6 個：建卡與標記、標籤不進名字／名詞表／請求、覆核答同一人合併與台詞搬移、答不同清掉標記與 unknown 留著、揭曉名字只從揭曉處顯示、migration 重建保留資料與外鍵）；`test_entities.py` 三個 ADR-101 測試改成新行為。853 passed、5 skipped；ruff、mypy 通過。
 - 重現：`source .venv/bin/activate && pytest tests/integration/test_unconfirmed_cards.py tests/integration/test_entities.py`。
+
+## ADR-103 審閱後修正（2026-10-23，分支 unnamed-placeholders-2026-10-23）
+- migration 37（直接改，分支未合併）：`characters.period`；新表 `character_notes`（模型對人物的描述，記在卡上、有可見位置）、`character_forms`（每個寫法第一次跟這張卡一起出現的位置）。搬書、拆舊資料庫時兩張新表跟著卡（`workspace`）。
+- 另一個時期的人的卡：`repository.other_time_card`（卡名是原文、`label` 與 `period` 是時期，重讀以卡名＋`label` 找回同一張），取代把「母親（前世）」存成卡名；`alias_map`、讀場景的 `known_by`／`owners` 不收這種卡。給模型：`character_view` 多 `other_person`／`period`（翻譯人物卡也帶），名字串（`visible_names`、`repository.model_name`：覆核、人物關係、角色印象、體例、定名、讀者檢查、場景的關係提示）寫成「母親〔前世〕」。
+- 模型的描述：`scene.apply_scene_analysis` 改寫 `character_notes`（`repository.note_description`；重讀同一場先刪再寫），拿掉 `state_json.model_labels`；`merge_characters`／清卡時跟著卡（`fold_card_records`、`forget_card_records`）。
+- 寫法的位置：`repository.note_forms`、`hold_forms`、`seen_earlier`（重讀時以寫法對到後面才出現的卡：只有那個寫法從新位置起看得到）；`upsert_character`、`unconfirmed_card`、其他寫法、`merge_characters`、`drop_aliases` 都更新；`visibility.form_positions` 多回傳第三項，`character_view` 以它為準。
+- 分辨同名的卡：`visibility.tell_apart`（`first_seen`、`earlier_model_reading`、`relations_so_far`，都以請求的位置為準），翻譯、讀場景、整理記憶的人物卡，覆核 `same_person` 的卡與候選卡、候選有同名人物的項目（`same_name_candidates`）；沒有同名時請求不變。提示詞 `translate`、`scene_analyze`、`scene_read`、`memory_update`、`verify` 各補一句說明。
+- 測試：`test_unconfirmed_cards.py` 新增 4 個（另一時期的卡以原文為名、時期給模型、重讀同一張、不讓現在的「母親」有歧義；它的名字揭曉只從揭曉處顯示；重讀時卡往前移不讓後面的寫法提早顯示；同名的卡帶描述與關係、不含之後的資料），每個都先確認在改之前會失敗；`test_certainty.py` 2 個、`test_entities.py` 1 個、`test_in_source.py` 1 個改成新的存法。857 passed、5 skipped；ruff、mypy 通過。

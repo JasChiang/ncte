@@ -16,7 +16,12 @@ from ..epub.units import match_text
 from ..llm.schemas import ImpressionsOutput
 from ..memory.address import calls_by
 from ..memory.db import Transaction, utcnow
-from ..memory.repository import character_basics, qualified_fact, relation_guess
+from ..memory.repository import (
+    character_basics,
+    model_name,  # someone of another time: with the model's reading (ADR-103)
+    qualified_fact,
+    relation_guess,
+)
 from ..series import SERIES_SCOPE
 
 MAIN = 12
@@ -35,7 +40,7 @@ def requests(conn: sqlite3.Connection, book_id: str, only: set[str] | None = Non
              ) -> list[tuple[dict[str, Any], dict[str, Any]]]:
     """(payload, lookup) per PER_REQUEST main characters; ``only``: these (the ones a failed request left unasked)."""
     chars = [c for c in main_characters(conn, book_id) if only is None or c["id"] in only]
-    names = {r["id"]: r["display_name_zh"] or r["canonical_name"]
+    names = {r["id"]: model_name(r)
              for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,))}
     out = []
     for i in range(0, len(chars), PER_REQUEST):

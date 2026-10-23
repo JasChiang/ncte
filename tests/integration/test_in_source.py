@@ -247,8 +247,9 @@ def test_a_single_character_alias_never_names_an_unnamed_person(book):
 
 
 def test_the_model_label_of_an_unnamed_person_is_kept_as_its_description_only(book):
-    """The label the model gave a person the book does not name is its description: kept on the scene's record, never a
-    name, an alias or a glossary term, and not sent back to the model."""
+    """The label the model gave a person the book does not name is its description: kept with the card as the model's
+    note (``character_notes``, from where it was written, ADR-103), never a name, an alias or a glossary term, and not
+    sent back to the model as one (it is sent only to tell same-name cards apart)."""
     from ncte.analysis.memory_update import build_memory_payload
 
     conn, book_id, scene, ids = book
@@ -258,7 +259,11 @@ def test_the_model_label_of_an_unnamed_person_is_kept_as_its_description_only(bo
     card = conn.execute("SELECT * FROM characters WHERE book_id=?", (book_id,)).fetchone()
     assert card["canonical_name"] == "強敵" and "主人公の好敵手" not in card["aliases_json"]
     state = json.loads(_one(conn, "SELECT state_json FROM scenes WHERE id=?", scene["id"]))
-    assert state["model_labels"] == [{"character_id": card["id"], "label": "主人公の好敵手"}]
+    assert "model_labels" not in state
+    notes = conn.execute("SELECT character_id, kind, text, ordinal, scene_id FROM character_notes").fetchall()
+    assert [tuple(n) for n in notes] == [(card["id"], "model_label", "主人公の好敵手",
+                                          _one(conn, "SELECT ordinal FROM units WHERE id=?", ids["と呼べる相手"]),
+                                          scene["id"])]
     assert _one(conn, "SELECT 1 FROM glossary WHERE book_id=? AND source_term='主人公の好敵手'", book_id) is None
     scene = conn.execute("SELECT * FROM scenes WHERE id=?", (scene["id"],)).fetchone()
     payload = build_memory_payload(conn, book_id, scene, [])

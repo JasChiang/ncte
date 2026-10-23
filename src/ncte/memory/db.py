@@ -721,9 +721,11 @@ ALTER TABLE character_gender ADD COLUMN basis TEXT;
          "in it): a check that never answered is asked again from this (ADR-100)", """
 ALTER TABLE translations ADD COLUMN fix_json TEXT;
 """),
-    (37, "a card for a person known only by words other cards have (several unnamed mothers called 母親): its name stays "
-         "the book's words, a program label tells the cards apart (never a name), and the cards it may be are marked "
-         "for the second look (ADR-103)", """
+    (37, "a card for a person known only by words other cards have (several unnamed mothers called 母親, a past life's "
+         "母親): its name stays the book's words, a program label tells the cards apart (never a name), the cards it may "
+         "be are marked for the second look, another time is the model's reading (period); the model's own description "
+         "of a person and where each name form was first seen with a card are kept apart, each visible from its own "
+         "position (ADR-103)", """
 CREATE TABLE characters_labelled (
     id TEXT PRIMARY KEY,
     book_id TEXT NOT NULL REFERENCES books(id),
@@ -741,11 +743,30 @@ CREATE TABLE characters_labelled (
     is_group INTEGER NOT NULL DEFAULT 0,
     label TEXT NOT NULL DEFAULT '',
     may_be_json TEXT NOT NULL DEFAULT '[]',
+    period TEXT,
     UNIQUE(book_id, canonical_name, label)
 );
 INSERT INTO characters_labelled(id, book_id, canonical_name, display_name_zh, aliases_json, known_from_unit_id, known_from_ordinal, status, origin, speech_profile_json, created_at, updated_at, is_narrator, is_group) SELECT id, book_id, canonical_name, display_name_zh, aliases_json, known_from_unit_id, known_from_ordinal, status, origin, speech_profile_json, created_at, updated_at, is_narrator, is_group FROM characters;
 DROP TABLE characters;
 ALTER TABLE characters_labelled RENAME TO characters;
+CREATE TABLE character_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    character_id TEXT NOT NULL REFERENCES characters(id),
+    book_id TEXT NOT NULL,
+    scene_id TEXT,
+    ordinal INTEGER NOT NULL,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_character_notes ON character_notes(character_id);
+CREATE TABLE character_forms (
+    character_id TEXT NOT NULL REFERENCES characters(id),
+    form TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    PRIMARY KEY (character_id, form)
+);
 """),
 ]
 # migrations that rebuild a table other tables refer to: run with foreign keys off (they cannot be switched inside a

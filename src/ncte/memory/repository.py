@@ -29,9 +29,13 @@ def characters(conn: sqlite3.Connection, book_id: str) -> list[sqlite3.Row]:
 
 
 def alias_map(rows: list[sqlite3.Row]) -> dict[str, str]:
-    """name/alias (ja) → character id. Earlier-known characters win on collisions."""
+    """name/alias (ja) → character id. Earlier-known characters win on collisions; a card named so wins over one known
+    only by other cards' words (ADR-103); a card for someone of another time (``period``) is never the one its words
+    find — the words name the person of the story's present, the other is found by its id."""
     out: dict[str, str] = {}
-    for r in rows:
+    for r in sorted(rows, key=lambda r: bool(label_of(r))):
+        if period_of(r) is not None:
+            continue
         for name in [r["canonical_name"], *json.loads(r["aliases_json"])]:
             if name and name not in out:
                 out[name] = r["id"]
@@ -49,6 +53,7 @@ def upsert_character(conn: sqlite3.Connection, book_id: str, name_ja: str, *, na
         from ..series import pos
 
         if pos(conn, book_id, ordinal) < pos(conn, row["book_id"], row["known_from_ordinal"]):
+            hold_forms(conn, row)  # its other forms stay where they were seen
             conn.execute("UPDATE characters SET book_id=?, known_from_unit_id=?, known_from_ordinal=?, updated_at=? "
                          "WHERE id=?", (book_id, unit_id, ordinal, utcnow(), row["id"]))
         old = json.loads(row["aliases_json"])
@@ -56,13 +61,122 @@ def upsert_character(conn: sqlite3.Connection, book_id: str, name_ja: str, *, na
         if merged != old:
             conn.execute("UPDATE characters SET aliases_json=?, updated_at=? WHERE id=?",
                          (json.dumps(merged, ensure_ascii=False), utcnow(), cid))
+        note_forms(conn, cid, [name_ja, *aliases], book_id, ordinal)  # seen here with the card
         return cid, False
     conn.execute(
         "INSERT INTO characters(id, book_id, canonical_name, display_name_zh, aliases_json, known_from_unit_id, "
         "known_from_ordinal, status, origin, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (cid, book_id, name_ja, name_zh, json.dumps([a for a in aliases if a != name_ja], ensure_ascii=False),
          unit_id, ordinal, "partial", origin, utcnow(), utcnow()))
+    note_forms(conn, cid, [name_ja, *aliases], book_id, ordinal)
     return cid, True
+
+
+def seen_earlier(conn: sqlite3.Connection, cid: str, form: str, book_id: str, unit_id: str, ordinal: int) -> None:
+    """A card first known later is met here by ``form`` (a re-read: the same person found earlier): the card is known
+    from here, and so is that form — its other forms keep the positions they were first seen at, so a name or alias
+    the book gives only later is not shown early (ADR-103)."""
+    from ..series import pos
+
+    row = conn.execute("SELECT * FROM characters WHERE id=?", (cid,)).fetchone()
+    if row is None:
+        return
+    if pos(conn, book_id, ordinal) < pos(conn, row["book_id"], row["known_from_ordinal"]):
+        hold_forms(conn, row)  # the forms held so far keep the card's old position, not the new
+        conn.execute("UPDATE characters SET book_id=?, known_from_unit_id=?, known_from_ordinal=?, updated_at=? "
+                     "WHERE id=?", (book_id, unit_id, ordinal, utcnow(), cid))
+    note_forms(conn, cid, [form], book_id, ordinal)
+
+
+def note_forms(conn: sqlite3.Connection, cid: str, forms: list[str], book_id: str, ordinal: int) -> None:
+    """Where each name form was first seen with this card (``character_forms``): a form is shown from there, not from
+    wherever the card's first appearance moves (ADR-103). The earliest position is kept."""
+    from ..series import pos
+
+    for f in dict.fromkeys(x for x in forms if x):
+        row = conn.execute("SELECT book_id, ordinal FROM character_forms WHERE character_id=? AND form=?",
+                           (cid, f)).fetchone()
+        if row is None:
+            conn.execute("INSERT INTO character_forms(character_id, form, book_id, ordinal) VALUES (?,?,?,?)",
+                         (cid, f, book_id, ordinal))
+        elif pos(conn, book_id, ordinal) < pos(conn, row[0], row[1]):
+            conn.execute("UPDATE character_forms SET book_id=?, ordinal=? WHERE character_id=? AND form=?",
+                         (book_id, ordinal, cid, f))
+
+
+def note_description(conn: sqlite3.Connection, cid: str, text: str, *, book_id: str, scene_id: str | None,
+                     ordinal: int, kind: str = "model_label") -> None:
+    """The model's own description of a person (「人攫いの指示役の男」 for someone the book does not name, ADR-101):
+    an earlier reading by the model, not the book's words — never a name, an alias, evidence or a glossary term.
+    Kept with the card (``character_notes``) and shown from where it was written; it tells cards with the same name
+    apart (ADR-103)."""
+    if text.strip():
+        conn.execute("INSERT INTO character_notes(character_id, book_id, scene_id, ordinal, kind, text, created_at) "
+                     "VALUES (?,?,?,?,?,?,?)", (cid, book_id, scene_id, ordinal, kind, text.strip()[:60], utcnow()))
+
+
+def hold_forms(conn: sqlite3.Connection, row: Any) -> None:
+    """Forms a card holds without a position of their own: seen with the card where it is known from now."""
+    held = {r[0] for r in conn.execute("SELECT form FROM character_forms WHERE character_id=?", (row["id"],))}
+    for f in [row["canonical_name"], *json.loads(row["aliases_json"] or "[]")]:
+        if f and f not in held:
+            note_forms(conn, row["id"], [f], row["book_id"], row["known_from_ordinal"])
+
+
+def fold_card_records(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> None:
+    """A card folded into another: its forms keep where they were first seen, its notes come along."""
+    for f, b, o in conn.execute("SELECT form, book_id, ordinal FROM character_forms WHERE character_id=?",
+                                (drop_id,)).fetchall():
+        note_forms(conn, keep_id, [f], b, o)
+    conn.execute("DELETE FROM character_forms WHERE character_id=?", (drop_id,))
+    conn.execute("UPDATE character_notes SET character_id=? WHERE character_id=?", (keep_id, drop_id))
+
+
+def forget_card_records(conn: sqlite3.Connection, cid: str) -> None:
+    conn.execute("DELETE FROM character_forms WHERE character_id=?", (cid,))
+    conn.execute("DELETE FROM character_notes WHERE character_id=?", (cid,))
+
+
+OTHER_PERSON = "另一人"  # the label of a card for someone of another time whose time the model did not give
+
+
+def other_time_card(conn: sqlite3.Connection, book_id: str, words: str, period: str, *, unit_id: str, ordinal: int,
+                    origin: str) -> tuple[str, bool]:
+    """A past life's 「母親」, not the mother of this one (ADR-101): a card named by the book's words, with the model's
+    reading of its time in ``period`` (empty: another person, time not given). The time is also its ``label`` — 「母親
+    （前世）」 on the page only, never a name form (ADR-103). Reading the scene again, the same words with the same time
+    find the same card. Returns (id, created)."""
+    label = period or OTHER_PERSON
+    row = conn.execute(f"SELECT id FROM characters WHERE {SERIES_SCOPE} AND canonical_name=? AND label=? AND period IS "
+                       "NOT NULL", (book_id, words, label)).fetchone()
+    if row is not None:
+        seen_earlier(conn, str(row[0]), words, book_id, unit_id, ordinal)
+        return str(row[0]), False
+    cid = character_id_for(book_id, f"{words}（{label}）")
+    conn.execute(
+        "INSERT INTO characters(id, book_id, canonical_name, display_name_zh, aliases_json, known_from_unit_id, "
+        "known_from_ordinal, status, origin, created_at, updated_at, label, period) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (cid, book_id, words, None, "[]", unit_id, ordinal, "partial", origin, utcnow(), utcnow(), label, period))
+    note_forms(conn, cid, [words], book_id, ordinal)
+    return cid, True
+
+
+def label_of(c: Any) -> str:
+    return str(c["label"] or "") if "label" in c.keys() else ""
+
+
+def period_of(c: Any) -> str | None:
+    """The model's reading of the time a card's person lives in (another person of another time, ADR-101): None for
+    the story's present, "" for another person whose time was not given."""
+    return c["period"] if "period" in c.keys() else None
+
+
+def model_name(c: Any) -> str:
+    """How a task names a card to a model: its Chinese or Japanese name, and for someone of another time the model's
+    reading of that time (「母親〔前世〕」) — a note on who this is, not a name form (ADR-103)."""
+    name = c["display_name_zh"] or c["canonical_name"]
+    when = period_of(c)
+    return name if when is None else f"{name}〔{when or OTHER_PERSON}〕"
 
 
 def unconfirmed_card(conn: sqlite3.Connection, book_id: str, words: str, *, aliases: list[str], may_be: list[str],
@@ -76,7 +190,7 @@ def unconfirmed_card(conn: sqlite3.Connection, book_id: str, words: str, *, alia
     glossary term and never sent as a name. Reading the scene again finds the card it made there (same words, same
     first paragraph). Returns (id, created)."""
     row = conn.execute(f"SELECT id FROM characters WHERE {SERIES_SCOPE} AND canonical_name=? AND label!='' AND "
-                       "known_from_unit_id=?", (book_id, words, unit_id)).fetchone()
+                       "period IS NULL AND known_from_unit_id=?", (book_id, words, unit_id)).fetchone()
     if row is not None:
         conn.execute("UPDATE characters SET may_be_json=?, updated_at=? WHERE id=?",
                      (json.dumps(may_be), utcnow(), row[0]))
@@ -95,6 +209,7 @@ def unconfirmed_card(conn: sqlite3.Connection, book_id: str, words: str, *, alia
         "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (cid, book_id, words, None, json.dumps([a for a in aliases if a != words], ensure_ascii=False), unit_id,
          ordinal, "partial", origin, utcnow(), utcnow(), int(is_group), str(n), json.dumps(may_be)))
+    note_forms(conn, cid, [words, *aliases], book_id, ordinal)
     return cid, True
 
 
@@ -298,9 +413,13 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
                  (json.dumps(aliases, ensure_ascii=False), utcnow(), keep_id))
     from ..series import pos
 
+    # each card's forms keep where they were seen: the kept card moving earlier does not show its own names early
+    hold_forms(conn, keep)
+    hold_forms(conn, drop)
     if pos(conn, drop["book_id"], drop["known_from_ordinal"]) < pos(conn, keep["book_id"], keep["known_from_ordinal"]):
         conn.execute("UPDATE characters SET book_id=?, known_from_unit_id=?, known_from_ordinal=? WHERE id=?",
                      (drop["book_id"], drop["known_from_unit_id"], drop["known_from_ordinal"], keep_id))
+    fold_card_records(conn, keep_id, drop_id)
     conn.execute("DELETE FROM characters WHERE id=?", (drop_id,))
     # cards marked as maybe the dropped one (ADR-103) may now be the kept one; a card is never maybe itself
     for row in conn.execute("SELECT id, may_be_json FROM characters WHERE instr(may_be_json, ?) > 0",
@@ -320,6 +439,7 @@ def drop_aliases(conn: sqlite3.Connection, character_id: str, forms: list[str]) 
     aliases = [a for a in json.loads(row["aliases_json"] or "[]") if a not in gone]
     conn.execute("UPDATE characters SET aliases_json=?, updated_at=? WHERE id=?",
                  (json.dumps(aliases, ensure_ascii=False), utcnow(), character_id))
+    conn.executemany("DELETE FROM character_forms WHERE character_id=? AND form=?", [(character_id, f) for f in gone])
     conn.executemany("UPDATE entity_links SET status='rejected' WHERE book_id=? AND term=? AND target_term=?",
                      [(row["book_id"], f, row["canonical_name"]) for f in gone])
     refresh_profiles(conn, row["book_id"])

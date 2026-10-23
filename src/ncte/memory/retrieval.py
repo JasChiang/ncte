@@ -153,6 +153,9 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
                 card["gender_basis"] = v["gender_basis"]
         if v.get("narrator"):
             card["narrator"] = True
+        for k in ("other_person", "period"):  # someone of another time: the model's reading, not a name (ADR-103)
+            if k in v:
+                card[k] = v[k]
         from .repository import impression_at
 
         # how this character talks as of this scene (ADR-045, ADR-060: the stretch in force where it begins — a change
@@ -167,9 +170,9 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
     # two people the book calls by the same words (two unnamed mothers): told apart by where each was first seen, and
     # a line of theirs by the card's id — never by a label or a name the program made up (ADR-103)
     shared = vis.shared_names({card["character_id"]: names[card["character_id"]] for card in present})
+    hints = vis.tell_apart(conn, book_id, [c for c in chars if c["id"] in shared], upto) if shared else {}
     for card in present:
-        if card["character_id"] in shared:
-            card["first_seen"] = vis.first_seen(conn, next(c for c in chars if c["id"] == card["character_id"]))
+        card.update(hints.get(card["character_id"], {}))
     # relations among the people of this scene, as the story has shown them so far (ADR-039): how they talk to each other
     ids = {c["character_id"] for c in present}
     for r in conn.execute("SELECT * FROM relations WHERE book_id=? AND since_ordinal<=? AND (until_ordinal IS NULL OR "

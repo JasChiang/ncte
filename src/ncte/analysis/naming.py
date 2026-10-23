@@ -16,7 +16,12 @@ from typing import Any
 from ..epub.units import match_text, shown_excerpt, source_form
 from ..llm.schemas import NamingOutput
 from ..memory.db import utcnow
-from ..memory.repository import character_basics, pair_relations, readings_of
+from ..memory.repository import (
+    character_basics,
+    model_name,  # someone of another time: with the model's reading (ADR-103)
+    pair_relations,
+    readings_of,
+)
 from ..series import SERIES_SCOPE, scope_clause
 
 NAME_CATEGORIES = ("character", "place", "organization", "item", "skill")
@@ -74,7 +79,7 @@ def _excerpt(text: str, term: str, width: int = 36) -> str:
 
 
 def char_names(conn: sqlite3.Connection, book_id: str) -> dict[str, str]:
-    return {r["id"]: r["display_name_zh"] or r["canonical_name"]
+    return {r["id"]: model_name(r)
             for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,))}
 
 

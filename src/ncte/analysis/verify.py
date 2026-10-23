@@ -21,6 +21,7 @@ from ..epub.units import match_text
 from ..llm.schemas import VerifyOutput
 from ..memory import repository as repo
 from ..memory.db import utcnow
+from ..memory.visibility import shared_names, tell_apart
 
 CONTEXT_UNITS = 4  # paragraphs before and after a disputed line
 AROUND_CHARS = 200  # a paragraph around it: its opening
@@ -34,11 +35,12 @@ ADDRESS_LINES = 2  # lines shown per form
 
 
 def _names(conn: sqlite3.Connection, book_id: str) -> dict[str, str]:
-    from ..memory.visibility import first_seen, shared_names
+    from ..memory.visibility import first_seen
     from ..series import SERIES_SCOPE
 
     rows = {r["id"]: r for r in conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE}", (book_id,))}
     names = {cid: r["canonical_name"] + (f"（{r['display_name_zh']}）" if r["display_name_zh"] else "")
+             + (f"〔{w or repo.OTHER_PERSON}〕" if (w := repo.period_of(r)) is not None else "")  # another time (ADR-103)
              for cid, r in rows.items()}
     # cards the book calls by the same words (two unnamed mothers): told apart by the book's own text where each was
     # first seen, never by a label (ADR-103)
@@ -144,6 +146,7 @@ def collect(conn: sqlite3.Connection, book_id: str, max_actions: int = MAX_ACTIO
                       "_version": str(sc["version"])})  # a scene read again is asked again
     items += question_items(conn, book_id)
     items += action_items(conn, book_id)[:max_actions]
+    _same_name_candidates(conn, book_id, items)
     # an item answered before with the same content and the same version of its data is not asked again (asking until
     # the model agrees adds nothing); a gender written again, a scene read again, a changed card are asked again
     answered = {r[0]: r[1] for r in conn.execute("SELECT ref, fingerprint FROM verify_answers WHERE book_id=?", (book_id,))}
@@ -258,10 +261,13 @@ def same_person_items(conn: sqlite3.Connection, book_id: str, names: dict[str, s
         codes: dict[str, str] = {}
         rows = {r["id"]: r for r in conn.execute(f"SELECT * FROM characters WHERE id IN ({','.join('?' * len(may))})",
                                                  may)}
+        # what earlier steps recorded of each, as known where this card is first seen (and the passage shown around it)
+        hints = tell_apart(conn, book_id, [c, *rows.values()], c["known_from_ordinal"] + CONTEXT_UNITS)
         out.append({"ref": f"s:{c['id']}", "kind": "same_person", "name": names[c["id"]],
-                    "card": _card_text(conn, c, codes),
+                    "card": {**_card_text(conn, c, codes), **_notes_of(hints, c["id"])},
                     "candidates": {x: names[x] for x in may if x in rows},
-                    "candidate_cards": {x: _card_text(conn, rows[x], codes) for x in may if x in rows},
+                    "candidate_cards": {x: {**_card_text(conn, rows[x], codes), **_notes_of(hints, x)}
+                                        for x in may if x in rows},
                     "_codes": codes, "_version": f"{c['updated_at']}|{','.join(may)}"})
     return out
 
@@ -293,6 +299,25 @@ def _card_text(conn: sqlite3.Connection, row: sqlite3.Row, codes: dict[str, str]
     if lines:
         out["lines"] = [p for o in lines for p in _coded(conn, book_id, [o], o, codes)]
     return out
+
+
+def _notes_of(hints: dict[str, dict[str, Any]], cid: str) -> dict[str, Any]:
+    """A card's earlier readings and relations (``tell_apart``) without its first paragraph (shown whole already)."""
+    return {k: v for k, v in hints.get(cid, {}).items() if k != "first_seen"}
+
+
+def _same_name_candidates(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]]) -> None:
+    """A question naming candidates two of which have the same name (two unnamed mothers): what tells those apart, as
+    known at the question's paragraph (ADR-103). Other questions stay as they were."""
+    for item in items:
+        cands = item.get("candidates")
+        if not isinstance(cands, dict) or "_ordinal" not in item or not item["_ordinal"]:
+            continue
+        base = {cid: n.split("〔初見：")[0] for cid, n in cands.items()}
+        if shared := shared_names(base):
+            rows = conn.execute(f"SELECT * FROM characters WHERE id IN ({','.join('?' * len(shared))})",
+                                sorted(shared)).fetchall()
+            item["same_name_candidates"] = tell_apart(conn, book_id, rows, item["_ordinal"])
 
 
 def _rests_on(item: dict[str, Any], a: Any) -> bool:

@@ -265,6 +265,9 @@ def _prune_to(conn: sqlite3.Connection, keep: list[str]) -> None:
         conn.execute(f"DELETE FROM speaker_hypotheses WHERE utterance_id IN (SELECT id FROM utterances WHERE "
                      f"book_id NOT IN ({ph}))", keep)
         conn.execute(f"DELETE FROM memory_fts WHERE book_id NOT IN ({ph})", keep)
+        for t in ("character_forms", "character_notes"):  # a card's forms and notes go with the card (ADR-103)
+            conn.execute(f"DELETE FROM {t} WHERE character_id IN (SELECT id FROM characters WHERE book_id NOT IN ({ph}))",
+                         keep)
         for t in _BOOK_TABLES:
             conn.execute(f"DELETE FROM {t} WHERE book_id NOT IN ({ph})", keep)
         conn.execute(f"DELETE FROM books WHERE id NOT IN ({ph})", keep)
@@ -292,7 +295,10 @@ def _move_stored_copy(conn: sqlite3.Connection, book: sqlite3.Row, root: Path, s
 _MOVE_PLAN: list[tuple[str, str, bool]] = [
     ("books", "id=:b", False), ("resources", "book_id=:b", False), ("units", "book_id=:b", False),
     ("scenes", "book_id=:b", False), ("scene_overrides", "book_id=:b", False), ("glossary", "book_id=:b", True),
-    ("characters", "book_id=:b", False), ("entities", "book_id=:b", False), ("entity_links", "book_id=:b", True),
+    ("characters", "book_id=:b", False),
+    ("character_forms", "character_id IN (SELECT id FROM characters WHERE book_id=:b)", False),
+    ("character_notes", "character_id IN (SELECT id FROM characters WHERE book_id=:b)", True),
+    ("entities", "book_id=:b", False), ("entity_links", "book_id=:b", True),
     ("runs", "book_id=:b", False), ("jobs", "book_id=:b", True), ("llm_requests", "book_id=:b", True),
     ("translations", "unit_id IN (SELECT id FROM units WHERE book_id=:b)", True),
     ("human_edits", "unit_id IN (SELECT id FROM units WHERE book_id=:b)", True),
@@ -398,6 +404,9 @@ def _merge_duplicates(conn: sqlite3.Connection, moved: str) -> dict[str, int]:
         if pos(conn, moved, c["known_from_ordinal"]) < pos(conn, other["book_id"], other["known_from_ordinal"]):
             conn.execute("UPDATE characters SET book_id=?, known_from_unit_id=?, known_from_ordinal=? WHERE id=?",
                          (moved, c["known_from_unit_id"], c["known_from_ordinal"], other["id"]))
+        from .memory.repository import fold_card_records
+
+        fold_card_records(conn, other["id"], c["id"])
         conn.execute("DELETE FROM characters WHERE id=?", (c["id"],))
         merged["characters_merged"] += 1
     return merged

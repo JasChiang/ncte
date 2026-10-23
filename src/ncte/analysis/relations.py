@@ -21,7 +21,11 @@ from typing import Any
 from ..llm.schemas import RelationsOutput  # noqa: F401  (re-exported for callers)
 from ..memory.address import calls_by
 from ..memory.db import Transaction, utcnow
-from ..memory.repository import at_period, qualified_fact
+from ..memory.repository import (
+    at_period,
+    model_name,  # someone of another time: with the model's reading (ADR-103)
+    qualified_fact,
+)
 from ..series import SERIES_SCOPE
 
 MAX_PAIRS = 40
@@ -80,7 +84,7 @@ def candidate_pairs(conn: sqlite3.Connection, book_id: str) -> tuple[list[dict[s
                 if m == other:
                     continue
                 q = pair(m, other)
-                label = chars[grp]["display_name_zh"] or chars[grp]["canonical_name"]
+                label = model_name(chars[grp])
                 for kind in ("notes", "facts"):
                     for row in p[kind]:
                         if row not in q[kind]:
@@ -142,7 +146,7 @@ def _group_passages(conn: sqlite3.Connection, book_id: str, chars: dict[str, sql
             hits = [u for u in units if any(f in u[2] for f in gforms) and any(f in u[2] for f in oforms)][:MAX_PASSAGES]
             if not hits:
                 continue
-            label = chars[grp]["display_name_zh"] or chars[grp]["canonical_name"]
+            label = model_name(chars[grp])
             for m in ms:
                 q = pair(m, other)
                 q["passages"] += [{"id": h[0], "at": h[1], "text": h[2][:200], "via": label} for h in hits]
@@ -187,7 +191,7 @@ def _pair_passages(conn: sqlite3.Connection, book_id: str, chars: dict[str, sqli
 
     def label(i: int) -> str:
         who = speakers.get(rows[i]["id"], set())
-        name = chars[next(iter(who))]["display_name_zh"] or chars[next(iter(who))]["canonical_name"] if len(who) == 1 else ""
+        name = model_name(chars[next(iter(who))]) if len(who) == 1 else ""
         return (f"{name}：" if name else "") + _around(text[i], forms, 140)
 
     def spread(idx: list[int]) -> list[int]:  # first, last, second, second last …: the whole book, not one end
@@ -264,7 +268,7 @@ def requests(pairs: list[dict[str, Any]], chars: dict[str, sqlite3.Row], *, rech
                                        "uses": t["uses"]} for t in p["address"][:MAX_EVIDENCE]],
                           "scenes_together": p["together"]})
         req: dict[str, Any] = {"task": "relations",
-                               "characters": [{"ref": r, "name": chars[c]["display_name_zh"] or chars[c]["canonical_name"],
+                               "characters": [{"ref": r, "name": model_name(chars[c]),
                                                **(basics or {}).get(c, {})} for c, r in cref.items()], "pairs": items}
         if recheck:
             req["recheck"] = True
@@ -285,7 +289,7 @@ def _distinct(notes: list[Any]) -> list[Any]:
 
 def _label(chars: dict[str, sqlite3.Row], cid: str) -> str:
     c = chars.get(cid)
-    return (c["display_name_zh"] or c["canonical_name"]) if c is not None else cid
+    return (model_name(c)) if c is not None else cid
 
 
 def unanswered(pairs: list[dict[str, Any]], results: list[tuple[RelationsOutput, dict[str, Any]]]) -> list[dict[str, Any]]:

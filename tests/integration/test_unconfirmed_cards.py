@@ -105,6 +105,60 @@ def test_the_label_is_never_a_name_a_glossary_term_or_sent_to_a_model(conn, cfg,
                                    ensure_ascii=False)
 
 
+def test_same_name_cards_carry_what_earlier_steps_recorded_as_known_at_the_request(conn, cfg, fixtures):
+    """Two 「母親」 cards in one request: besides where each was first seen, the model's own earlier description of each
+    (marked as its reading, not the book's) and the relations read so far — nothing recorded for a later position. A
+    card whose name no other card in the request has gets none of it."""
+    from ncte.memory.db import utcnow
+
+    s = _setup(conn, cfg, fixtures)
+    book, scenes = s["book"], s["scenes"]
+    first = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal LIMIT 1",
+                         (book.id, scenes[0]["id"])).fetchone()
+    late = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal LIMIT 1",
+                        (book.id, scenes[-1]["id"])).fetchone()
+    kai, _ = repo.upsert_character(conn, book.id, "カイト", name_zh="凱特", aliases=[], unit_id=first["id"],
+                                   ordinal=first["ordinal"], origin="test")
+    mina, _ = repo.upsert_character(conn, book.id, "ミナ", name_zh="米娜", aliases=[], unit_id=first["id"],
+                                    ordinal=first["ordinal"], origin="test")
+    repo.note_description(conn, s["a"], "宿屋の女将", book_id=book.id, scene_id=scenes[0]["id"], ordinal=first["ordinal"])
+    repo.note_description(conn, s["p"], "路地の謎の女", book_id=book.id, scene_id=scenes[1]["id"],
+                          ordinal=s["intro"]["ordinal"])
+    repo.note_description(conn, s["a"], "後で書かれた説明", book_id=book.id, scene_id=scenes[-1]["id"],
+                          ordinal=late["ordinal"])
+
+    def relation(a: str, b: str, a_is: str, b_is: str, at: int) -> None:
+        conn.execute("INSERT INTO relation_notes(book_id, scene_id, a_id, b_id, relation_zh, a_is, b_is, kind, "
+                     "evidence_unit_ids_json, evidence_quote, first_ordinal, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                     (book.id, None, a, b, "母子", a_is, b_is, "identity", "[]", "x", at, utcnow()))
+
+    relation(s["a"], kai, "母親", "兒子", first["ordinal"])
+    relation(mina, s["p"], "女兒", "母親", s["intro"]["ordinal"])
+    relation(s["a"], mina, "仇人", "仇人", late["ordinal"])  # read only at the end of the book
+
+    s1 = get_scene(conn, book.id, scenes[1]["id"])
+    rows = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal",
+                        (book.id, s1["id"])).fetchall()
+    cards = {c["character_id"]: c for c in memory_context(conn, book.id, scene=s1, batch_rows=rows)["characters"]}
+    assert cards[s["a"]]["earlier_model_reading"] == ["宿屋の女将"]
+    assert cards[s["a"]]["relations_so_far"] == ["凱特的母親"]
+    assert cards[s["p"]]["earlier_model_reading"] == ["路地の謎の女"]
+    assert cards[s["p"]]["relations_so_far"] == ["米娜的母親"]
+    assert not {"earlier_model_reading", "relations_so_far", "first_seen"} & set(cards[s["b"]])
+    sent = json.dumps(cards, ensure_ascii=False)
+    assert "後で書かれた説明" not in sent and "仇人" not in sent
+    # the next scene's reading: as known at its start
+    known = {c["character_id"]: c for c in build_analysis_payload(
+        conn, book.id, get_scene(conn, book.id, scenes[2]["id"]), [])["known_characters"]}
+    assert known[s["p"]]["earlier_model_reading"] == ["路地の謎の女"] and known[s["a"]]["relations_so_far"] == ["凱特的母親"]
+    assert "後で書かれた説明" not in json.dumps(known, ensure_ascii=False)
+    # the second look's question about the new card: each card with its own
+    item = next(i for i in verify.collect(conn, book.id) if i["ref"] == f"s:{s['p']}")
+    assert item["card"]["earlier_model_reading"] == ["路地の謎の女"]
+    assert item["candidate_cards"][s["a"]]["relations_so_far"] == ["凱特的母親"]
+    assert "後で書かれた説明" not in json.dumps(item, ensure_ascii=False)
+
+
 def _ask(conn: sqlite3.Connection, s: dict[str, Any], answer: str, evidence: list[str] | None = None) -> dict[str, int]:
     items = verify.collect(conn, s["book"].id)
     item = next(i for i in items if i["ref"] == f"s:{s['p']}")
@@ -202,3 +256,108 @@ def test_rebuilding_the_card_table_keeps_every_card_and_what_points_at_it(conn, 
             pass
     finally:
         c.close()
+
+
+def _past_mother(conn: sqlite3.Connection, cfg: Any, fixtures: Any) -> dict[str, Any]:
+    """A present 「母親」 seen in the first scene; the second scene's 「母親」 is, the model says, a past life's."""
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    scenes = conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq", (book.id,)).fetchall()
+    first = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal LIMIT 1",
+                         (book.id, scenes[0]["id"])).fetchone()
+    mother, _ = repo.upsert_character(conn, book.id, "母親", name_zh="母親", aliases=[], unit_id=first["id"],
+                                      ordinal=first["ordinal"], origin="test")
+    repo.ensure_glossary(conn, book.id, "母親", "母親", category="character", origin="test", first_unit_id=first["id"])
+    rows = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? AND kind='text' ORDER BY ordinal",
+                        (book.id, scenes[1]["id"])).fetchall()
+    intro = next(r for r in rows if "少女が立っていた" in r["plain_text"])
+    line = next(r for r in rows if "どこで手に入れたの" in r["plain_text"])
+    conn.execute("UPDATE units SET plain_text='　前世の記憶の中で、母親が立っていた。' WHERE id=?", (intro["id"],))
+    return {"book": book, "scenes": scenes, "mother": mother, "intro": intro, "line": line}
+
+
+def _read(conn: sqlite3.Connection, book: Any, scene: sqlite3.Row, unit: sqlite3.Row, line: sqlite3.Row | None = None,
+          **nc: Any) -> dict[str, str]:
+    out = {"pov": None, "location": None, "time": None, "participants": [], "actions": [], "props": [],
+           "uncertainties": [],
+           "new_characters": [{"temp_id": "new_1", "name_ja": "母親", "aliases_ja": [], "proposed_name_zh": "",
+                               "evidence_unit_ids": [unit["id"]], **nc}],
+           "utterances": [] if line is None else [
+               {"unit_id": line["id"], "qi": 0, "status": "inferred", "speaker": "new_1", "conflicts": [],
+                "candidates": [{"ref": "new_1", "types": ["continuity"], "evidence": [unit["id"]], "note": ""}]}]}
+    refs: dict[str, str] = {}
+    apply_scene_analysis(conn, book.id, get_scene(conn, book.id, scene["id"]), SceneAnalysisOutput.model_validate(out),
+                         refs=refs)
+    return refs
+
+
+def test_a_card_for_another_time_is_named_by_the_books_words_with_its_time_as_the_label(conn, cfg, fixtures):
+    """A past life's 「母親」: the card's name is the book's 「母親」, its time the label (shown 「母親（前世）」 on the
+    page only); models get the time as the model's reading (``period``), never as a name form; reading the scene
+    again finds the same card; and it does not make the present 「母親」 ambiguous."""
+    s = _past_mother(conn, cfg, fixtures)
+    book, s1 = s["book"], s["scenes"][1]
+    past = _read(conn, book, s1, s["intro"], s["line"], other_person=True, period="前世")["new_1"]
+    c = _card(conn, past)
+    assert past != s["mother"] and (c["canonical_name"], c["label"], json.loads(c["aliases_json"])) == ("母親", "前世", [])
+    assert repo.card_label(c) == "母親（前世）" and not repo.may_be(c)
+    assert _read(conn, book, s1, s["intro"], s["line"], other_person=True, period="前世")["new_1"] == past  # re-read
+    forms = [f for x in repo.characters(conn, book.id) for f in [x["canonical_name"], *json.loads(x["aliases_json"])]]
+    assert not any("前世" in f for f in forms)
+    assert not any("（" in g["source_term"] for g in glossary_entries(conn, book.id))
+    # the time, for the model, as its reading of who this is
+    view = vis.character_view(conn, book.id, c, s1["end_ordinal"])
+    assert view["name_ja"] == "母親" and view["period"] == "前世" and view["other_person"] is True
+    names = vis.visible_names(conn, book.id, s1["end_ordinal"])
+    assert names[past] == "母親〔前世〕" and names[s["mother"]] == "母親"
+    rows = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal",
+                        (book.id, s1["id"])).fetchall()
+    ctx = memory_context(conn, book.id, scene=get_scene(conn, book.id, s1["id"]), batch_rows=rows)
+    card = next(x for x in ctx["characters"] if x["character_id"] == past)
+    assert card["name_ja"] == "母親" and card["period"] == "前世"
+    payload = build_analysis_payload(conn, book.id, get_scene(conn, book.id, s["scenes"][2]["id"]), [])
+    known = {x["character_id"]: x for x in payload["known_characters"]}
+    assert known[past]["period"] == "前世" and "（前世）" not in json.dumps(payload, ensure_ascii=False)
+    # the present 「母親」 is still the card the words find, in the evidence or from an earlier scene
+    later = s["scenes"][2]
+    unit = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? AND kind='text' ORDER BY ordinal LIMIT 1",
+                        (book.id, later["id"])).fetchone()
+    assert _read(conn, book, later, unit)["new_1"] == s["mother"]
+    assert _read(conn, book, s1, s["intro"])["new_1"] == s["mother"]
+    assert not conn.execute("SELECT 1 FROM characters WHERE may_be_json!='[]'").fetchone()
+
+
+def test_a_name_revealed_for_another_times_card_is_linked_from_the_reveal(conn, cfg, fixtures):
+    s = _past_mother(conn, cfg, fixtures)
+    book, last = s["book"], s["scenes"][-1]
+    past = _read(conn, book, s["scenes"][1], s["intro"], s["line"], other_person=True, period="前世")["new_1"]
+    named = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? AND plain_text LIKE '%リリア%' ORDER BY "
+                         "ordinal LIMIT 1", (book.id, last["id"])).fetchone()
+    cid = _read(conn, book, last, named, name_ja="リリア", same_as_ref=past)["new_1"]
+    c = _card(conn, cid)
+    assert _card(conn, past) is None and c["canonical_name"] == "リリア" and _speaker(conn, s["line"]["id"]) == cid
+    assert "前世" not in c["aliases_json"]
+    before = vis.character_view(conn, book.id, c, named["ordinal"] - 1)
+    assert before is not None and before["name_ja"] == "母親" and "リリア" not in before["aliases_ja"]
+    assert vis.character_view(conn, book.id, c, named["ordinal"])["name_ja"] == "リリア"
+
+
+def test_a_card_found_earlier_on_a_re_read_does_not_show_its_later_forms_early(conn, cfg, fixtures):
+    """A card first known at the end of the scene (乙の母, also 「黒薔薇」) is met earlier by 「来訪者」 on a re-read: it is
+    known from there, by those words only — its name and 「黒薔薇」 keep the position they were first seen at
+    (``character_forms``, ADR-103; the open item of ADR-101)."""
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    later = conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq DESC LIMIT 1", (book.id,)).fetchone()
+    tail = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? ORDER BY ordinal DESC LIMIT 1",
+                        (book.id, later["id"])).fetchone()
+    ev = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? AND plain_text LIKE '%来訪者%'",
+                      (book.id, later["id"])).fetchone()
+    card, _ = repo.upsert_character(conn, book.id, "乙の母", name_zh=None, aliases=["来訪者", "黒薔薇"],
+                                    unit_id=tail["id"], ordinal=tail["ordinal"], origin="test")
+    assert ev["ordinal"] < tail["ordinal"]
+    assert _read(conn, book, later, ev, aliases_ja=["来訪者"])["new_1"] == card
+    c = _card(conn, card)
+    assert c["known_from_ordinal"] == ev["ordinal"]
+    early = vis.character_view(conn, book.id, c, ev["ordinal"])
+    assert early == {"name_ja": "来訪者", "name_zh": None, "aliases_ja": []}
+    late = vis.character_view(conn, book.id, c, tail["ordinal"])
+    assert late is not None and late["name_ja"] == "乙の母" and set(late["aliases_ja"]) == {"来訪者", "黒薔薇"}

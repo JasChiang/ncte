@@ -89,11 +89,12 @@ def visible_examples(conn: sqlite3.Connection, character_id: str, horizon: int, 
     return rows[:limit]
 
 
-FormPositions = tuple[dict[str, Pos], dict[str, Pos]]
+FormPositions = tuple[dict[str, Pos], dict[str, Pos], dict[tuple[str, str], Pos]]
 
 
 def form_positions(conn: sqlite3.Connection, book_id: str) -> FormPositions:
-    """(first appearance of each name form, reveal of the earliest accepted link touching the form)."""
+    """(first appearance of each name form, reveal of the earliest accepted link touching the form, where each form
+    was first seen with each card: ``character_forms``, ADR-103)."""
     where, ids = scope_clause(conn, book_id, "g.book_id")
     first: dict[str, Pos] = {}
     for r in conn.execute("SELECT g.source_term, b.volume_index, u.ordinal FROM glossary g JOIN units u ON "
@@ -108,7 +109,11 @@ def form_positions(conn: sqlite3.Connection, book_id: str) -> FormPositions:
         for t in (r[0], r[1]):
             if t not in linked or p < linked[t]:
                 linked[t] = p
-    return first, linked
+    where, ids = scope_clause(conn, book_id, "f.book_id")
+    held = {(r[0], r[1]): (float(r[2]), int(r[3])) for r in conn.execute(
+        "SELECT f.character_id, f.form, b.volume_index, f.ordinal FROM character_forms f JOIN books b ON b.id=f.book_id "
+        f"WHERE {where}", ids)}
+    return first, linked, held
 
 
 def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
@@ -121,11 +126,15 @@ def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
     import json
 
     hz = pos(conn, book_id, upto)
-    first, linked = form_positions(conn, book_id) if forms_at is None else forms_at
+    first, linked, held = form_positions(conn, book_id) if forms_at is None else forms_at
     known_from = pos(conn, c["book_id"], c["known_from_ordinal"])
     names = list(dict.fromkeys([c["canonical_name"], *json.loads(c["aliases_json"] or "[]")]))
     # a form with no recorded first appearance is known with the character — or from its link's reveal, if later
-    at = {n: first.get(n, max(known_from, linked.get(n, known_from))) for n in names}
+    # a form seen with this card at a recorded position is known from there (a card moved earlier on a re-read does
+    # not take its later forms with it, ADR-103)
+    # not to before the form first appears in the book either
+    at = {n: (max(h, first[n]) if n in first else max(h, linked.get(n, h))) if (h := held.get((c["id"], n))) is not None
+          else first.get(n, max(known_from, linked.get(n, known_from))) for n in names}
     anchor = min(names, key=lambda n: at[n])
     shown = [n for n in names if at[n] <= hz and (n == anchor or linked.get(n, (0.0, 0)) <= hz)]
     if not shown:
@@ -139,6 +148,11 @@ def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
     from .repository import gender_basis, gender_view
 
     out: dict[str, Any] = {"name_ja": head, "name_zh": zh, "aliases_ja": [n for n in shown if n != head]}
+    if (when := c["period"] if "period" in c.keys() else None) is not None:
+        # someone of another time (a past life's 「母親」): the model's reading of who this is, not a name form
+        out["other_person"] = True
+        if when:
+            out["period"] = when
     if c["is_narrator"] or head.startswith("（敘述者"):  # the unnamed first-person narrator (ADR-045): 「我」 in the text
         out["narrator"] = True
     if g := gender_view(conn, c["id"], hz):
@@ -154,8 +168,13 @@ def visible_names(conn: sqlite3.Connection, book_id: str, upto: int,
     to the model (speakers, who a line is said to, forms of address, whose eyes the scene is told through) uses this,
     so a name revealed later in the book (「神祕少女」 → 「蘇菲」) never comes back through a side door."""
     forms_at = form_positions(conn, book_id) if forms_at is None else forms_at
-    return {c["id"]: v["name_zh"] or v["name_ja"] for c in visible_characters(conn, book_id, upto)
-            if (v := character_view(conn, book_id, c, upto, forms_at)) is not None}
+    out = {}
+    for c in visible_characters(conn, book_id, upto):
+        if (v := character_view(conn, book_id, c, upto, forms_at)) is not None:
+            name = v["name_zh"] or v["name_ja"]
+            # someone of another time: the model's reading of the time goes with the name, as a note (「母親〔前世〕」)
+            out[c["id"]] = f"{name}〔{v.get('period') or '另一人'}〕" if v.get("other_person") else name
+    return out
 
 
 FIRST_SEEN_CHARS = 60
@@ -177,3 +196,47 @@ def shared_names(names: dict[str, str]) -> set[str]:
     for n in names.values():
         seen[n] = seen.get(n, 0) + 1
     return {cid for cid, n in names.items() if seen[n] > 1}
+
+
+TELL_APART_NOTES = 3
+TELL_APART_RELATIONS = 4
+
+
+def tell_apart(conn: sqlite3.Connection, book_id: str, cards: list[Any], upto: int) -> dict[str, dict[str, Any]]:
+    """What tells cards with the same name apart (two unnamed mothers, each 「母親」) in one request, all as known at
+    ``upto`` — nothing written for a later position, no name revealed later (ADR-103):
+
+    * ``first_seen``: the opening of the paragraph each was first seen in (the book's text);
+    * ``earlier_model_reading``: what the model itself wrote of the person earlier — its description of someone the
+      book does not name (``character_notes``) and the role in its impression of them — an earlier reading by the
+      model, not the book's words;
+    * ``relations_so_far``: relations read by then (「卡伊的母親」), the others named as known at ``upto``.
+
+    Callers give it only for cards whose name another card in the request has, so other requests stay as they were."""
+    from .repository import impression_at
+
+    hz = pos(conn, book_id, upto)
+    names = visible_names(conn, book_id, upto)
+    out: dict[str, dict[str, Any]] = {}
+    for c in cards:
+        hint: dict[str, Any] = {"first_seen": first_seen(conn, c)}
+        notes = [r["text"] for r in conn.execute("SELECT * FROM character_notes WHERE character_id=? ORDER BY ordinal",
+                                                 (c["id"],)) if pos(conn, r["book_id"], r["ordinal"]) <= hz]
+        if (imp := impression_at(conn, c["id"], upto)) and imp.get("role"):
+            notes.append(imp["role"])
+        if notes:
+            hint["earlier_model_reading"] = list(dict.fromkeys(notes))[:TELL_APART_NOTES]
+        rel: list[str] = []
+        for r in conn.execute(
+                "SELECT a_id, b_id, a_is, b_is, relation_zh, book_id, first_ordinal, NULL FROM relation_notes WHERE "
+                "a_id=? OR b_id=? UNION ALL SELECT a_id, b_id, a_is, b_is, relation_zh, book_id, since_ordinal, "
+                "until_ordinal FROM relations WHERE a_id=? OR b_id=?", (c["id"],) * 4):
+            if pos(conn, r[5], r[6]) > hz or (r[7] is not None and pos(conn, r[5], r[7]) <= hz):
+                continue  # not read yet, or replaced by then
+            other, role = (r[1], r[2]) if r[0] == c["id"] else (r[0], r[3])
+            if other in names and other != c["id"]:
+                rel.append(f"{names[other]}的{role or r[4]}")
+        if rel:
+            hint["relations_so_far"] = list(dict.fromkeys(rel))[:TELL_APART_RELATIONS]
+        out[c["id"]] = hint
+    return out

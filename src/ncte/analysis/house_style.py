@@ -19,7 +19,10 @@ from typing import Any
 from ..epub.units import match_text, source_form
 from ..llm.schemas import HouseStyleOutput
 from ..memory.address import calls_by
-from ..memory.repository import character_basics
+from ..memory.repository import (
+    character_basics,
+    model_name,  # someone of another time: with the model's reading (ADR-103)
+)
 from ..memory.style import SeriesStyle, load_style, save_style
 from .impressions import main_characters
 
@@ -107,7 +110,7 @@ def request(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, Any], dic
         voice = "；".join((f"〔{s['period']}〕" if s["period"] else f"〔§{s['since_ordinal']}起〕" if len(stretches) > 1 else "")
                          + s["voice"] for s in stretches)
         refs[f"c{k}"] = c["id"]
-        items.append({"ref": f"c{k}", "name": c["display_name_zh"] or c["canonical_name"], "ja": c["canonical_name"],
+        items.append({"ref": f"c{k}", "name": model_name(c), "ja": c["canonical_name"],
                       **character_basics(conn, c["id"]), **({"voice": voice} if voice else {}), "lines": lines,
                       "repeated_endings": endings([q for q, _ in said])})
     counted: dict[str, int] = {}
