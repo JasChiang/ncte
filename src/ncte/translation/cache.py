@@ -47,9 +47,9 @@ def glossary_entries(conn: sqlite3.Connection, book_id: str) -> list[dict[str, A
 
 
 def relevant_glossary(entries: list[dict[str, Any]], text: str) -> list[dict[str, Any]]:
-    from ..epub.units import match_text
+    from ..epub.units import with_readings
 
-    t = match_text(text)
+    t = with_readings(text)  # a term the book gives only as a reading (ローエレメンタル) goes where that reading is
     return [g for g in entries if g["source_term"] and g["source_term"] in t]
 
 

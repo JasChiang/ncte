@@ -1147,6 +1147,11 @@ open workspace/eval/<timestamp>/report.html
 - README〈已知限制〉加上三種訂閱方案 CLI 各自的技術限制。
 - 更正 ADR-072：加了 `--system-prompt` 之後，`claude -p` 不會帶入使用者自己的 `~/.claude/CLAUDE.md`（實測 2.1.309）；`claude_cli` 的說明一併更正。
 
+## 讀音也是原文；沒有名字的人物以原文的寫法建卡（2026-10-23，分支 reading-evidence-2026-10-23；ADR-101）
+- `units.read_text`、`units.with_readings`；`units.in_source` 也在 `read_text` 裡找。`scene.apply_scene_analysis` 的核對改用存下的原文（`unit_src`，含讀音）：人名、別名、其他寫法、道具、發話字句；`scene._said_alias`、`_valid_name`；新人物的 `name_ja` 是這一場以前已顯示的寫法時對到那張卡（`known_by`）。譯名表的挑選（`cache.relevant_glossary`、`build_analysis_payload`、`build_memory_payload`）用 `with_readings`。
+- 重放暫存資料：scratchpad（`capture.py` 用舊程式照流程重放兩邊的回答、記下解完代號的答案；`replay.py`、`run_replay.sh` 用目前的程式套到 `base` 的副本）。原本的實驗資料夾沒動。low 拒絕 24 → 2、medium 23 → 1，留下的都是一個字的「父」。
+- 測試：`tests/integration/test_in_source.py`（以讀音給的字句，13 項檢查）、`tests/unit/test_units.py`、`tests/integration/test_entities.py`（沒有名字的人物、下一場的寫法、名字揭曉）。795 passed、5 skipped；ruff、mypy 通過。
+
 ## 整本步驟沒問到就是 partial、同形詞同時送、修正一起驗收、空答案記用量（2026-10-23，分支 pipeline-coverage-2026-10-23；ADR-102）
 - `context_pipeline`：`_step_due`、`_end_step`（`partial` 與 `unasked_ids`）；`verify_pass`、`gender_gaps_pass`、`relations_pass`、`impressions_pass`、`house_style_pass`、`terms_pass`（`CANDIDATES`）、`false_friends_pass` 記下沒問到的項目、續跑只補那些；`false_friends_pass` 改用 `_ask_groups`，修正走 `_fix_found(side_by_side=True)`；校稿與讀者檢查的修正改走 `_fix_found`。`gender_gaps.requests`、`impressions.requests`、`terms.requests` 的 `only`；`relations.apply(only=…)`。
 - `review`：`_retranslate_with_feedback` 拆成 `_write_fixes`（可同時送各場，`SideBySide`）＋`_settle_fixes`，一批的修正一起驗收；`check_waiting_fixes` 一起問。

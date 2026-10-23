@@ -11,7 +11,7 @@ import json
 import sqlite3
 from typing import Any
 
-from ..epub.units import in_source, source_form
+from ..epub.units import in_source, source_form, with_readings
 from ..llm.schemas import MemoryUpdateOutput
 from ..memory import repository as repo
 from ..memory.db import utcnow
@@ -46,11 +46,12 @@ def build_memory_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
              "status": u["status"]}
             for u in conn.execute("SELECT * FROM utterances WHERE book_id=? AND scene_id=?", (book_id, scene["id"]))]
     text = " ".join(clean(r["plain_text"]) for r in rows)
+    seen = " ".join(with_readings(r["plain_text"]) for r in rows)  # a term is the base text or a reading
     out = {"task": "memory_update", "scene_id": scene["id"], "units": units,
            "known_characters": [{"character_id": cid, **v} for cid, v in views.items()],
            "scene": {"utterances": utts, **{k: v for k, v in json.loads(scene["state_json"] or "{}").items()
                                             if k not in ("run_id", "analysis", "quotes")}},
-           "glossary": [g for g in glossary if str(g.get("ja", "")) in text]}
+           "glossary": [g for g in glossary if str(g.get("ja", "")) in seen]}
     if known := known_facts(conn, book_id, scene, views, names, text):
         out["known_facts"] = known
     if "kind" in scene.keys() and scene["kind"] and scene["kind"] != "present":
