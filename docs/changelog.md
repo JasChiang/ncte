@@ -1304,3 +1304,8 @@ open workspace/eval/<timestamp>/report.html
 - `lookback.recorded_forms`：稱呼也只對可見、不是另一時期的卡。
 - `lookback.apply`：說話對象原文寫明或人工決定的不改（`verify.addressee_settled`，`_set_addressee` 共用）；`to` 為 null 不改、附段落的空陣列清掉推測的對象（`LookbackLine.to: list[str] | None`）；提示詞 `speaker_lookback` 說明空陣列。
 - 測試：`test_speaker_context.py` 新增 4 個（用上一版的程式都失敗）。965 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-104 第二輪審閱修正（2026-10-24，分支 speaker-context-2026-10-23）
+- `scene._uses_before`：依系列的故事位置（`series.pos`／`volumes`、`scope_clause`）數場景前的使用，後面的集數與系列外的書不算。
+- `lookback.apply`：說話對象是否已確定在改說話者之前讀（`settled`），原文寫明的不因改說話者而被 `to` 清掉或換掉。
+- 測試：`test_speaker_context.py` 新增 2 個（用 97f64e3 的程式都失敗）。967 passed、5 skipped；ruff、mypy 通過。

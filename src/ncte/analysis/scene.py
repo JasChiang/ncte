@@ -370,11 +370,19 @@ CARD_FACTS = 3  # evidence-backed facts given per visible card (ADR-104)
 CARD_FORMS = 4  # forms of address others are recorded calling a card, given per card
 
 
-def _uses_before(conn: sqlite3.Connection, address_id: int, before: int) -> int:
-    """How many lines before ordinal ``before`` a recorded form of address is linked to (``address_observations``)."""
-    return int(conn.execute("SELECT count(*) FROM address_observations o JOIN utterances t ON t.id=o.utterance_id "
-                            "JOIN units n ON n.id=t.unit_id WHERE o.address_id=? AND n.ordinal<?",
-                            (address_id, before)).fetchone()[0])
+def _uses_before(conn: sqlite3.Connection, address_id: int, book_id: str, before: int) -> int:
+    """How many lines a recorded form of address is linked to (``address_observations``) before the story position
+    (book ``book_id``, ordinal ``before``) across the series: earlier volumes, and this volume before the ordinal —
+    never a later volume, nor a book outside the series (an ordinal alone means nothing across volumes)."""
+    from ..series import pos, scope_clause, volumes
+
+    here = pos(conn, book_id, before)
+    vols = volumes(conn)
+    where, ids = scope_clause(conn, book_id, "n.book_id")
+    rows = conn.execute("SELECT n.book_id, n.ordinal FROM address_observations o JOIN utterances t ON "
+                        f"t.id=o.utterance_id JOIN units n ON n.id=t.unit_id WHERE o.address_id=? AND {where}",
+                        (address_id, *ids)).fetchall()
+    return sum(1 for b, o in rows if (vols.get(b, 1.0), int(o)) < here)
 
 
 def _tally(found: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
@@ -439,7 +447,8 @@ def card_evidence(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, ro
         # but linked to no earlier line counts once)
         called = sorted((r for r in terms if r["addressee_id"] == cid and r["speaker_id"] != cid
                          and r["speaker_id"] in names and calls_by(conn, r)),
-                        key=lambda r: (-max(1, _uses_before(conn, r["id"], start)), r["first_ordinal"], r["id"]))
+                        key=lambda r: (-max(1, _uses_before(conn, r["id"], book_id, start)), r["first_ordinal"],
+                                       r["id"]))
         if called:
             extra["called_as"] = [{"ja": r["form_ja"], "by": names[r["speaker_id"]]} for r in called[:CARD_FORMS]]
         mine = [f for f in facts if f["subject"] == cid and (f["evidence_quote"] or "").strip()]

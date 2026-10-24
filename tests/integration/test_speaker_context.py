@@ -313,8 +313,8 @@ def test_the_look_back_follows_merges_as_the_second_look_does(conn, cfg, fixture
 
 def _observe(conn: sqlite3.Connection, book_id: str, speaker: str, addressee: str, form: str, unit: sqlite3.Row) -> None:
     """One use of a form of address, on a line of ``unit`` (as the memory step links it)."""
-    aid = conn.execute("SELECT id FROM address_terms WHERE book_id=? AND speaker_id=? AND addressee_id=? AND form_ja=?",
-                       (book_id, speaker, addressee, form)).fetchone()
+    aid = conn.execute("SELECT id FROM address_terms WHERE speaker_id=? AND addressee_id=? AND form_ja=?",
+                       (speaker, addressee, form)).fetchone()
     if aid is None:
         _address(conn, book_id, speaker, addressee, form, unit["ordinal"])
         aid = conn.execute("SELECT max(id) FROM address_terms").fetchone()
@@ -416,3 +416,51 @@ def test_a_cited_answer_never_touches_a_stated_addressee_and_a_cited_empty_list_
     assert to_of() == ([kaito], "inferred")
     lookback.apply(conn, book.id, scene, items, answer(to=[]))  # cited and empty: said to no one in particular
     assert to_of() == ([], None)
+
+
+def test_a_stated_addressee_survives_a_cited_change_of_speaker(conn, cfg, fixtures):
+    """Review 2nd round: the speaker changes (which leaves the addressee an inference) and the answer says ``to: []``;
+    the addressee the text stated when the line was gathered is neither cleared nor replaced."""
+    book, _, _, u, sc = _book(conn, cfg, fixtures)
+    mina, kaito, sera = _sister_scene(conn, book.id, u, sc, "mina")
+    uid = u[26]["id"]
+    conn.execute("UPDATE utterances SET addressee_ids_json=?, addressee_status='explicit' WHERE unit_id=?",
+                 (json.dumps([kaito]), uid))
+    scene = get_scene(conn, book.id, sc[2]["id"])
+    items = lookback.gather(conn, book.id, scene)
+    for to in ([], [mina]):
+        conn.execute("UPDATE utterances SET speaker_id_nullable=?, addressee_ids_json=?, addressee_status='explicit' "
+                     "WHERE unit_id=?", (mina, json.dumps([kaito]), uid))
+        lookback.apply(conn, book.id, scene, items, SpeakerLookbackOutput.model_validate(
+            {"lines": [{"ref": items[0]["ref"], "speaker": sera, "to": to, "evidence": [u[28]["id"]], "reason": ""}]}))
+        row = _speaker_of(conn, uid)
+        assert row["speaker_id_nullable"] == sera and json.loads(row["addressee_ids_json"]) == [kaito]
+
+
+def test_called_as_counts_uses_by_story_position_across_the_series(conn, cfg, fixtures, tmp_path):
+    """Review 2nd round: a later volume's uses at a small ordinal are not before an earlier volume's scene."""
+    from ncte.library import import_book
+    from ncte.series import ensure_series
+
+    from .test_series import vol2_epub
+
+    sid = ensure_series(conn, "銀の鍵シリーズ", series_id="sr_test")
+    book, _ = import_book(conn, cfg, fixtures["basic"], series_id=sid, volume=1)
+    b2, _ = import_book(conn, cfg, vol2_epub(tmp_path), series_id=sid, volume=2)
+    u = _units(conn, book.id)
+    sc = _scenes(conn, book.id)
+    mina, kaito, sera = _cards(conn, book.id, u)
+    for who, form in ((mina, "カイ兄"), (sera, "カイ君"), (mina, "カイ様"), (sera, "カイ殿")):
+        _observe(conn, book.id, who, kaito, form, u[5])
+    _address(conn, book.id, sera, kaito, "カイちゃん", 6)
+
+    def top() -> list[str]:
+        p = build_analysis_payload(conn, book.id, get_scene(conn, book.id, sc[2]["id"]), [])
+        return [x["ja"] for x in next(c for c in p["known_characters"] if c["character_id"] == kaito)["called_as"]]
+
+    before = top()
+    v2 = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal LIMIT 1", (b2.id,)).fetchone()
+    assert v2["ordinal"] < sc[2]["start_ordinal"]
+    for _ in range(5):  # volume 2, at an ordinal smaller than this scene's
+        _observe(conn, b2.id, sera, kaito, "カイちゃん", v2)
+    assert "カイちゃん" not in before and top() == before

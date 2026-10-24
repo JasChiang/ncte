@@ -240,6 +240,9 @@ def apply(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, items: lis
         if u is None or u["status"] == "human_verified" or u["speaker_id_nullable"] != item["_speaker"]:
             stats["ignored"] += 1
             continue
+        # whom it is said to is settled as the line was gathered — read before the speaker changes, since a new speaker
+        # leaves the addressee an inference (``speaker_changed_addressees``) and must not open a stated one to change
+        settled = addressee_settled(u)
         new = a.speaker if a.speaker not in (None, "", "unknown", "null") else None
         if new is not None and new not in item["_people"]:
             stats["ignored"] += 1
@@ -266,7 +269,7 @@ def apply(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, items: lis
         to = [y for x in dict.fromkeys(a.to) if x in item["_people"] and (y := alive(x)) and y != new]
         now = conn.execute("SELECT * FROM utterances WHERE id=?", (item["_utt"],)).fetchone()
         # as the second look (``verify._set_addressee``): a stated addressee, or a line a person set, is never changed
-        if addressee_settled(now) or len(to) != len(set(a.to)) or set(to) == set(json.loads(now["addressee_ids_json"] or "[]")):
+        if settled or addressee_settled(now) or len(to) != len(set(a.to)) or set(to) == set(json.loads(now["addressee_ids_json"] or "[]")):
             continue
         conn.execute("UPDATE utterances SET addressee_ids_json=?, addressee_status=?, updated_at=? WHERE id=?",
                      (json.dumps(to), "inferred" if to else None, utcnow(), item["_utt"]))
