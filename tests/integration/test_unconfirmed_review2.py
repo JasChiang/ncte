@@ -66,3 +66,54 @@ def test_several_words_for_one_card_in_one_memory_answer_are_all_kept(conn, cfg,
     book, intro = s["book"], s["intro"]
     _memory(conn, book, s["scenes"][1], glossary_candidates=[_gloss("澄枝", intro, s["b"]), _gloss("エレナ", intro, s["b"])])
     assert {"澄枝", "エレナ"} <= set(json.loads(_card(conn, s["b"])["aliases_json"]))
+
+
+def _question_state(conn, s):
+    book, s1 = s["book"], s["scenes"][1]
+    state = json.loads(get_scene(conn, book.id, s1["id"])["state_json"])
+    state["uncertainties"] = [{"unit_ids": [s["line"]["id"]], "question": "誰が言ったのか"}]
+    conn.execute("UPDATE scenes SET state_json=? WHERE id=?", (json.dumps(state, ensure_ascii=False), s1["id"]))
+    return lambda: json.loads(get_scene(conn, book.id, s1["id"])["state_json"])["uncertainties"][0]
+
+
+def test_a_question_keeps_the_card_its_answer_names_after_the_merges(conn, cfg, fixtures):
+    s = _setup(conn, cfg, fixtures)
+    question_now = _question_state(conn, s)
+    items = verify.collect(conn, s["book"].id)
+    same = next(i for i in items if i["ref"] == f"s:{s['p']}")
+    question = next(i for i in items if i["kind"] == "question")
+    verify.apply(conn, s["book"].id, items, VerifyOutput.model_validate({"items": [
+        {"ref": same["ref"], "answer": s["a"], "reason": "x", "evidence": [next(iter(same["_codes"]))]},
+        {"ref": question["ref"], "answer": "その母親", "reason": "x", "character_id": s["p"]}]}), lambda *a: None)
+    assert question_now()["answer_character_id"] == s["a"]
+
+
+def test_an_answer_naming_a_card_gone_since_leaves_the_question_to_ask_again(conn, cfg, fixtures):
+    s = _setup(conn, cfg, fixtures)
+    question_now = _question_state(conn, s)
+    items = verify.collect(conn, s["book"].id)
+    question = next(i for i in items if i["kind"] == "question")
+    repo.merge_characters(conn, s["a"], s["p"])  # gone outside this look: no merge of it to follow
+    left: list[str] = []
+    verify.apply(conn, s["book"].id, items, VerifyOutput.model_validate({"items": [
+        {"ref": question["ref"], "answer": "その母親", "reason": "x", "character_id": s["p"],
+         "line_role": "speaker"}]}), lambda *a: None, unapplied=left)
+    assert "answer" not in question_now() and left == [question["ref"]]
+    assert any(i["ref"] == question["ref"] for i in verify.collect(conn, s["book"].id))
+
+
+def test_an_action_answer_naming_a_gone_card_changes_nothing_and_is_asked_again(conn, cfg, fixtures):
+    s = _setup(conn, cfg, fixtures)
+    book, s1 = s["book"], s["scenes"][1]
+    state = json.loads(get_scene(conn, book.id, s1["id"])["state_json"])
+    state["actions"] = [{"unit_id": s["intro"]["id"], "summary": "某人叫她來", "subject_candidates": [s["b"]],
+                         "object_candidates": [], "status": "inferred"}]
+    conn.execute("UPDATE scenes SET state_json=? WHERE id=?", (json.dumps(state, ensure_ascii=False), s1["id"]))
+    items = verify.collect(conn, book.id)
+    act = next(i for i in items if i["kind"] == "action")
+    repo.merge_characters(conn, s["a"], s["b"])  # the answer's card is gone, with no merge in this look to follow
+    verify.apply(conn, book.id, items, VerifyOutput.model_validate({"items": [
+        {"ref": act["ref"], "answer": s["b"], "reason": "x"}]}), lambda *a: None)
+    after = json.loads(get_scene(conn, book.id, s1["id"])["state_json"])["actions"][0]
+    assert not after.get("verified") and after["subject_candidates"] == [s["a"]]  # (the merge renamed it)
+    assert any(i["ref"] == act["ref"] for i in verify.collect(conn, book.id))

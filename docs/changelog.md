@@ -1280,3 +1280,7 @@ open workspace/eval/<timestamp>/report.html
 - `visibility.character_view(lookup=True)`：只給卡名與別名（不含只用來顯示的寫法）；讀場景的 `known_by` 與 `address.name_forms` 用它。
 - `verify.apply`：`alive()` 讓說話者、說話對象、動作的人物都順著同一次覆核的合併；卡不在時 `unanswered()`。
 - 測試：`tests/integration/test_unconfirmed_review2.py`（新，4 個；改之前都失敗）。949 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 再審修正（2026-10-24，分支 unnamed-placeholders-2026-10-23）
+- `verify.apply`：疑問的 `answer_character_id` 存順著合併後的卡；回答指的卡已不在時先判定、不寫入疑問（`unanswered()`，下次再問）；動作的回答有已不在的卡時當沒回答，不改動作、不標 verified。
+- 測試：`test_unconfirmed_review2.py` 新增 3 個（用上一版的程式都失敗）。952 passed、5 skipped；ruff、mypy 通過。

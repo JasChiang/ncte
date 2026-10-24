@@ -558,9 +558,14 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
                     item["question"]:
                 stats["ignored"] += 1
                 continue
+            # the person it names as the card is after this look's merges; gone with nothing left: not an answer —
+            # nothing is kept with the question, so it is asked again
+            who_now = alive(a.character_id) if a.character_id in item["candidates"] else None
+            if a.character_id in item["candidates"] and who_now is None:
+                unanswered(a.ref)
+                continue
             asked[int(idx)].update({"answer": answer[:300], "answer_reason": a.reason[:200],
-                                    **({"answer_character_id": a.character_id}
-                                       if a.character_id in item["candidates"] else {})})
+                                    **({"answer_character_id": who_now} if who_now else {})})
             conn.execute("UPDATE scenes SET state_json=? WHERE book_id=? AND id=?",
                          (json.dumps(state, ensure_ascii=False), book_id, sid))
             stats["questions_answered"] = stats.get("questions_answered", 0) + 1
@@ -570,10 +575,7 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             lines = [x["line_ref"] for x in item.get("lines") or []]
             named = [x for x in dict.fromkeys([*a.line_refs, a.line_ref]) if x in lines]
             chosen = named or (lines if len(lines) == 1 else [])
-            if a.line_role and answer != "unknown" and a.character_id in item["candidates"]:
-                if (who_now := alive(a.character_id)) is None:  # merged away with nothing left: asked again
-                    unanswered(a.ref)
-                    continue
+            if a.line_role and answer != "unknown" and who_now is not None:
                 note = f"second look (question): {answer[:80]} — {a.reason[:120]}"
                 for line in chosen:
                     if a.line_role == "speaker":
@@ -588,7 +590,11 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             who = [x.strip() for x in answer.split(",") if x.strip()] if answer != "unknown" else []
             cited = [c for c in a.evidence if c in item["_codes"]]
             if who and answer_valid(item, answer):  # the cards as they are after this pass's merges
-                who = list(dict.fromkeys(w for x in who if (w := alive(x)) is not None))
+                now_who = [alive(x) for x in who]
+                if any(w is None for w in now_who):  # one is gone with nothing left: not an answer, asked again
+                    unanswered(a.ref)
+                    continue
+                who = list(dict.fromkeys(w for w in now_who if w is not None))
             if not idx.isdigit() or int(idx) >= len(acts) or acts[int(idx)].get("summary", "") != item["_summary"] \
                     or not answer_valid(item, answer) or (who and not cited):
                 stats["ignored"] += 1  # an answer without the passage it rests on changes nothing
