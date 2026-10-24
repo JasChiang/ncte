@@ -424,7 +424,8 @@ class LookbackLine(_M):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
     ref: str
     speaker: str | None
-    to: list[str] = Field(default_factory=list)
+    # whom it is said to: left out (null) = not answered, unchanged; an empty list = said to no one in particular
+    to: list[str] | None = None
     evidence_unit_ids: list[str] = Field(default_factory=list, alias="evidence")
     reason: str = ""
 

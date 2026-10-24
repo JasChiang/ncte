@@ -1297,3 +1297,10 @@ open workspace/eval/<timestamp>/report.html
 - 照 main 的 ADR-103：回頭看比對的字只用找卡模式的人物卡（`character_view(..., lookup=True)`，只供顯示的寫法不算）；卡上的事實挑選也用找卡模式的寫法；回頭看的答案和覆核一樣順著合併找到現在的卡（`lookback.apply(..., went=)`），卡已不在又沒有去向時不寫入（`unapplied`）。
 - A/B 結果寫進 ADR-104；預設 `card_voice` 開、`scene_state`、`speaker_lookback` 關（程式保留）。
 - 測試：`test_speaker_context.py` 新增 1 個（回頭看順著合併）。961 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-104 審閱修正（2026-10-24，分支 speaker-context-2026-10-23；Codex 審 main..9282600 的六個 P2）
+- `scene.card_evidence`：`called_as` 依場景前連到台詞的使用次數排（`_uses_before`）。
+- `verify.collect(..., situation=)`：場面只在 `scene_state` 開時附（`ContextOrchestrator.verify_pass` 傳設定）；`_situation` 用那一筆場面位置看得到的名字。
+- `lookback.recorded_forms`：稱呼也只對可見、不是另一時期的卡。
+- `lookback.apply`：說話對象原文寫明或人工決定的不改（`verify.addressee_settled`，`_set_addressee` 共用）；`to` 為 null 不改、附段落的空陣列清掉推測的對象（`LookbackLine.to: list[str] | None`）；提示詞 `speaker_lookback` 說明空陣列。
+- 測試：`test_speaker_context.py` 新增 4 個（用上一版的程式都失敗）。965 passed、5 skipped；ruff、mypy 通過。

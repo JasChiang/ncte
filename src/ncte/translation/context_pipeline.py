@@ -691,7 +691,8 @@ class ContextOrchestrator(Orchestrator):
         saved = self._begin_job("verify") if record_job else {}
         only = saved.pop("unasked_ids", None)  # resumed after a partial look: only the items it did not ask
         with self.lock:
-            items = verify.collect(self.conn, self.book.id, max_actions=self.cfg.context.verify_action_items)
+            items = verify.collect(self.conn, self.book.id, max_actions=self.cfg.context.verify_action_items,
+                                   situation=self.cfg.context.scene_state)
         if only is not None:
             items = [i for i in items if i["ref"] in set(only)]  # one answered since, or changed, is gone
         stats: dict[str, int] = {**saved, "items": len(items)} if only is None else {**saved, "unasked": 0}

@@ -86,8 +86,10 @@ def _speaker_evidence(conn: sqlite3.Connection, book_id: str, utterance_id: str)
     return _ordinals(conn, book_id, list(dict.fromkeys(ids)))
 
 
-def collect(conn: sqlite3.Connection, book_id: str, max_actions: int = MAX_ACTION_ITEMS) -> list[dict[str, Any]]:
-    """Items to look at again. Keys starting with ``_`` stay out of the request."""
+def collect(conn: sqlite3.Connection, book_id: str, max_actions: int = MAX_ACTION_ITEMS, *,
+            situation: bool = False) -> list[dict[str, Any]]:
+    """Items to look at again. Keys starting with ``_`` stay out of the request. ``situation`` (``context.scene_state``,
+    ADR-104): a line's item carries the reading's picture of the scene at it; off, the requests are as without it."""
     names = _names(conn, book_id)
     items: list[dict[str, Any]] = []
     for u in conn.execute(
@@ -108,7 +110,7 @@ def collect(conn: sqlite3.Connection, book_id: str, max_actions: int = MAX_ACTIO
                 "_ordinal": u["ordinal"]}
         if far := [o for o in evidence if o not in near][:MAX_EVIDENCE]:
             item["evidence_paragraphs"] = _whole(conn, book_id, far)
-        if at := _situation(conn, book_id, u["scene_id"], u["unit_id"], names):
+        if situation and (at := _situation(conn, book_id, u["scene_id"], u["unit_id"])):
             item["situation"] = at  # how the reading pictured the scene at the line (ADR-104)
         items.append(item)
     for g in conn.execute("SELECT g.* FROM character_gender g JOIN characters c ON c.id=g.character_id WHERE "
@@ -344,10 +346,10 @@ def _scene_people(conn: sqlite3.Connection, book_id: str, scene_id: str | None) 
     return {str(x) for x in people if x}
 
 
-def _situation(conn: sqlite3.Connection, book_id: str, scene_id: str | None, unit_id: str,
-               names: dict[str, str]) -> dict[str, Any] | None:
+def _situation(conn: sqlite3.Connection, book_id: str, scene_id: str | None, unit_id: str) -> dict[str, Any] | None:
     """The point of the scene's picture (the reading's ``situation``, ADR-104) in force at ``unit_id``, people by
-    their id and name; None when the reading wrote none."""
+    their id and the name known at that point (never a name revealed later); None when the reading wrote none."""
+    from ..memory.visibility import visible_names
     from .scene import situation_at
 
     sc = conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND id=?", (book_id, scene_id)).fetchone() \
@@ -360,6 +362,8 @@ def _situation(conn: sqlite3.Connection, book_id: str, scene_id: str | None, uni
     at = situation_at(state, pos, unit_id)
     if at is None:
         return None
+    where = conn.execute("SELECT ordinal FROM units WHERE id=?", (at["from"],)).fetchone()
+    names = visible_names(conn, book_id, where[0]) if where else {}
     people = [{**({"character_id": p["character_id"], "who": names[p["character_id"]]}
                   if p.get("character_id") in names else {"who": p.get("who", "")}), "doing": p.get("doing", "")}
               for p in at.get("people") or [] if p.get("character_id") in names or p.get("who")]
@@ -731,12 +735,17 @@ def _set_speaker(conn: sqlite3.Connection, utterance_id: str, new_id: str | None
     repo.remove_speech_examples_for(conn, utterance_id)
 
 
+def addressee_settled(u: sqlite3.Row | None) -> bool:
+    """Whom a line is said to is not for a look to change: the text states it, or a person set the line (also used by
+    the look back, ADR-104)."""
+    return u is None or u["status"] == "human_verified" or u["addressee_status"] == "explicit"
+
+
 def _set_addressee(conn: sqlite3.Connection, utterance_id: str, who: str, stats: dict[str, int]) -> None:
     """The second look's answer to who a line is said to: that person, read (``inferred``). A line whose addressee the
     text states, or whose speaker a person set, and a line said by that person themself, are left as they are."""
     u = conn.execute("SELECT * FROM utterances WHERE id=?", (utterance_id,)).fetchone()
-    if u is None or u["status"] == "human_verified" or u["addressee_status"] == "explicit" \
-            or u["speaker_id_nullable"] == who:
+    if u is None or addressee_settled(u) or u["speaker_id_nullable"] == who:
         return
     conn.execute("UPDATE utterances SET addressee_ids_json=?, addressee_status='inferred', updated_at=? WHERE id=?",
                  (json.dumps([who]), utcnow(), utterance_id))

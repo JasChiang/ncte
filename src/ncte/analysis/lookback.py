@@ -87,17 +87,21 @@ def recorded_forms(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row) -
         if form and len(form) >= MIN_FORM and form not in PRONOUNS:
             out.setdefault(form, {}).setdefault(cid, kind)
 
+    # the cards words may find here: visible at the scene's end and not of another time — the same for every source of
+    # words (a past life's 「姉さん」 never finds a present-day line's speaker)
+    cards: set[str] = set()
     for c in vis.visible_characters(conn, book_id, end):
         if repo.period_of(c) is not None:
             continue
         # lookup mode: only the words that find the card, never a form recorded for display only (ADR-103)
         if v := vis.character_view(conn, book_id, c, end, forms_at, lookup=True):
+            cards.add(c["id"])
             add(v["name_ja"], c["id"], "name")
             for a in v["aliases_ja"]:
                 add(a, c["id"], "alias")
     for r in conn.execute("SELECT * FROM address_terms WHERE book_id=? AND first_ordinal<=? AND speaker_id!=addressee_id",
                           (book_id, end)).fetchall():
-        if calls_by(conn, r):
+        if r["addressee_id"] in cards and calls_by(conn, r):
             add(r["form_ja"], r["addressee_id"], "address")
     return out
 
@@ -213,7 +217,8 @@ def apply(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, items: lis
     the merges ``went`` records (card merged away → the card it went into); a card gone with no chain is not an
     answer (``unapplied``), never written."""
     from ..memory.address import follow_speakers
-    from .verify import _set_speaker
+    from ..memory.db import utcnow
+    from .verify import _set_speaker, addressee_settled
 
     went = went or {}
 
@@ -256,11 +261,16 @@ def apply(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, items: lis
                 if row is not None and row["status"] != "human_verified" and row[0] == item["_speaker"]:
                     _set_speaker(conn, line, new, status, note, stats if line == item["_utt"] else {
                         "speakers_changed": 0, "speakers_unknown": 0, "speakers_kept": 0}, changed, source="lookback")
+        if a.to is None or not cited:
+            continue  # whom it is said to: not answered (left as it is), or not resting on a paragraph
         to = [y for x in dict.fromkeys(a.to) if x in item["_people"] and (y := alive(x)) and y != new]
-        if a.to and cited and len(to) == len(set(a.to)) and set(to) != set(item["to"]):
-            conn.execute("UPDATE utterances SET addressee_ids_json=?, addressee_status=? WHERE id=?",
-                         (json.dumps(to), "inferred" if to else None, item["_utt"]))
-            stats["addressees_changed"] += 1
+        now = conn.execute("SELECT * FROM utterances WHERE id=?", (item["_utt"],)).fetchone()
+        # as the second look (``verify._set_addressee``): a stated addressee, or a line a person set, is never changed
+        if addressee_settled(now) or len(to) != len(set(a.to)) or set(to) == set(json.loads(now["addressee_ids_json"] or "[]")):
+            continue
+        conn.execute("UPDATE utterances SET addressee_ids_json=?, addressee_status=?, updated_at=? WHERE id=?",
+                     (json.dumps(to), "inferred" if to else None, utcnow(), item["_utt"]))
+        stats["addressees_changed"] += 1
     stats["unanswered"] = len(by_ref)
     follow_speakers(conn, book_id, changed)
     repo.refresh_profiles(conn, book_id)

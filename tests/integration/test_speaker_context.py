@@ -138,7 +138,7 @@ def test_the_scene_state_is_parsed_checked_stored_and_shown_to_the_next_scene(co
                                                       {"ref": mina, "doing": "接過鑰匙"}]}
     assert "previous_scene_state" in load_prompt("scene_analyze").render_parts(nxt)[1]
     conn.execute("UPDATE utterances SET notes_json=? WHERE unit_id=?", (json.dumps(["(to look at)"]), u[3]["id"]))
-    item = next(i for i in verify.collect(conn, book.id) if i["kind"] == "speaker")
+    item = next(i for i in verify.collect(conn, book.id, situation=True) if i["kind"] == "speaker")
     assert item["situation"]["place"] == "早上的市場" and item["situation"]["people"][0]["who"].startswith("ミナ")
     assert "`situation`" in load_prompt("verify").render_parts({"items": [item]})[1]
 
@@ -306,3 +306,113 @@ def test_the_look_back_follows_merges_as_the_second_look_does(conn, cfg, fixture
     assert stats["unapplied"] == 1 and _speaker_of(conn, u[26]["id"])["speaker_id_nullable"] == mina
     stats = lookback.apply(conn, book.id, scene, items, answer, went={sera: kaito})
     assert stats["speakers_changed"] == 1 and _speaker_of(conn, u[26]["id"])["speaker_id_nullable"] == kaito
+
+
+# ------------------------------------------------------------------ review round (ADR-104)
+
+
+def _observe(conn: sqlite3.Connection, book_id: str, speaker: str, addressee: str, form: str, unit: sqlite3.Row) -> None:
+    """One use of a form of address, on a line of ``unit`` (as the memory step links it)."""
+    aid = conn.execute("SELECT id FROM address_terms WHERE book_id=? AND speaker_id=? AND addressee_id=? AND form_ja=?",
+                       (book_id, speaker, addressee, form)).fetchone()
+    if aid is None:
+        _address(conn, book_id, speaker, addressee, form, unit["ordinal"])
+        aid = conn.execute("SELECT max(id) FROM address_terms").fetchone()
+    else:
+        conn.execute("UPDATE address_terms SET uses=uses+1 WHERE id=?", (aid[0],))
+    n = 90 + conn.execute("SELECT count(*) FROM utterances").fetchone()[0]
+    utt = f"t_{unit['id']}_{n}"
+    conn.execute("INSERT INTO utterances(id, book_id, unit_id, quote_index, quote_start, quote_end, quote_text, status, "
+                 "resolution_source, updated_at) VALUES (?,?,?,?,0,1,'「x」','unknown','none',?)",
+                 (utt, book_id, unit["id"], n, utcnow()))
+    conn.execute("INSERT INTO address_observations(utterance_id, address_id) VALUES (?,?)", (utt, aid[0]))
+
+
+def test_called_as_ranks_forms_by_their_uses_before_the_scene_only(conn, cfg, fixtures):
+    """Review 1: how often a form is used later in the book does not change what an earlier scene's request shows."""
+    from ncte.analysis import scene as scene_mod
+
+    book, _, _, u, sc = _book(conn, cfg, fixtures)
+    mina, kaito, sera = _cards(conn, book.id, u)
+    for who, form in ((mina, "カイ兄"), (sera, "カイ君"), (mina, "カイ様"), (sera, "カイ殿")):
+        _observe(conn, book.id, who, kaito, form, u[5])
+    for _ in range(3):
+        _observe(conn, book.id, mina, kaito, "カイ様", u[5])  # three more uses before the third scene
+    payload = build_analysis_payload(conn, book.id, get_scene(conn, book.id, sc[2]["id"]), [])
+    before = next(c for c in payload["known_characters"] if c["character_id"] == kaito)["called_as"]
+    _address(conn, book.id, sera, kaito, "カイちゃん", 6)  # first used before the scene, used again only later
+    for _ in range(9):
+        _observe(conn, book.id, sera, kaito, "カイちゃん", u[41])
+    _observe(conn, book.id, mina, kaito, "カイ兄", u[41])
+    after = next(c for c in build_analysis_payload(conn, book.id, get_scene(conn, book.id, sc[2]["id"]), [])[
+        "known_characters"] if c["character_id"] == kaito)["called_as"]
+    assert before[0]["ja"] == "カイ様" and len(after) == scene_mod.CARD_FORMS
+    assert [x["ja"] for x in after] == [x["ja"] for x in before]  # later uses changed nothing
+
+
+def test_the_second_look_shows_a_situation_only_with_the_switch_and_by_names_known_there(conn, cfg, fixtures):
+    """Review 2–3: a saved picture goes to the second look only when ``scene_state`` is on, and its people are named as
+    known at the picture's point (a name revealed later is not shown)."""
+    book, _, _, u, sc = _book(conn, cfg, fixtures)
+    mina, kaito, _ = _cards(conn, book.id, u)
+    hooded, _ = repo.upsert_character(conn, book.id, "フードの少女", name_zh="兜帽少女", aliases=[], unit_id=u[0]["id"],
+                                      ordinal=0, origin="test")
+    _read(conn, book.id, sc[0], [_line(u[3]["id"], mina)],
+          situation=[{"at": u[2]["id"], "people": [{"ref": hooded, "doing": "站在市場角落"}]}])
+    conn.execute("UPDATE utterances SET notes_json=? WHERE unit_id=?", (json.dumps(["(to look at)"]), u[3]["id"]))
+    from ncte.memory.entities import record_link
+
+    record_link(conn, book.id, "リリア", "リリア", "official", origin="scene_analysis", status="accepted",
+                unit_id=u[40]["id"], quote=None, ordinal=40)
+    conn.execute("UPDATE characters SET canonical_name='リリア', display_name_zh='莉莉亞', aliases_json=? WHERE id=?",
+                 (json.dumps(["フードの少女"]), hooded))
+    repo.note_forms(conn, hooded, ["リリア"], book.id, 40)  # the name is first seen with the card at the reveal
+    off = next(i for i in verify.collect(conn, book.id) if i["kind"] == "speaker")
+    assert "situation" not in off
+    on = next(i for i in verify.collect(conn, book.id, situation=True) if i["kind"] == "speaker")
+    assert "莉莉亞" not in json.dumps(on["situation"], ensure_ascii=False)
+    assert "リリア" not in json.dumps(on["situation"], ensure_ascii=False)
+
+
+def test_a_card_of_another_time_is_not_found_by_its_forms_of_address_either(conn, cfg, fixtures):
+    """Review 4: a past life's card is left out of the look back's words whatever the word's source."""
+    book, _, _, u, sc = _book(conn, cfg, fixtures)
+    mina, kaito, sera = _cards(conn, book.id, u)
+    conn.execute("UPDATE characters SET period='前世', label='前世' WHERE id=?", (sera,))
+    _text(conn, u, 26, "「この地図、どこで拾ったの？」")
+    _text(conn, u, 28, "「姉さんが拾ったんだろ」")
+    _address(conn, book.id, kaito, sera, "姉さん", 5)
+    _read(conn, book.id, sc[2], [_line(u[26]["id"], mina), _line(u[28]["id"], kaito)],
+          participants=[{"character_ref": c, "presence": "explicit", "evidence_unit_ids": [u[25]["id"]]}
+                        for c in (mina, kaito)])
+    assert "姉さん" not in lookback.recorded_forms(conn, book.id, get_scene(conn, book.id, sc[2]["id"]))
+    assert lookback.gather(conn, book.id, get_scene(conn, book.id, sc[2]["id"])) == []
+
+
+def test_a_cited_answer_never_touches_a_stated_addressee_and_a_cited_empty_list_clears_an_inferred_one(conn, cfg,
+                                                                                                       fixtures):
+    """Review 5–6: whom a line is said to, when the text states it (or a person set the line), stays; an answer that
+    leaves ``to`` out changes nothing; a cited empty ``to`` clears an inferred one."""
+    book, _, _, u, sc = _book(conn, cfg, fixtures)
+    mina, kaito, sera = _sister_scene(conn, book.id, u, sc, "mina")
+    scene = get_scene(conn, book.id, sc[2]["id"])
+    items = lookback.gather(conn, book.id, scene)
+    ref, uid = items[0]["ref"], u[26]["id"]
+
+    def answer(**kw: Any) -> SpeakerLookbackOutput:
+        return SpeakerLookbackOutput.model_validate(
+            {"lines": [{"ref": ref, "speaker": mina, "evidence": [u[28]["id"]], "reason": "", **kw}]})
+
+    def to_of() -> tuple[list[str], str | None]:
+        r = _speaker_of(conn, uid)
+        return json.loads(r["addressee_ids_json"] or "[]"), r["addressee_status"]
+
+    conn.execute("UPDATE utterances SET addressee_ids_json=?, addressee_status='explicit' WHERE unit_id=?",
+                 (json.dumps([kaito]), uid))
+    lookback.apply(conn, book.id, scene, items, answer(to=[sera]))
+    assert to_of() == ([kaito], "explicit")
+    conn.execute("UPDATE utterances SET addressee_status='inferred' WHERE unit_id=?", (uid,))
+    lookback.apply(conn, book.id, scene, items, answer())  # ``to`` not given: unchanged
+    assert to_of() == ([kaito], "inferred")
+    lookback.apply(conn, book.id, scene, items, answer(to=[]))  # cited and empty: said to no one in particular
+    assert to_of() == ([], None)

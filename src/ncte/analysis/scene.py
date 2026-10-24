@@ -370,6 +370,13 @@ CARD_FACTS = 3  # evidence-backed facts given per visible card (ADR-104)
 CARD_FORMS = 4  # forms of address others are recorded calling a card, given per card
 
 
+def _uses_before(conn: sqlite3.Connection, address_id: int, before: int) -> int:
+    """How many lines before ordinal ``before`` a recorded form of address is linked to (``address_observations``)."""
+    return int(conn.execute("SELECT count(*) FROM address_observations o JOIN utterances t ON t.id=o.utterance_id "
+                            "JOIN units n ON n.id=t.unit_id WHERE o.address_id=? AND n.ordinal<?",
+                            (address_id, before)).fetchone()[0])
+
+
 def _tally(found: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
     return {w: {"explicit": n.get("explicit", 0), "inferred": n.get("inferred", 0)}
             for w, n in sorted(found.items(), key=lambda x: -sum(x[1].values()))}
@@ -427,8 +434,12 @@ def card_evidence(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, ro
         if lines:
             extra["earlier_lines"] = {"lines": {"explicit": lines.get("explicit", 0), "inferred": lines.get("inferred", 0)},
                                       **{k: _tally(f) for k, f in found.items() if f}}
+        # ranked by the uses seen before this scene (the lines a form is linked to), never by how often the book uses
+        # it later: an earlier scene's request does not depend on later dialogue (a form first used before the scene
+        # but linked to no earlier line counts once)
         called = sorted((r for r in terms if r["addressee_id"] == cid and r["speaker_id"] != cid
-                         and r["speaker_id"] in names and calls_by(conn, r)), key=lambda r: -r["uses"])
+                         and r["speaker_id"] in names and calls_by(conn, r)),
+                        key=lambda r: (-max(1, _uses_before(conn, r["id"], start)), r["first_ordinal"], r["id"]))
         if called:
             extra["called_as"] = [{"ja": r["form_ja"], "by": names[r["speaker_id"]]} for r in called[:CARD_FORMS]]
         mine = [f for f in facts if f["subject"] == cid and (f["evidence_quote"] or "").strip()]
