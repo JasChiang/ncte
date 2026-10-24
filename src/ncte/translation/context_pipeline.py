@@ -56,6 +56,7 @@ class ContextOrchestrator(Orchestrator):
         self.analyze_prompt = load_prompt("scene_analyze")
         self.memory_prompt = load_prompt("memory_update")
         self.read_prompt = load_prompt("scene_read")
+        self.lookback_prompt = load_prompt("speaker_lookback")
         self.naming_prompt = load_prompt("naming")
 
     def process_batch(self, batch: Batch) -> dict[str, int]:
@@ -633,6 +634,7 @@ class ContextOrchestrator(Orchestrator):
                 continue
             self.log(f"scene {sid} ({i + 1}/{len(scenes)})")
             self.stage_scene_analyze(sid)
+            self.stage_speaker_lookback(sid)
             self.run_batches(self.scene_batches(pending, positions), concurrency=1)
             self.stage_memory_update(sid)
             self.after_scene(sid)
@@ -646,10 +648,10 @@ class ContextOrchestrator(Orchestrator):
             self.log(f"read {sid} ({i + 1}/{len(due)})")
             if self._no_story(sid):
                 continue
-            if self.cfg.context.read_in_one_request and self.stage_scene_read(sid):
-                continue
-            self.stage_scene_analyze(sid)
-            self.stage_memory_update(sid)
+            if not (self.cfg.context.read_in_one_request and self.stage_scene_read(sid)):
+                self.stage_scene_analyze(sid)
+                self.stage_memory_update(sid)
+            self.stage_speaker_lookback(sid)
         if due:
             self.refresh_readings()
 
@@ -1853,7 +1855,8 @@ class ContextOrchestrator(Orchestrator):
                 if gone := forget_scene_cards(self.conn, self.book.id, scene, memory_too=True):
                     self.log(f"  re-read: {len(gone)} card(s) only the last reading of this scene made were dropped")
             gl = [{"ja": g["source_term"], "zh": g["target_term"]} for g in self.glossary]
-            payload = scene_read_payload(build_analysis_payload(self.conn, self.book.id, scene, gl),
+            payload = scene_read_payload(build_analysis_payload(self.conn, self.book.id, scene, gl,
+                                                                **self._reading_switches()),
                                          build_memory_payload(self.conn, self.book.id, scene, gl))
         try:
             parsed = self._llm("scene_read", self.read_prompt, payload, [u["unit_id"] for u in payload["units"]])
@@ -1896,7 +1899,8 @@ class ContextOrchestrator(Orchestrator):
                                                   memory_too=mem is not None and mem["status"] in ("pending", "running")):
                         self.log(f"  re-read: {len(gone)} card(s) only the last reading of this scene made were dropped")
                 payload = build_analysis_payload(self.conn, self.book.id, scene,
-                                                 [{"ja": g["source_term"], "zh": g["target_term"]} for g in self.glossary])
+                                                 [{"ja": g["source_term"], "zh": g["target_term"]} for g in self.glossary],
+                                                 **self._reading_switches())
             try:
                 parsed = self._read("scene_analyze", self.analyze_prompt, payload, sid)
                 if parsed is None:
@@ -1912,6 +1916,41 @@ class ContextOrchestrator(Orchestrator):
         self._set_job("scene_analyze", sid, "succeeded" if error is None else "failed", error,
                       {**stats, "mode": "llm" if parsed else "program_only"})
         self.log(f"  analysis: {stats}")
+
+    def _reading_switches(self) -> dict[str, bool]:
+        return {"card_voice": self.cfg.context.card_voice, "scene_state": self.cfg.context.scene_state}
+
+    def stage_speaker_lookback(self, sid: str) -> None:
+        """ADR-104: after a scene is read, the lines whose neighbouring line has a recorded word for someone other
+        than the line's speaker or addressee go back to the model once (one request; none when nothing is gathered).
+        Once per reading of the scene: a scene read again is looked back at again."""
+        from ..analysis import lookback
+        from ..llm.schemas import SpeakerLookbackOutput
+
+        if not (self.cfg.context.speaker_lookback and self.cfg.context.scene_analysis):
+            return
+        with self.lock:
+            scene = get_scene(self.conn, self.book.id, sid)
+            state = json.loads(scene["state_json"] or "{}")
+            if state.get("analysis") != "llm" or "lookback" in state:
+                return
+            items = lookback.gather(self.conn, self.book.id, scene)
+            if not items:
+                return
+            payload = lookback.build_payload(self.conn, self.book.id, scene, items)
+        units = list(dict.fromkeys(u for i in items for u in i["_units"]))
+        try:
+            parsed = self._llm("speaker_lookback", self.lookback_prompt, payload, units)
+        except FatalAPIError:
+            raise
+        except LLMError as exc:
+            self.log(f"  look back failed ({type(exc).__name__}); the reading stands")
+            self._finding(None, "speaker_lookback_failed", "low", f"{sid}: {exc}"[:300])
+            return
+        assert isinstance(parsed, SpeakerLookbackOutput)
+        with self.lock, Transaction(self.conn):
+            stats = lookback.apply(self.conn, self.book.id, get_scene(self.conn, self.book.id, sid), items, parsed)
+        self.log(f"  look back: {stats}")
 
     def stage_memory_update(self, sid: str) -> None:
         job = self._job("memory_update", sid)

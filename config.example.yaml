@@ -49,6 +49,9 @@ context:
   fix_fact_quota: 4            # facts given with a fix in the "window" scope
   term_definitions: true       # ADR-069: after reading, the model says what the recurring terms mean; sent with each request where the term occurs (false: not asked, not sent)
   read_in_one_request: false   # ADR-065: a scene's analysis and memory update from one request (read_first only; off until an A/B shows the quality holds)
+  card_voice: true             # ADR-104: each card in a scene's reading carries the tally of its earlier lines (self-reference, second person, forms of address), how others are recorded calling it, and up to 3 facts known by then
+  scene_state: false           # ADR-104: the model writes who is present, where and doing what before it attributes the lines (off until the A/B shows it helps)
+  speaker_lookback: false      # ADR-104: lines whose neighbouring line has a recorded word for someone other than the speaker/addressee go back to the model once per scene (off until the A/B shows it helps)
 memory:
   fts_enabled: true
   vector_rag_enabled: false

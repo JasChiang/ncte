@@ -108,6 +108,8 @@ def collect(conn: sqlite3.Connection, book_id: str, max_actions: int = MAX_ACTIO
                 "_ordinal": u["ordinal"]}
         if far := [o for o in evidence if o not in near][:MAX_EVIDENCE]:
             item["evidence_paragraphs"] = _whole(conn, book_id, far)
+        if at := _situation(conn, book_id, u["scene_id"], u["unit_id"], names):
+            item["situation"] = at  # how the reading pictured the scene at the line (ADR-104)
         items.append(item)
     for g in conn.execute("SELECT g.* FROM character_gender g JOIN characters c ON c.id=g.character_id WHERE "
                           "c.book_id=? AND g.certainty='inferred' AND g.origin='llm' AND g.gender IN ('female','male')",
@@ -340,6 +342,28 @@ def _scene_people(conn: sqlite3.Connection, book_id: str, scene_id: str | None) 
     people |= {r[0] for r in conn.execute("SELECT speaker_id_nullable FROM utterances WHERE book_id=? AND scene_id=? "
                                           "AND speaker_id_nullable IS NOT NULL", (book_id, scene_id))}
     return {str(x) for x in people if x}
+
+
+def _situation(conn: sqlite3.Connection, book_id: str, scene_id: str | None, unit_id: str,
+               names: dict[str, str]) -> dict[str, Any] | None:
+    """The point of the scene's picture (the reading's ``situation``, ADR-104) in force at ``unit_id``, people by
+    their id and name; None when the reading wrote none."""
+    from .scene import situation_at
+
+    sc = conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND id=?", (book_id, scene_id)).fetchone() \
+        if scene_id else None
+    state = json.loads(sc[0] or "{}") if sc else {}
+    if not state.get("situation"):
+        return None
+    pos = {r[0]: i for i, r in enumerate(conn.execute("SELECT id FROM units WHERE book_id=? AND scene_id=? ORDER BY "
+                                                      "ordinal", (book_id, scene_id)))}
+    at = situation_at(state, pos, unit_id)
+    if at is None:
+        return None
+    people = [{**({"character_id": p["character_id"], "who": names[p["character_id"]]}
+                  if p.get("character_id") in names else {"who": p.get("who", "")}), "doing": p.get("doing", "")}
+              for p in at.get("people") or [] if p.get("character_id") in names or p.get("who")]
+    return {**({"place": at["place"]} if at.get("place") else {}), "people": people}
 
 
 def question_items(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
@@ -652,8 +676,10 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
 
 
 def _set_speaker(conn: sqlite3.Connection, utterance_id: str, new_id: str | None, status: str, note: str,
-                 stats: dict[str, int], changed: dict[str, str | None]) -> None:
-    """The second look's speaker for a line: never stated (``inferred``, or ``unknown``), a person's choice kept."""
+                 stats: dict[str, int], changed: dict[str, str | None], *, source: str = "verify") -> None:
+    """The second look's speaker for a line: never stated (``inferred``, or ``unknown``), a person's choice kept.
+    ``source``: which look set it (``verify``; ``lookback`` for the look back after a scene's reading, ADR-104 — a
+    line it settled is still asked by the second look when the reading flagged it)."""
     u = conn.execute("SELECT * FROM utterances WHERE id=?", (utterance_id,)).fetchone()
     if u is None or u["status"] == "human_verified":
         return
@@ -664,8 +690,9 @@ def _set_speaker(conn: sqlite3.Connection, utterance_id: str, new_id: str | None
         if new_id != u["speaker_id_nullable"]:
             changed[utterance_id] = u["speaker_id_nullable"]
     notes = json.loads(u["notes_json"]) + [note]
-    conn.execute("UPDATE utterances SET speaker_id_nullable=?, status=?, resolution_source='verify', notes_json=?, "
-                 "updated_at=? WHERE id=?", (new_id, status, json.dumps(notes, ensure_ascii=False), utcnow(), utterance_id))
+    conn.execute("UPDATE utterances SET speaker_id_nullable=?, status=?, resolution_source=?, notes_json=?, "
+                 "updated_at=? WHERE id=?",
+                 (new_id, status, source, json.dumps(notes, ensure_ascii=False), utcnow(), utterance_id))
     if new_id != u["speaker_id_nullable"]:
         repo.speaker_changed_addressees(conn, utterance_id, new_id)
     repo.remove_speech_examples_for(conn, utterance_id)

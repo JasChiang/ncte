@@ -183,11 +183,31 @@ class NarrationOut(_M):
     segments: list[NarrationSegment] = Field(default_factory=list)
 
 
+class SituationPerson(_M):
+    """One person in the scene's picture at a point (ADR-104): a card (``ref``) or, for someone without one, the
+    text's words for them (``who``); where they are, what they are doing or holding, whom they face."""
+    ref: str | None = None
+    who: str = ""
+    doing: str
+
+
+class SituationPoint(_M):
+    """The scene as a reader pictures it from paragraph ``at`` on, until the next point (ADR-104): written by the
+    model before it attributes the lines, so the lines are read against who is there and doing what."""
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    unit_id: str = Field(alias="at")
+    place: str = ""
+    people: list[SituationPerson]
+
+
 class SceneAnalysisOutput(_M):
     pov: str | None
     location: str | None
     time: str | None
     new_characters: list[NewCharacter]
+    # ADR-104: who is present, where, doing or holding what — before the lines are attributed (asked for when the
+    # request says ``write_situation``)
+    situation: list[SituationPoint] = Field(default_factory=list)
     participants: list[Participant]
     utterances: list[UtteranceAnalysis]
     actions: list[ActionAnalysis]
@@ -393,6 +413,23 @@ class VerifyOutput(_M):
     items: list[VerifyItem]
 
 
+# ------------------------------------------------------------------ look back once (ADR-104)
+class LookbackLine(_M):
+    """The model's answer for one line the program gathered after a scene's reading: who says it (``speaker``: a card
+    of the item's ``people``, or null when the text does not tell), optionally whom it is said to, and the scene's
+    paragraphs the answer rests on. A change counts only with a cited paragraph of the item."""
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    ref: str
+    speaker: str | None
+    to: list[str] = Field(default_factory=list)
+    evidence_unit_ids: list[str] = Field(default_factory=list, alias="evidence")
+    reason: str = ""
+
+
+class SpeakerLookbackOutput(_M):
+    lines: list[LookbackLine]
+
+
 # characters still without a gender after reading, asked with sentences spread over the book (stage verify:genders)
 class GenderGap(_M):
     ref: str
@@ -550,6 +587,7 @@ SCHEMAS: dict[str, type[BaseModel]] = {
     "naming": NamingOutput,
     "review": ReviewOutput,
     "verify": VerifyOutput,
+    "speaker_lookback": SpeakerLookbackOutput,
     "scene_windows": SceneWindowsOutput,
     "reader": ReaderOutput,
     "proofread": ProofreadOutput,

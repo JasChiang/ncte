@@ -311,7 +311,11 @@ def forget_scene_cards(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Ro
 
 
 def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row,
-                           glossary: list[dict[str, Any]]) -> dict[str, Any]:
+                           glossary: list[dict[str, Any]], *, card_voice: bool = True,
+                           scene_state: bool = False) -> dict[str, Any]:
+    """The reading request of a scene. ``card_voice`` (ADR-104): each card carries the program's tally of its earlier
+    lines and a few facts known by then (``card_evidence``); ``scene_state``: the model is asked to picture the scene
+    (``situation``) before it attributes the lines, and is shown how the scene before was left."""
     rows = scene_rows(conn, book_id, scene["id"])
     known = vis.visible_characters(conn, book_id, scene["start_ordinal"] - 1)
     forms_at = vis.form_positions(conn, book_id)
@@ -325,7 +329,8 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
 
     prev = conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND seq<? AND version>0 ORDER BY seq DESC LIMIT 1",
                         (book_id, scene["seq"])).fetchone()
-    prev_narr = json.loads(prev[0] or "{}").get("narration") if prev else None
+    prev_state = json.loads(prev[0] or "{}") if prev else {}
+    prev_narr = prev_state.get("narration")
     extra: dict[str, Any] = {"narration_hint": narration_hint(rows)}
     if prev_narr and prev_narr.get("person"):
         extra["previous_narration"] = {"person": prev_narr["person"], **{
@@ -343,6 +348,11 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
     shared = vis.shared_names({c["id"]: v["name_ja"] for c, v in views})
     hints = vis.tell_apart(conn, book_id, [c for c, _ in views if c["id"] in shared], scene["start_ordinal"] - 1) \
         if shared else {}
+    voice = card_evidence(conn, book_id, scene, rows, views) if card_voice else {}
+    if scene_state:
+        extra["write_situation"] = True  # the prompt's block asking for ``situation`` (ADR-104)
+        if last := previous_situation(prev_state, {c["id"] for c, _ in views}):
+            extra["previous_scene_state"] = last
     return {
         **extra,
         "task": "scene_analyze", "scene_id": scene["id"],
@@ -350,10 +360,149 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
         "quotes": q_payload,
         "known_characters": [{"character_id": c["id"], **v, "speech_profile": json.loads(c["speech_profile_json"] or "{}"),
                               **({"relations": kin[c["id"]]} if kin.get(c["id"]) else {}),
-                              **hints.get(c["id"], {})}
+                              **hints.get(c["id"], {}), **voice.get(c["id"], {})}
                              for c, v in views],
         "glossary": [g for g in glossary if any(str(g.get("ja", "")) in f for f in seen)],
     }
+
+
+CARD_FACTS = 3  # evidence-backed facts given per visible card (ADR-104)
+CARD_FORMS = 4  # forms of address others are recorded calling a card, given per card
+
+
+def _tally(found: dict[str, dict[str, int]]) -> dict[str, dict[str, int]]:
+    return {w: {"explicit": n.get("explicit", 0), "inferred": n.get("inferred", 0)}
+            for w, n in sorted(found.items(), key=lambda x: -sum(x[1].values()))}
+
+
+def card_evidence(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, rows: list[sqlite3.Row],
+                  views: list[tuple[Any, dict[str, Any]]]) -> dict[str, dict[str, Any]]:
+    """What a reader remembers of each person on reaching this scene (ADR-104), as the program's tally of the readings
+    recorded before it — never from the scene's start on, and the earlier readings may be wrong:
+
+    - ``earlier_lines``: how many lines before this scene were read as theirs, by how sure that reading was (explicit:
+      stated in the text, or set by a person; inferred: an earlier model reading), and in those lines the
+      self-reference words (the first word of ``FIRST_PERSON`` found, as ``speech_profile`` counts, and any self-form
+      the memory step recorded for them), the second-person word (``SECOND_PERSON``, the same way) and the forms of
+      address the memory step recorded them using for others (``self`` / ``you`` / ``calls``). Strings counted in the
+      quoted text; what a word means is the model's reading.
+    - ``called_as``: forms of address the memory step recorded others using for them, first used before this scene.
+    - ``facts_so_far``: up to ``CARD_FACTS`` facts about them revealed before this scene that carry their source
+      sentence, the ones nearest this scene's text first (the translation step's ``chosen_facts`` ranking).
+
+    A card with nothing recorded gets no key."""
+    from ..epub.units import match_text
+    from ..memory.address import calls_by, visible_terms
+    from ..memory.retrieval import chosen_facts
+
+    start = scene["start_ordinal"]
+    names = vis.visible_names(conn, book_id, start - 1)
+    facts = vis.visible_facts(conn, book_id, start)
+    terms = [r for r in visible_terms(conn, book_id, start) if r["book_id"] == book_id]
+    text = match_text(" ".join(r["plain_text"] for r in rows))
+    statuses = {"explicit": "explicit", "human_verified": "explicit", "inferred": "inferred"}
+    out: dict[str, dict[str, Any]] = {}
+    for c, v in views:
+        cid = c["id"]
+        own_self = {r["form_ja"] for r in terms if r["speaker_id"] == cid == r["addressee_id"]}
+        own_calls = {r["form_ja"] for r in terms if r["speaker_id"] == cid and calls_by(conn, r)}
+        lines: dict[str, int] = {}
+        found: dict[str, dict[str, dict[str, int]]] = {"self": {}, "you": {}, "calls": {}}
+        for u in conn.execute("SELECT t.quote_text, t.status FROM utterances t JOIN units n ON n.id=t.unit_id "
+                              "WHERE t.book_id=? AND t.speaker_id_nullable=? AND n.ordinal<?", (book_id, cid, start)):
+            st = statuses.get(u["status"])
+            if st is None:
+                continue
+            lines[st] = lines.get(st, 0) + 1
+            said = clean(u["quote_text"]).strip("「」『』 　")
+            words = {"self": {next((w for w in FIRST_PERSON if w in said), ""), *(f for f in own_self if f in said)},
+                     "you": {next((w for w in SECOND_PERSON if w in said), "")},
+                     "calls": {f for f in own_calls if f in said}}
+            for kind, ws in words.items():
+                for w in ws - {""}:
+                    n = found[kind].setdefault(w, {})
+                    n[st] = n.get(st, 0) + 1
+        extra: dict[str, Any] = {}
+        if lines:
+            extra["earlier_lines"] = {"lines": {"explicit": lines.get("explicit", 0), "inferred": lines.get("inferred", 0)},
+                                      **{k: _tally(f) for k, f in found.items() if f}}
+        called = sorted((r for r in terms if r["addressee_id"] == cid and r["speaker_id"] != cid
+                         and r["speaker_id"] in names and calls_by(conn, r)), key=lambda r: -r["uses"])
+        if called:
+            extra["called_as"] = [{"ja": r["form_ja"], "by": names[r["speaker_id"]]} for r in called[:CARD_FORMS]]
+        mine = [f for f in facts if f["subject"] == cid and (f["evidence_quote"] or "").strip()]
+        if mine:
+            present = [{"character_id": cid, "name_ja": v["name_ja"], "aliases_ja": v["aliases_ja"]}]
+            got = chosen_facts(mine, text, present, names, limit=CARD_FACTS, min_score=0.0)
+            if got:
+                extra["facts_so_far"] = [{k: x for k, x in item.items() if k != "subject"} for _, item in got]
+        if extra:
+            out[cid] = extra
+    return out
+
+
+MAX_SITUATION = 8  # points of a scene's picture kept (ADR-104)
+MAX_SITUATION_PEOPLE = 8
+SITUATION_CHARS = 40  # what one person is doing, and the place, as kept
+
+
+def previous_situation(state: dict[str, Any], visible: set[str]) -> dict[str, Any] | None:
+    """How the scene before was left, as its reading pictured it (its last point): the cards in it that this request
+    can show, the others by the text's words. Context for the opening lines, never evidence."""
+    points = state.get("situation") or []
+    if not points:
+        return None
+    last = points[-1]
+    people = [{**({"ref": p["character_id"]} if p.get("character_id") in visible else {"who": p["who"]}),
+               "doing": p.get("doing", "")}
+              for p in last.get("people") or [] if p.get("character_id") in visible or p.get("who")]
+    if not people and not last.get("place"):
+        return None
+    return {**({"place": last["place"]} if last.get("place") else {}), "people": people}
+
+
+def situation_points(points: list[Any], rows: list[sqlite3.Row], ref_map: dict[str, str],
+                     rej: Any) -> list[dict[str, Any]]:
+    """The model's picture of the scene (ADR-104), as kept: each point starts at a paragraph of this scene (in story
+    order; a point at a paragraph outside it is dropped), its people a card the reading knows (``ref``) or the text's
+    words for someone without one (``who``); a person with a ref the reading does not know and no words is dropped.
+    Short by construction: at most ``MAX_SITUATION`` points of ``MAX_SITUATION_PEOPLE`` people."""
+    pos = {r["id"]: i for i, r in enumerate(rows)}
+    out: list[tuple[int, dict[str, Any]]] = []
+    for pt in points:
+        if pt.unit_id not in pos:
+            rej(pt.model_dump(), "situation point at a paragraph outside the scene")
+            continue
+        people = []
+        for p in pt.people[:MAX_SITUATION_PEOPLE]:
+            cid = ref_map.get(p.ref) if p.ref else None
+            who = p.who.strip()[:MAX_NAME_LEN]
+            if cid is None and not who:
+                if p.ref:
+                    rej(p.model_dump(), "unknown situation ref")
+                continue
+            people.append({**({"character_id": cid} if cid else {"who": who}), "doing": p.doing.strip()[:SITUATION_CHARS]})
+        out.append((pos[pt.unit_id], {"from": pt.unit_id, "place": pt.place.strip()[:SITUATION_CHARS], "people": people}))
+    out.sort(key=lambda x: x[0])
+    kept: list[dict[str, Any]] = []
+    for _, p in out:
+        if kept and kept[-1]["from"] == p["from"]:
+            kept[-1] = p  # two points at one paragraph: the later one written
+        else:
+            kept.append(p)
+    return kept[:MAX_SITUATION]
+
+
+def situation_at(state: dict[str, Any], rows_pos: dict[str, int], unit_id: str) -> dict[str, Any] | None:
+    """The point of a scene's picture in force at paragraph ``unit_id`` (the last one starting at or before it)."""
+    at = rows_pos.get(unit_id)
+    if at is None:
+        return None
+    best = None
+    for p in state.get("situation") or []:
+        if p.get("from") in rows_pos and rows_pos[p["from"]] <= at:
+            best = p
+    return best
 
 
 STORY_SUMMARIES = 3  # the last scene summaries before this scene
@@ -778,6 +927,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     actions: list[dict[str, object]] = []
     props: list[dict[str, object]] = []
     uncertainties: list[dict[str, object]] = []
+    situation: list[dict[str, Any]] = []
     if parsed is not None:
         qkeys = {(q.unit_id, q.index) for q in quotes}
         for ua in parsed.utterances:
@@ -819,6 +969,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 rej(pr.model_dump(), "prop not found in scene text")
         uncertainties = [{"unit_ids": [u for u in x.unit_ids if u in unit_text], "question": x.question[:300]}
                          for x in parsed.uncertainties]
+        situation = situation_points(parsed.situation, rows, ref_map, rej)
 
     resolutions: dict[tuple[str, int], Resolution] = {}
     version = int(scene["version"]) + 1
@@ -881,6 +1032,8 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
              "time": parsed.time if parsed else None, "participants": participants, "actions": actions,
              "props": props, "uncertainties": uncertainties, "analysis": "llm" if parsed else "program_only",
              "quotes": len(quotes), "run_id": run_id}
+    if situation:
+        state["situation"] = situation  # the model's picture of the scene (ADR-104)
     if matched:
         state["matched_by_words"] = matched
     if unconfirmed_cards:

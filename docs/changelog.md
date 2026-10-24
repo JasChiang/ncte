@@ -1243,3 +1243,10 @@ open workspace/eval/<timestamp>/report.html
 - `visibility.character_view`：寫法的位置只看它跟這張卡一起出現的地方（不再被名稱連結的揭曉延後），最先出現的寫法（敘述者佔位名優先、同位置時卡名優先）從卡的第一次出現起顯示；後來揭曉的名字照舊只從揭曉處顯示。
 - 覆核：讀場景自己的疑問附上段落裡的台詞（`lines`／`line_ref`），回答某人時經 `_set_speaker`（和台詞重看共用）改那句的說話者；台詞重看的候選加上場景裡說話或在場的人（`_scene_people`）。`VerifyItem.line_ref`；提示詞 `verify` 說明。
 - 測試：`test_unconfirmed_realrun.py` 新增 3 個（改之前都失敗）。889 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-104 說話者判斷的三個補充（2026-10-23，分支 speaker-context-2026-10-23，基於 unnamed-placeholders-2026-10-23）
+- 讀場景的人物卡（`scene.card_evidence`，`context.card_voice` 預設開）：`earlier_lines`（之前判給他的台詞句數與其中的自稱、第二人稱、他叫別人的稱呼，分明確／推測）、`called_as`（別人怎麼叫他）、`facts_so_far`（最多 3 條有出處的事實）；都只算本場景開頭以前。提示詞 `scene_analyze`、`scene_read` 用條件區塊說明（`_shared/card_voice.md`）。整理自 A/B arm 2 的 `_card_evidence`。
+- 場面（`context.scene_state` 預設關）：schema `SituationPoint`／`SituationPerson`、`SceneAnalysisOutput.situation`；請求帶 `write_situation` 時提示詞（`_shared/situation.md`）要模型先寫場面再判斷台詞；`scene.situation_points` 核對後存進 `state_json.situation`；下一場讀場景的 `previous_scene_state`、覆核台詞項目的 `situation`（提示詞 `verify` 條件區塊）。
+- 回頭看一次（`context.speaker_lookback` 預設關）：`analysis/lookback.py`（`gather`／`build_payload`／`apply`）、提示詞 `prompts/speaker_lookback/v1.md`、schema `SpeakerLookbackOutput`、`ContextOrchestrator.stage_speaker_lookback`（讀場景之後，沒收到台詞不送）；步驟的模型與思考程度跟 `scene_analyze`（`config.READS_LIKE_ANALYSIS`）；`verify._set_speaker` 多 `source`。FakeLLM 的回頭看照原判斷回答。
+- 測試：`tests/integration/test_speaker_context.py`（新，8 個）。897 passed、5 skipped；ruff、mypy 通過。
+- A/B（Claude 方案、Sonnet，不在 repo）：`workspace/exp/speaker-ab/run_ctx.sh`、`harness_ctx.py`、`recall.py`；arms：base（e0b922c）、voice、voice-state、voice-state-lookback。離線（判讀用全書實跑的結果）：回頭看在 13 場收到 40 句，含那次讀錯或未定 21 句中的 6 句。

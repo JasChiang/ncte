@@ -180,11 +180,17 @@ def default_scene_read(payload: dict[str, Any], req: LLMRequest) -> dict[str, An
     return {"analysis": default_scene_analyze(payload, req), "memory": default_memory_update(payload, req)}
 
 
+def default_speaker_lookback(payload: dict[str, Any], req: LLMRequest) -> dict[str, Any]:
+    """The look back (ADR-104): every gathered line keeps the speaker it has."""
+    return {"lines": [{"ref": x["ref"], "speaker": x.get("speaker"), "reason": ""} for x in payload.get("lines", [])]}
+
+
 DEFAULTS: dict[str, Responder] = {
     "translate": default_translate,
     "scene_analyze": default_scene_analyze,
     "memory_update": default_memory_update,
     "scene_read": default_scene_read,
+    "speaker_lookback": default_speaker_lookback,
     "naming": default_naming,
     "review": default_review,
     "verify": default_verify,

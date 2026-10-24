@@ -183,6 +183,17 @@ class ContextConfig(_Strict):
     # window around them
     fix_fact_quota: int = Field(4, ge=0, le=50)
     skip_book_matter: bool = True  # ADR-024: no story analysis for covers, TOC, afterword, colophon (still translated)
+    # ADR-104, what a reader has that the reading lacked. card_voice: each card in a scene's reading request carries
+    # the program's tally of its earlier lines (self-reference, second person, its forms of address), the forms
+    # others are recorded calling it, and up to 3 evidence-backed facts known by then. scene_state: the model writes
+    # who is present, where and doing what before it attributes the lines (kept with the scene). speaker_lookback:
+    # after a scene is read, lines whose neighbouring line has a recorded form of someone other than the line's
+    # speaker / addressee go back to the model once, in one small request (none when nothing is gathered).
+    # card_voice is on (an A/B on 13 scenes gave a small consistent gain); the other two are off until the A/B with
+    # them (workspace/exp/speaker-ab) shows they help
+    card_voice: bool = True
+    scene_state: bool = False
+    speaker_lookback: bool = False
 
 
 class ExportConfig(_Strict):
@@ -404,12 +415,15 @@ def proofread_passes(cfg: Config) -> int:
     return CLAUDE_PROOFREAD_PASSES if cfg.openrouter.provider in ("claude", "codex", "agy") else 1
 
 
+READS_LIKE_ANALYSIS = ("scene_read", "speaker_lookback")  # steps that take scene_analyze's model and effort
+
+
 def reasoning_setting(cfg: Config, stage: str) -> str | None:
     """The reasoning setting a step's requests use: its own (``stage_reasoning``) or the run's (``reasoning_effort``).
     None = send nothing (the model's default)."""
     stage = stage.split(":")[0]
-    if stage == "scene_read" and stage not in cfg.openrouter.stage_reasoning:
-        stage = "scene_analyze"  # the one-request read (ADR-065) thinks like the scene analysis unless set itself
+    if stage in READS_LIKE_ANALYSIS and stage not in cfg.openrouter.stage_reasoning:
+        stage = "scene_analyze"  # the one-request read (ADR-065) and the look back (ADR-104) think like the analysis
     value = cfg.openrouter.stage_reasoning.get(stage, cfg.openrouter.reasoning_effort)
     return None if value in (None, "", "default") else value
 
@@ -428,8 +442,8 @@ def stage_model(cfg: Config, stage: str, default: str) -> str:
     stage = stage.split(":")[0]
     if m := cfg.openrouter.stage_models.get(stage):
         return m
-    if stage == "scene_read" and (m := cfg.openrouter.stage_models.get("scene_analyze")):
-        return m  # the one-request read (ADR-065) is a reading step: unless set itself, it reads like scene_analyze
+    if stage in READS_LIKE_ANALYSIS and (m := cfg.openrouter.stage_models.get("scene_analyze")):
+        return m  # the one-request read (ADR-065) and the look back (ADR-104) are reading steps: unless set, as scene_analyze
     if stage in ("review", "fix_check") and cfg.openrouter.review_model:
         return cfg.openrouter.review_model
     return default
