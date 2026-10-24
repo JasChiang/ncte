@@ -147,10 +147,21 @@ def test_the_plain_agent_can_be_turned_off(monkeypatch, tmp_path):
     _client(monkeypatch, tmp_path, fake, plain_agent=False).complete(_req())
     (call,) = fake.turns_sent()
     assert "--agent" not in call["args"] and call["agent"] is None
-    from ncte.cli import _agy_client
+
+
+def test_the_cli_never_builds_the_agy_source(monkeypatch):
+    """ADR-105: the adapter is kept (built directly above); a run asking for it stops before any request."""
+    from ncte.cli import make_client
+    from ncte.config import AGY_DISABLED
+    from ncte.errors import NCTEError
+
+    monkeypatch.setattr(agy_cli.subprocess, "run", lambda *a, **k: pytest.fail("agy was run"))
     cfg = Config()
-    cfg.openrouter.agy_plain_agent = False
-    assert _agy_client(cfg).plain_agent is False and _agy_client(Config()).plain_agent is True
+    cfg.openrouter.provider = "agy"
+    use_agy_models(cfg)
+    with pytest.raises(NCTEError, match="Antigravity FAQ") as err:
+        make_client(cfg)
+    assert str(err.value) == AGY_DISABLED and "Gemini API" in AGY_DISABLED
 
 
 def test_a_long_prompt_goes_to_a_file_the_model_is_asked_to_read(monkeypatch, tmp_path):

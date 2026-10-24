@@ -4,9 +4,12 @@
 
 模型可以用這幾種方式：
 - **Claude 方案（建議、預設）**：用你自己的 Claude 訂閱（電腦上裝好並登入 Claude Code），不需要金鑰，NCTE 不另外收費。
-- **ChatGPT 方案（Codex，實驗）**、**Google Antigravity 方案（agy，實驗）**：用你已有的訂閱額度，同樣不另外收費。
+- **ChatGPT 方案（Codex，實驗）**：用你已有的 ChatGPT 訂閱額度，同樣不另外收費。
+- **Gemini API（Google AI Studio 金鑰）**：直接連 Google 的 Gemini，Google 依用量向你收費；開始前會估價、設預算上限。
 - **OpenRouter**：沒有訂閱時，用 OpenRouter 上的模型（預設 Gemini），需要金鑰並儲值，依用量付費。
 - **本機模型（實驗）**：原文不離開電腦，但目前品質還比不上上面幾種。
+
+> **不再提供 Google Antigravity（`agy`）**：Google 的 [Antigravity 常見問題](https://antigravity.google/docs/faq/)（2026-10-16 在[開發者論壇](https://discuss.ai.google.dev/t/clarification-on-consumer-plan-policy-for-invoking-official-agy-via-local-subprocess/189905)由 Google 工作人員確認）說明，無頭模式 `agy -p` 只能用在你自己的腳本與 CI；把 agy 包在第三方程式或應用程式裡不受消費者方案支援，可能導致帳號停權，第三方工具應改用 Google AI Studio 或 Gemini Enterprise 的 API 金鑰。NCTE 就是這樣的應用程式，所以拿掉了 agy，改成直接連 Gemini API。設定還選著 agy 的話，NCTE 會在送出任何請求之前停下來說明原因。
 
 ## 它怎麼翻：先像譯者一樣讀完，再動筆
 一般的機器翻譯一次只看一小段，所以常常搞錯「這句是誰說的」「這個角色是男是女」「敘述是不是主角自己在講」。日文又常省略主語，前後文一斷就容易翻錯。NCTE 模仿譯者的做法：**先把整本讀完、做筆記，翻譯時帶著筆記翻**。
@@ -29,8 +32,8 @@ flowchart LR
 - **少打擾**：名字、稱呼的譯法由模型決定、程式檢查，不會停下來問；有疑點的地方自動交給審稿處理。想改譯名可以翻完再改，已翻好的段落會一起換掉。
 - **時間與費用**（一本輕小說約 11–14 萬字，2026-10-18～19 整本實測）：
   - Claude 方案：實際工作時間約 1.6 小時（3,689 段，同時 2 個請求；撞到額度上限時會停下來等重置，另計），不另收費，照定價約 US$43。這次沒有量用掉多少額度百分比。
-  - Antigravity 方案（Gemini Flash，2026-10-21～22，約 3,300 段）：約 14 小時，用掉 Google 每週額度約一半，品質與 OpenRouter 舊版相當（下方〈測試結果〉）。之後已經做的加速（讀後整理同時送、翻譯時拿掉 agy 自帶的工具說明、校稿規則改成有條件才做）還沒有整本重測。
   - OpenRouter（Gemini）：約 3 小時、US$9 左右。開始前會顯示「約多少、最多多少」，預算上限依「最多」的金額自動設定。
+  - Gemini API：和 OpenRouter 用的是同一個 Gemini 模型，但還沒有實測過（時間、費用都還沒有數字）；估價與預算的做法同 OpenRouter。
   - Claude 方案的數字出自 2026-10-19 用現行 `claude` 來源、預設設定（Sonnet 讀、Opus 翻與檢查；修正驗收、對照校稿、人物關係、覆核用 high）的整本實測，見 changelog〈整本實測：新的 claude 來源〉。那次中途撞到額度上限、等了約 4 小時才重置，從開始到結束約 5.6 小時。
 
 ## 每一步交給下一步的東西
@@ -95,7 +98,7 @@ flowchart TD
 | 近未來科幻（直播、遊戲，約 3,200 段） | 虛擬世界與現實的雙重身分、大量直播台詞 | 整本 US$4.8、約 1 小時 50 分：說話者未定的台詞從舊流程 123 句降到 97 句（約 6.5%），讀者檢查改了 15 處；虛擬世界的歌姬和女主角在揭曉處標成「同一人」；需要從對話推一層的關係（兄長與同居的人）在整理關係時從原文推出。EPUBCheck 剩下的錯誤都是原書本身的寫法 |
 | 校園日常（兩位敘事者、系列第 1、2 集） | 換敘事者、系列角色延續、雙關 | 第 2 集抽驗 474 段：第 1 集的角色直接沿用；被內容過濾擋下的段落改成分段讀，0 段漏讀；店名的雙關由讀者檢查補上譯註 |
 
-**Antigravity 方案整本**（2026-10-21～22，近未來科幻那本約 3,300 段，所有步驟 Gemini Flash）：約 14 小時、782 個請求，用掉 Google 每週額度約 47%；最慢的是兩輪校稿（高推理，約 5 小時 20 分）。和 10/16 用 OpenRouter 翻的舊版盲評 60 段（評審看前後各五段原文與兩版各自的前後文）：新版較好 9、舊版較好 15、相同 36；判為意思錯的新版 0、舊版 2，新版輸的多是用詞。說書人口吻的旁白新版讀對了。有一句轉述的話（「被說了……」）讀書時記錯說的人，後來加了「推測的事單獨再問」，正常流程重跑那一場就改對了（ADR-093）。
+**（歷史紀錄）Antigravity 方案整本**（這個來源已停用，見最上方的說明；結果留作 Gemini Flash 的參考。2026-10-21～22，近未來科幻那本約 3,300 段，所有步驟 Gemini Flash）：約 14 小時、782 個請求，用掉 Google 每週額度約 47%；最慢的是兩輪校稿（高推理，約 5 小時 20 分）。和 10/16 用 OpenRouter 翻的舊版盲評 60 段（評審看前後各五段原文與兩版各自的前後文）：新版較好 9、舊版較好 15、相同 36；判為意思錯的新版 0、舊版 2，新版輸的多是用詞。說書人口吻的旁白新版讀對了。有一句轉述的話（「被說了……」）讀書時記錯說的人，後來加了「推測的事單獨再問」，正常流程重跑那一場就改對了（ADR-093）。
 
 **公共領域作品**（青空文庫，抽驗前段，四本共 US$2.30）
 
@@ -135,6 +138,7 @@ flowchart TD
 2. 在 Finder 雙擊 **`NCTE.command`**（第一次會自動安裝，約幾分鐘；macOS 若擋下，請按右鍵 →「打開」）。瀏覽器會打開 NCTE。
 3. 右上角「設定」確認連線方式：
    - **Claude 方案**（預設）：顯示「找到 Claude Code」就可以開始；找不到的話先安裝 [Claude Code](https://docs.claude.com/en/docs/claude-code)，在終端機執行 `claude` 登入。
+   - **Gemini API**：「連線方式」改選「Gemini API（Google AI Studio 金鑰）」，貼上在 [Google AI Studio](https://aistudio.google.com/apikey) 建立的金鑰（做法見下方〈Gemini API〉）。估價與預算上限同 OpenRouter。
    - **OpenRouter**：「連線方式」改選 OpenRouter，貼上 [OpenRouter](https://openrouter.ai/keys) 金鑰並儲值。開始前會顯示估價（約多少、最多多少，每個步驟都算進去）；預算上限依「最多」的金額自動設定（只擋異常），到了會先停下來問你。
 
    書庫頁把 EPUB 拖進去 → 選系列 → 書的概況頁按「開始翻譯」。
@@ -145,6 +149,7 @@ flowchart TD
 模型與推理程度不用選（推理一般 medium；做判斷的步驟——對照校稿、人物關係、覆核、修正驗收——用 high）：
 - Claude 方案：讀書的步驟（切場景、讀場景、記憶整理、角色印象、體例）用 Sonnet，翻譯、術語定義、定名、覆核、人物關係、規則確認、審稿、對照校稿、讀者檢查與修正驗收用 Opus（比較見上方〈整本比較〉）。若把翻譯改成 Sonnet，翻譯也用 high：小樣本測試裡 Sonnet 在 medium 會看到後文的線索卻沒用上，high 才譯對（設定檔自己寫了 `translate` 的推理程度就照你寫的）。
 - OpenRouter：`google/gemini-3.8-flash`。同一章節的比較裡，更便宜的模型會忽略角色性別（你／妳）、或整批改寫成簡體（[`docs/changelog.md`](docs/changelog.md)）。
+- Gemini API：同一個模型，`gemini/gemini-3.8-flash`。
 
 ### Claude 方案怎麼運作
 NCTE 的每個請求都是一次全新的 `claude -p`（Claude Code 的非互動模式）：步驟的提示詞取代 Claude Code 自己的系統提示，不帶工具、不讀你的 Claude Code 設定、不留對話紀錄。用你的訂閱額度，NCTE 不另外收費；畫面上的金額是照定價換算的參考，不會向你收費。額度用完會自動等到重置再接著翻（每次等待前在畫面或指令列寫一行原因）；沒登入、或 Claude Code 不接受送去的指令（例如版本太舊）會立刻停下來告訴你。指令列在命令前加 `NCTE_LLM_PROVIDER=claude`（預設就是），改回 API 用 `NCTE_LLM_PROVIDER=openrouter`。
@@ -159,19 +164,24 @@ flowchart LR
 ### Codex（ChatGPT 方案，實驗）
 有 ChatGPT 訂閱的話，也可以用 OpenAI 的 Codex CLI 翻譯：先安裝 Codex 並在終端機執行 `codex login`，再到網頁設定選「Codex（ChatGPT 方案）」，或在命令前加 `NCTE_LLM_PROVIDER=codex`。每個請求是一次全新的 `codex exec`，用你的 ChatGPT 訂閱額度，NCTE 不另外收費；Codex 不回報定價，所以畫面上不顯示金額。Codex 每個請求都會帶上自己的固定說明（關掉能關的之後每次仍約八千到九千 token），比 Claude 方案吃額度。也可以只把某一步交給 Codex，其餘照 Claude 方案，例如在 `ncte.yaml` 寫 `openrouter: {stage_models: {proofread: codex/gpt-6.1-sol}}`。範例書（41 段）從讀到校完約 7 分鐘、34 個請求，用掉每週額度約 1%；**還沒有整本書實測過。**
 
-### Antigravity（Google 方案，實驗）
-有 Google Antigravity 訂閱的話，可以用它的 CLI（`agy`）翻譯：安裝並登入後，到網頁設定選「Antigravity」，或在命令前加 `NCTE_LLM_PROVIDER=agy`。預設用 Gemini Flash；每個請求是一次全新的 `agy --print`，NCTE 不另外收費，額度從 `/quota` 讀。翻譯步驟會改用 NCTE 自己的精簡設定，拿掉 agy 每次自帶的約 60 個工具說明（每個請求少約 5,000 token）；讀書步驟不用，實測用了會少記事實。整本實測見上方〈測試結果〉。
+### Gemini API（Google AI Studio 金鑰）
+直接連 Google 的 Gemini API，不經過 OpenRouter：
+1. 到 [Google AI Studio](https://aistudio.google.com/apikey) 用 Google 帳號登入，建立一把 API 金鑰。
+2. 在 AI Studio 為這個專案設定帳單。Google 的說明是連結帳單帳戶並預付（最少 US$5），之後依用量扣款，是 Google 向你收費，NCTE 不另外收費。免費方案有用量限制，而且 Google 說明要付費方案，提示與回應才不會被拿去改進 Google 的產品；翻書請用付費方案。
+3. 網頁「設定 → 連線方式」選「Gemini API（Google AI Studio 金鑰）」，貼上金鑰按儲存；或在指令列 `export NCTE_LLM_PROVIDER=gemini`、`export GEMINI_API_KEY=…`（也可以寫進 `.env`）。
 
-**交叉校稿（選用，預設關閉）**：最後一輪校稿改用另一家公司的模型（例如主要用 Claude、最後一輪用 Gemini），比較不會和翻譯的模型錯在同一個地方；會用到另一個方案的額度，所以預設不開，網頁設定裡可以打開。
+Gemini API 不回報價格，所以估價和花費是用 OpenRouter 公開價目表上同一個 Google 模型（`google/…`）的價格，乘上 Google 回報的 token 數換算的（讀取快取的 token 照快取價）；實際金額以 Google 的帳單為準。OpenRouter 價目表上找不到的模型算不出費用，NCTE 不會用它開始付費的翻譯。和 OpenRouter 一樣，開始前會顯示「約多少、最多多少」，預算上限依「最多」的金額自動設定，到了會先停下來問你；網頁上查不到 Google 帳戶的餘額。還沒有用真的金鑰實測過。
 
-**每本書用了多少額度**：Claude 方案、Codex 與 Antigravity 每個請求都會記下你的方案在各時間窗（5 小時、每週）已經用到幾 %，書的總覽頁（和 `ncte report --book …`）顯示這本書從第一個請求到最後一個請求用掉了幾 %，以及 token 數。每個人的方案不同，所以顯示的是你自己方案的百分比，不是絕對量；同一時段你在別處用同一個方案也會算進去，中途額度重置會從 0 重新累加。
+**交叉校稿（選用，預設關閉）**：最後一輪校稿改用另一家公司的模型（例如主要用 Claude、最後一輪用 Gemini API 的 Gemini Flash），比較不會和翻譯的模型錯在同一個地方；會用到另一個方案的額度（Gemini API 則是另外計費），書的內容也會送到那家公司，所以預設不開，網頁設定裡可以打開。
+
+**每本書用了多少額度**：Claude 方案與 Codex 每個請求都會記下你的方案在各時間窗（5 小時、每週）已經用到幾 %，書的總覽頁（和 `ncte report --book …`）顯示這本書從第一個請求到最後一個請求用掉了幾 %，以及 token 數。每個人的方案不同，所以顯示的是你自己方案的百分比，不是絕對量；同一時段你在別處用同一個方案也會算進去，中途額度重置會從 0 重新累加。
 
 **讓 agent 自己回答（進階）**：`ncte agent start 書.epub -w 工作區`，之後由對話中的 agent 逐題 `ncte agent next` → 回答 → `ncte agent submit`（每題有說明檔與輸出格式）；或安裝選用套件 `pip install -e '.[agent]'` 後 `claude mcp add ncte -- ncte mcp`，用 MCP 工具做同樣的事。Claude Code 的 skill 在 [`skills/ncte-translate`](skills/ncte-translate/SKILL.md)（複製或連結到 `~/.claude/skills/`）。一般翻書用上面的 Claude 方案即可，agent 逐題回答會多花很多額度。
 
 > 開發狀態與測試紀錄：[`docs/changelog.md`](docs/changelog.md)　決策：[`docs/decisions.md`](docs/decisions.md)　架構：[`docs/architecture.md`](docs/architecture.md)
 
 ## 隱私與權利（請先讀）
-- 翻譯時（包括從網頁介面開始的翻譯），**所需的原文段落與上下文會送到模型供應商**：Claude 方案經 Claude Code 送到 Anthropic，適用你的 Claude 帳號的資料設定；OpenRouter 則由 OpenRouter 路由給第三方模型供應商（例如 Google），各供應商的資料保留／訓練政策不同，請在 OpenRouter 帳號的 Privacy 設定中確認。「本機模型」來源（實驗）則完全在這台電腦上跑，原文不會送出去；品質與速度看你的電腦與模型，目前還比不上 Claude 方案或 Gemini。
+- 翻譯時（包括從網頁介面開始的翻譯），**所需的原文段落與上下文會送到模型供應商**：Claude 方案經 Claude Code 送到 Anthropic，適用你的 Claude 帳號的資料設定；OpenRouter 則由 OpenRouter 路由給第三方模型供應商（例如 Google），各供應商的資料保留／訓練政策不同，請在 OpenRouter 帳號的 Privacy 設定中確認；Gemini API 直接送到 Google，Google 說明免費方案的提示與回應可能用來改進它的產品，付費方案不會（以 Google 的服務條款為準）。「本機模型」來源（實驗）則完全在這台電腦上跑，原文不會送出去；品質與速度看你的電腦與模型，目前還比不上 Claude 方案或 Gemini。
 - 只處理你有權使用的無 DRM EPUB。翻譯輸出不代表你取得再散布或公開分享的權利。
 - 原始 EPUB、資料庫、匯出檔都在 `./workspace/`（已列入 `.gitignore`）。API Key 不會寫入 log、報告或錯誤訊息。
 
@@ -204,6 +214,13 @@ lms server start                            # LM Studio：先下載並載入一�
 ncte models                                 # 列出伺服器上的模型；預設用已載入的那個（local/default）
 ```
 原文不離開這台電腦、不收費；但一本書要好幾個小時，而且目前測過的本機模型在人稱、說話者判斷上都還比不上 Claude 方案或 Gemini（見 `docs/decisions.md` ADR-068）。伺服器位址可在設定檔的 `openrouter.local_base_url` 改；要讓部分步驟用 Claude 方案，`stage_models` 可以指到 `claude/sonnet`。
+
+### Gemini API 金鑰
+```bash
+export NCTE_LLM_PROVIDER=gemini            # 或寫進 .env；網頁「設定 → 連線方式」也能切換
+export GEMINI_API_KEY=...                  # Google AI Studio 建立的金鑰；或寫進 .env
+```
+金鑰只放在這台電腦（環境變數或 `.env`），送出時放在請求標頭，不會寫進紀錄或錯誤訊息。價格查 OpenRouter 公開 `/models`（不送任何金鑰給 OpenRouter）。
 
 ### OpenRouter 金鑰（不用 Claude 方案時）
 ```bash
@@ -388,8 +405,9 @@ ncte export tests/fixtures/basic.epub
 - 訂閱方案是透過各家的命令列工具呼叫模型。這些工具原本是寫程式用的 agent，NCTE 能把它們「關成單純的模型」的程度不同：
   - Claude Code：可以整個換掉它的系統提示、不帶任何工具，最接近直接呼叫模型（每個請求多約一千 token）。
   - Codex：可以換掉內建指示、關掉大部分功能，但每個請求仍帶約八千 token 的固定說明，比較吃額度。
-  - Antigravity：換不掉它自己的指示，只能另外加；每個請求多帶約 7,600 token（翻譯步驟用精簡設定約 2,400）。實測約一成的請求回空答案，NCTE 會自動重問，請求數因此變多。讀書、整理的步驟模型寫出的內容（多半是思考）是用 API 呼叫同一個 Gemini 的好幾倍，所以比較慢。回合結束後程式有時不會自己結束，NCTE 讀到答案就把它停掉。
+  - Antigravity（`agy`）：已停用。Google 的 [Antigravity 常見問題](https://antigravity.google/docs/faq/)（2026-10-16 確認）說明把 agy 包在第三方應用程式裡不受消費者方案支援、可能導致停權，所以 NCTE 不再提供；要用 Gemini 請改用 Gemini API 金鑰。
 - 內容審查：雲端模型可能誤擋正常段落（例如未成年角色加上可疑大人的情境）。翻譯被擋時先拿掉記憶資料、再切小重送；讀被擋時把場景對半切重讀。仍被擋的段落保留原文或只用程式分析，並列入報告。
+- Gemini API 來源還沒有用真的金鑰實測過：請求格式、結構化輸出、思考程度、用量欄位都照 Google 的 API 文件（2026-10-24 讀）實作並以離線測試驗證；第一次使用建議先拿一小段試（`--limit-units`）。
 - Gemini 等推理模型的推理 token 以輸出價計費（翻譯的輸出約一半是推理），推理量難以事先知道。試算涵蓋每個步驟：有過去實際花費的步驟依最近的執行校正（一般值與最貴的一次再加餘裕），沒有的依抽樣中的占比估，標為未校正。
 - 更便宜的模型目前不建議：第二章比較中 claude-haiku-5.5 忽略角色卡的性別（你／妳錯 36 句），deepseek-v4-flash、qwen3.8-flash 會整批改寫成簡體（現在會被程式擋下重翻，但多花費用）。
 - context 模式依場景順序執行（為了讓記憶依序更新），不使用併發；baseline 可併發。先讀再翻時，第一段譯文要等整集讀完（約占總費用四成）才會出現；預算若在讀的階段用完，不會有任何譯文。
@@ -407,7 +425,7 @@ ncte export tests/fixtures/basic.epub
 ```
 src/ncte/  cli.py cli_memory.py cli_agent.py config.py library.py workspace.py series.py lexicon.py exporter.py samples.py
   epub/        security parser units reassemble validate matter series_meta
-  llm/         base claude_cli openrouter fal_openrouter fake schemas prompt_loader short_ids cost
+  llm/         base claude_cli codex_cli gemini openrouter fal_openrouter local routing fake schemas prompt_loader short_ids cost
   agent/       tasks client runner mcp_server（agent 逐題回答：`ncte agent …`、`ncte mcp`）
   translation/ orchestrator context_pipeline translator context_builder review rename edits cache dryrun
   analysis/    scene scene_windows split_read dialogue speaker narration reference_resolution memory_update verify

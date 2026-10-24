@@ -174,8 +174,10 @@ def dry_run(conn: sqlite3.Connection, cfg: Config, book: Book, opts: RunOptions,
     if cfg.openrouter.provider == "claude":
         notes.append("Claude plan: nothing is billed; the dollar figures are what the requests would cost at list "
                      "price, from earlier Claude-plan runs (0 without them).")
-    if cfg.openrouter.provider == "agy":
-        notes.append("Antigravity plan (agy): nothing is billed and agy reports no price, so there is no dollar figure.")
+    if cfg.openrouter.provider == "gemini":
+        notes.append("Gemini API: billed by Google per use. The Gemini API returns no prices: the estimate uses "
+                     "OpenRouter's public list price for the same Google model (google/…), and costs are counted from "
+                     "the tokens Google reports; Google's bill is the real figure.")
     if cfg.openrouter.provider == "codex":
         notes.append("Codex (ChatGPT plan): nothing is billed and Codex reports no price, so there is no dollar figure.")
     if breaks:
@@ -277,9 +279,11 @@ def _requests(conn: sqlite3.Connection, cols: str, model: str, provider: str,
     """Succeeded requests with a known cost on this provider, each step on the model it is set to use."""
     cost = _cost_sql(provider)
     models = sorted({model, *(stage_models or {}).values()})
+    # the Gemini API reports no cost: its requests are Google's token counts at the public list price (ADR-105)
+    known = "'reported','reported_generation'" + (",'estimated_from_tokens'" if provider == "gemini" else "")
     rows = conn.execute(
         f"SELECT {cols}, model, {cost} AS cost FROM llm_requests WHERE model IN ({','.join('?' * len(models))}) AND "
-        f"status='succeeded' AND cost_status IN ('reported','reported_generation') AND {cost} IS NOT NULL "
+        f"status='succeeded' AND cost_status IN ({known}) AND {cost} IS NOT NULL "
         "AND run_id IN (SELECT id FROM runs WHERE "
         "COALESCE(json_extract(config_json, '$.openrouter.provider'), 'openrouter') = ?)", (*models, provider)).fetchall()
     return [r for r in rows if r["model"] == (stage_models or {}).get(r["stage"].split(":")[0], model)]

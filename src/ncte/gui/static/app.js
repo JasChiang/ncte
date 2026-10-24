@@ -60,7 +60,9 @@ async function libraryView() {
   const step = (n, done, title, body) => `<div class="step ${done ? "done" : ""}"><span class="num">${done ? "✓" : n}</span><div><strong>${title}</strong><div class="small muted">${body}</div></div></div>`;
   const guide = k.set && hasBook ? "" : `<div class="card steps"><strong>開始使用</strong>
       ${k.provider === "agy"
-        ? step(1, k.set, "找到 Antigravity CLI", k.set ? "已找到：用你的 Antigravity 方案額度翻譯，NCTE 不另外收費。" : `NCTE 用這台電腦上已登入的 Antigravity CLI（<code>agy</code> 指令）翻譯。請先安裝並在終端機執行 <code>agy</code> 登入；或到<a href="#/settings">設定</a>改用其他連線方式。`)
+        ? step(1, false, "換一種連線方式", `Antigravity（agy）已停用（Google 不支援把 agy 包在應用程式裡使用）。請到<a href="#/settings">設定</a>改用 Gemini API 或其他連線方式。`)
+        : k.provider === "gemini"
+        ? step(1, k.set, "設定 Gemini API 金鑰", k.set ? "已設定。" : `NCTE 直接連 Google 的 Gemini API，費用由 Google 依用量向你收。<a href="#/settings">去設定</a>（到 Google AI Studio 建立金鑰）。`)
         : k.provider === "codex"
         ? step(1, k.set, "找到 Codex", k.set ? "已找到：用你的 ChatGPT 訂閱額度翻譯，NCTE 不另外收費。" : `NCTE 用這台電腦上已登入的 Codex CLI 翻譯。請先安裝 Codex（<code>codex</code> 指令），並在終端機執行 <code>codex login</code> 用 ChatGPT 帳號登入；或到<a href="#/settings">設定</a>改用其他連線方式。`)
         : k.provider === "claude"
@@ -115,7 +117,7 @@ async function upload(f) {
 // ------------------------------------------------------------ settings
 async function settingsView() {
   const k = await api("settings");
-  const fal = k.provider === "fal", claude = k.provider === "claude", local = k.provider === "local", codex = k.provider === "codex", agy = k.provider === "agy", plan = claude || local || codex || agy, label = fal ? "fal" : "OpenRouter";
+  const fal = k.provider === "fal", claude = k.provider === "claude", local = k.provider === "local", codex = k.provider === "codex", agy = k.provider === "agy", gemini = k.provider === "gemini", plan = claude || local || codex || agy, label = fal ? "fal" : gemini ? "Gemini API" : "OpenRouter";
   const localCard = `<div class="card"><strong>本機模型</strong>
     <p>用這台電腦上跑的模型伺服器（LM Studio、llama-server、mlx_lm.server 的 OpenAI 相容 API）翻譯：原文不會離開這台電腦，不需要金鑰，不收費；但速度和品質看你的電腦與模型，目前仍是實驗功能。</p>
     <p>${k.set ? `${chip("c-ok", "伺服器有回應")} <span class="small muted">${esc(k.url)}</span>` : `${chip("c-warn", "連不到模型伺服器")} <span class="small muted">${esc(k.url)}${k.error ? "：" + esc(k.error) : ""}</span>`}</p>
@@ -128,18 +130,22 @@ async function settingsView() {
     <p>用這台電腦上已登入的 Codex CLI（<code>codex</code> 指令）翻譯，使用你的 ChatGPT 訂閱額度：不需要金鑰，NCTE 不另外收費。預設所有步驟都用 <code>codex/gpt-6.1-sol</code>。</p>
     <p>${k.set ? `${chip("c-ok", "找到 Codex")} <span class="small muted">${esc(k.codex)}</span>` : `${chip("c-warn", "找不到 Codex")} 請先安裝 Codex CLI，並在終端機執行 <code>codex login</code> 用 ChatGPT 帳號登入；或在下方「連線方式」改用 Claude 方案或 OpenRouter。`}</p>
     <p class="small muted">Codex 每個請求都會帶上自己的固定說明，固定負擔比 Claude 方案大（每次約一萬 token），也比較快用完額度。額度用完或連線失敗時會自動等待再接著翻；沒登入會立刻停下來告訴你。Codex 不回報定價，所以畫面上不顯示金額。還沒有整本書實測過，目前是實驗功能。</p></div>`;
-  const agyCard = `<div class="card"><strong>Antigravity（agy）</strong>
-    <p>用這台電腦上已登入的 Antigravity CLI（<code>agy</code> 指令）翻譯，使用你的 Antigravity 方案額度：不需要金鑰，NCTE 不另外收費。預設所有步驟都用 <code>agy/gemini-flash</code>（agy 列出的最新一代 Gemini Flash）（推理程度照每個步驟的設定）。</p>
-    <p>${k.set ? `${chip("c-ok", "找到 agy")} <span class="small muted">${esc(k.agy)}</span>` : `${chip("c-warn", "找不到 agy")} 請先安裝 Antigravity CLI，並在終端機執行 <code>agy</code> 登入；或在下方「連線方式」改用其他方式。`}</p>
-    <p class="small muted">agy 每個請求都會帶上自己的固定說明（每次約七千多 token），你在 <code>~/.gemini/GEMINI.md</code> 寫的規則也會一起送出。額度用完或連線失敗時會自動等待再接著翻。還沒有整本書實測過，目前是實驗功能。</p></div>`;
+  // ADR-105: agy is not offered; a connection still set to it (an older .env) is told why and asked to choose another
+  const agyCard = `<div class="card"><strong>Antigravity（agy）已停用</strong>
+    <p class="issue">${esc(k.disabled || "")}</p>
+    <p class="small">出處：Google 的 <a href="https://antigravity.google/docs/faq/" target="_blank" rel="noopener">Antigravity 常見問題</a>。在下方「連線方式」選另一種（例如 Gemini API），按套用。</p></div>`;
   view.innerHTML = `<h2>設定</h2>
     ${claude ? claudeCard : local ? localCard : codex ? codexCard : agy ? agyCard : `<div class="card"><strong>${label} 金鑰</strong>
-    ${fal ? "" : `<p>NCTE 透過 <a href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter</a> 使用翻譯模型（Gemini），費用從你的 OpenRouter 帳戶扣，NCTE 不另外收費。</p>
+    ${fal ? "" : gemini ? `<p>NCTE 直接連 Google 的 Gemini API（Google AI Studio 金鑰），預設用 <code>gemini/gemini-3.8-flash</code>。費用由 Google 依用量向你收，NCTE 不另外收費。</p>
+      <ol class="small"><li>到 <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio</a> 登入並建立一把 API 金鑰。</li>
+      <li>在 AI Studio 為這個專案設定帳單（Google 的說明：連結帳單帳戶並預付，最少 US$5）。免費方案有用量限制，而且 Google 說明付費方案的提示與回應才不會被用來改進 Google 的產品；翻書請用付費方案。</li>
+      <li>把金鑰貼在下面，按儲存。</li></ol>
+      <p class="small muted">Gemini API 不回報價格：估價與花費是用 OpenRouter 公開價目表上同一個 Google 模型的價格、乘上 Google 回報的 token 數換算的，實際金額以 Google 的帳單為準。預算上限照樣依估價自動設定，到了會先停下來問你。這裡查不到 Google 帳戶的餘額。</p>` : `<p>NCTE 透過 <a href="https://openrouter.ai" target="_blank" rel="noopener">OpenRouter</a> 使用翻譯模型（Gemini），費用從你的 OpenRouter 帳戶扣，NCTE 不另外收費。</p>
       <ol class="small"><li>到 <a href="https://openrouter.ai/keys" target="_blank" rel="noopener">openrouter.ai/keys</a> 登入並建立一把金鑰（以 sk-or- 開頭）。</li>
       <li>到 <a href="https://openrouter.ai/settings/credits" target="_blank" rel="noopener">Credits</a> 儲值；一本輕小說約 US$8–11（依長度而定）。</li>
       <li>把金鑰貼在下面，按儲存。</li></ol>`}
     <p>${k.set ? `${chip("c-ok", "已設定")} 結尾 ${esc(k.hint)}` : chip("c-warn", "尚未設定")}</p>
-    <p><input type="password" id="key" size="48" placeholder="${fal ? "FAL_KEY" : "sk-or-…"}" autocomplete="off"> <button class="btn primary" id="saveKey">儲存</button></p>
+    <p><input type="password" id="key" size="48" placeholder="${fal ? "FAL_KEY" : gemini ? "GEMINI_API_KEY" : "sk-or-…"}" autocomplete="off"> <button class="btn primary" id="saveKey">儲存</button></p>
     <p class="muted small">只存在這台電腦的 ${esc(k.file)}，不會顯示在畫面上，也不會寫進紀錄。</p>
     <div id="bal"></div></div>`}
     ${k.cross && k.cross.options.length ? `<div class="card"><strong>交叉校稿</strong>
@@ -150,8 +156,8 @@ async function settingsView() {
     <details class="card" ${plan ? "" : "open"}><summary><strong>連線方式</strong> <span class="muted small">有 Claude 訂閱用 Claude 方案；沒有的話用 OpenRouter 付費</span></summary>
     <p><select id="provider"><option value="claude" ${claude ? "selected" : ""}>Claude 方案（用 Claude 訂閱額度，不需金鑰；建議）</option>
     <option value="codex" ${codex ? "selected" : ""}>Codex（ChatGPT 方案，用 ChatGPT 訂閱額度，不需金鑰；實驗）</option>
-    <option value="agy" ${agy ? "selected" : ""}>Antigravity（用 Antigravity 方案額度跑 Gemini，不需金鑰；實驗）</option>
-    <option value="openrouter" ${!fal && !plan ? "selected" : ""}>OpenRouter（Gemini，需要金鑰並儲值）</option>
+    <option value="gemini" ${gemini ? "selected" : ""}>Gemini API（Google AI Studio 金鑰，Google 依用量收費）</option>
+    <option value="openrouter" ${!fal && !plan && !gemini ? "selected" : ""}>OpenRouter（Gemini，需要金鑰並儲值）</option>
     <option value="fal" ${fal ? "selected" : ""}>透過 fal 連 OpenRouter</option>
     <option value="local" ${local ? "selected" : ""}>本機模型（LM Studio 等，不收費；實驗）</option></select> <button class="btn" id="saveProvider">套用</button></p>
     <p class="small muted">新任務使用此設定；續譯沿用原任務的連線方式。</p>
@@ -168,7 +174,7 @@ async function settingsView() {
     try { await api("settings/key", {key: $("#key").value}); toast("已儲存"); settingsView(); }
     catch (e) { toast(e.message); }
   };
-  if (k.set && !fal && !plan) {
+  if (k.set && !fal && !plan && !gemini) {
     $("#bal").textContent = "查詢餘額…";
     try { const b = await api("balance");
       $("#bal").innerHTML = [b.account_usd != null ? `帳戶餘額 <b>US$${b.account_usd.toFixed(2)}</b>` : "",
@@ -316,7 +322,7 @@ async function runCard(id, o) {
       const slow = e.provider === "claude" || e.provider === "codex" || e.provider === "agy" ? 2.5 : e.provider === "local" ? 6 : 1;
       const lo = Math.max(5, Math.round(e.units * .025 * slow)), hi = Math.max(10, Math.round(e.units * .035 * slow * 1.15));
       const t = m => m < 60 ? `${m} 分鐘` : `${(m / 60).toFixed(1)} 小時`;
-      $("#est").innerHTML = `<div><b>${e.units}</b> 段要翻譯</div>${e.provider === "agy" ? `<div>使用你的 Antigravity 方案額度（agy），<b>不另收費</b>；額度用完或連線失敗會自動等待再繼續。</div>` : e.provider === "codex" ? `<div>使用你的 ChatGPT 方案額度（Codex），<b>不另收費</b>；額度用完或連線失敗會自動等待再繼續。</div>` : e.provider === "local" ? `<div>在這台電腦上翻譯，<b>不收費</b>；速度看你的電腦與模型，一本書通常要好幾個小時。</div>` : e.provider === "claude" ? `<div>使用你的 Claude 方案額度，<b>不另收費</b>；額度用完會自動等重置再繼續。</div>${e.plan_low_usd != null ? `<div>照定價約 <b>${money(e.plan_low_usd)}–${money(e.plan_high_usd)}</b>（不另收費；依你之前的 Claude 方案執行換算）</div>` : ""}` : `<div>預估費用約 <b>${money(e.estimate_usd)}</b>，最多約 ${money(e.high_usd)}${e.calibrated ? "（依你之前的實際花費校正）" : "（還沒有實際花費可以校正，偏保守）"}</div>`}
+      $("#est").innerHTML = `<div><b>${e.units}</b> 段要翻譯</div>${e.provider === "codex" ? `<div>使用你的 ChatGPT 方案額度（Codex），<b>不另收費</b>；額度用完或連線失敗會自動等待再繼續。</div>` : e.provider === "local" ? `<div>在這台電腦上翻譯，<b>不收費</b>；速度看你的電腦與模型，一本書通常要好幾個小時。</div>` : e.provider === "claude" ? `<div>使用你的 Claude 方案額度，<b>不另收費</b>；額度用完會自動等重置再繼續。</div>${e.plan_low_usd != null ? `<div>照定價約 <b>${money(e.plan_low_usd)}–${money(e.plan_high_usd)}</b>（不另收費；依你之前的 Claude 方案執行換算）</div>` : ""}` : `<div>預估費用約 <b>${money(e.estimate_usd)}</b>，最多約 ${money(e.high_usd)}${e.calibrated ? "（依你之前的實際花費校正）" : "（還沒有實際花費可以校正，偏保守）"}</div>${e.provider === "gemini" ? `<div class="small muted">Gemini API 不回報價格，這是用 OpenRouter 公開價目換算的；實際以 Google 帳單為準。</div>` : ""}`}
         <div>預估時間約 <b>${t(lo)}–${t(hi)}</b></div>${["claude", "codex", "agy"].includes(e.provider) ? "" : `<div class="small muted">預算上限自動設為 ${money(e.budget_usd)}，到了會先停下來問你。</div>`}`;
       const k = await api("settings"); $("#start").disabled = !k.set || !e.units;
     } catch (err) { $("#est").textContent = "無法估價：" + err.message; }
