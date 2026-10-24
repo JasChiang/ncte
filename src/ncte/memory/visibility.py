@@ -89,7 +89,7 @@ def visible_examples(conn: sqlite3.Connection, character_id: str, horizon: int, 
     return rows[:limit]
 
 
-FormPositions = tuple[dict[str, Pos], dict[str, Pos], dict[tuple[str, str], Pos]]
+FormPositions = tuple[dict[str, Pos], dict[str, Pos], dict[str, dict[str, Pos]]]
 
 
 def form_positions(conn: sqlite3.Connection, book_id: str) -> FormPositions:
@@ -110,14 +110,15 @@ def form_positions(conn: sqlite3.Connection, book_id: str) -> FormPositions:
             if t not in linked or p < linked[t]:
                 linked[t] = p
     where, ids = scope_clause(conn, book_id, "f.book_id")
-    held = {(r[0], r[1]): (float(r[2]), int(r[3])) for r in conn.execute(
-        "SELECT f.character_id, f.form, b.volume_index, f.ordinal FROM character_forms f JOIN books b ON b.id=f.book_id "
-        f"WHERE {where}", ids)}
+    held: dict[str, dict[str, Pos]] = {}  # card → form → where first seen with it
+    for r in conn.execute("SELECT f.character_id, f.form, b.volume_index, f.ordinal FROM character_forms f JOIN books b "
+                          f"ON b.id=f.book_id WHERE {where}", ids):
+        held.setdefault(r[0], {})[r[1]] = (float(r[2]), int(r[3]))
     return first, linked, held
 
 
 def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
-                   forms_at: FormPositions | None = None) -> dict[str, Any] | None:
+                   forms_at: FormPositions | None = None, *, lookup: bool = False) -> dict[str, Any] | None:
     """The names of character row ``c`` as known at ``upto``: ``name_ja``/``name_zh``/``aliases_ja``.
 
     The form that appeared first is the anchor; any other form is shown once it has appeared *and* its link to
@@ -128,11 +129,17 @@ def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
     hz = pos(conn, book_id, upto)
     first, linked, held = form_positions(conn, book_id) if forms_at is None else forms_at
     known_from = pos(conn, c["book_id"], c["known_from_ordinal"])
-    names = list(dict.fromkeys([c["canonical_name"], *json.loads(c["aliases_json"] or "[]")]))
+    mine = held.get(c["id"], {})
+    # the card's names, and the words the book called it by where it was first given a line before its name came
+    # (recorded with the card only, ADR-103 實測三: shown, never a name a lookup finds it by)
+    # ``lookup``: for finding who words name (the reading's owners of a word, a form of address) — only the card's
+    # names; the words it is only shown by never name it (ADR-103)
+    names = list(dict.fromkeys([c["canonical_name"], *json.loads(c["aliases_json"] or "[]"),
+                                *([] if lookup else mine)]))
     # where each form is first seen with this card: a recorded position (a card moved earlier on a re-read does not
     # take its later forms with it, ADR-103), never before the form first appears in the book; else with the card
     def seen_at(n: str) -> Pos:
-        h = held.get((c["id"], n))
+        h = mine.get(n)
         if h is None:
             return first.get(n, known_from)
         return max(h, first[n]) if n in first else h

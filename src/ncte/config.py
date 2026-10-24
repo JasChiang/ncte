@@ -1,7 +1,7 @@
 """Configuration loading (spec §3.2).
 
 Priority: explicit --config file > ./ncte.yaml > ./config.yaml > built-in defaults.
-API keys are read from OPENROUTER_API_KEY (direct) or FAL_KEY (fal), or a local
+API keys are read from OPENROUTER_API_KEY (direct), FAL_KEY (fal) or GEMINI_API_KEY (the Gemini API), or a local
 ``.env`` file; it is never stored in the config model dump, logs or reports.
 """
 
@@ -38,8 +38,10 @@ class OpenRouterConfig(_Strict):
     # "agent" (a run answered task by task) is set by `ncte agent` itself, never chosen by NCTE_LLM_PROVIDER
     # "local": a model served on this computer (LM Studio, llama-server, mlx_lm.server), nothing leaves the machine
     # "codex": the user's ChatGPT plan through the Codex CLI (`codex exec`), no key, nothing billed (ADR-071)
-    # "agy": the user's Antigravity plan through the Antigravity CLI (`agy -p`), no key, nothing billed (ADR-082)
-    provider: Literal["openrouter", "fal", "claude", "agent", "local", "codex", "agy"] = "claude"
+    # "agy": the Antigravity CLI (`agy -p`, ADR-082) — disabled (ADR-105): Google's policy does not support wrapping
+    # agy in an application; a run set to it stops before any request (kept so earlier runs' records still load)
+    # "gemini": the Gemini API (Google AI Studio key, GEMINI_API_KEY), billed by Google per use (ADR-105)
+    provider: Literal["openrouter", "fal", "claude", "agent", "local", "codex", "agy", "gemini"] = "claude"
     base_url: str = "https://openrouter.ai/api/v1"
     model: str = DEFAULT_MODEL
     review_model: str | None = None
@@ -119,7 +121,7 @@ class ReviewConfig(_Strict):
     # a fix made after review / proofreading / the reader's look is checked against the source and the issue it was
     # meant to fix; off: a fix is kept but stays unverified (never counted as fixed)
     fix_check: bool = True
-    # ADR-082: the last proofreading pass on another company's model (``agy/gemini-flash``), whatever the run's
+    # ADR-082: the last proofreading pass on another company's model (``gemini/…``, ``codex/…``), whatever the run's
     # source; off unless chosen (it spends another plan's quota and sends the book to that company). Fixes and their
     # checks stay on the run's own model. Also NCTE_CROSS_PROOFREAD (empty or "off": none)
     cross_proofread_model: str | None = None
@@ -189,8 +191,8 @@ class ContextConfig(_Strict):
     # who is present, where and doing what before it attributes the lines (kept with the scene). speaker_lookback:
     # after a scene is read, lines whose neighbouring line has a recorded form of someone other than the line's
     # speaker / addressee go back to the model once, in one small request (none when nothing is gathered).
-    # card_voice is on (an A/B on 13 scenes gave a small consistent gain); the other two are off until the A/B with
-    # them (workspace/exp/speaker-ab) shows they help
+    # The 13-scene A/B on Sonnet (workspace/exp/speaker-ab): card_voice 127–130 lines right vs 122–123 without, so on;
+    # scene_state no gain and speaker_lookback no effect, so off (kept for later experiments)
     card_voice: bool = True
     scene_state: bool = False
     speaker_lookback: bool = False
@@ -220,7 +222,26 @@ class Config(_Strict):
         return "sha256:" + hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 
-PROVIDERS = ("openrouter", "fal", "claude", "codex", "agy", "local")  # what NCTE_LLM_PROVIDER and the settings page choose
+PROVIDERS = ("openrouter", "fal", "claude", "codex", "gemini", "local")  # what NCTE_LLM_PROVIDER and the settings page choose
+
+# ADR-105: the Antigravity CLI is not offered. Google's Antigravity FAQ (a developer-forum reply of
+# 2026-10-16, author's role not shown, says the FAQ is the current policy): headless `agy -p` is only for your own scripts and CI; wrapping it in third-party applications is not
+# supported under consumer plans and can lead to suspension. NCTE is such an application. The adapter stays (its tests
+# build it directly); choosing it anywhere (NCTE_LLM_PROVIDER, an ``agy/…`` step model, cross-proofreading) stops before
+# any request with this message.
+AGY_DISABLED = ("The Antigravity CLI (agy) source is disabled: Google's Antigravity FAQ says headless `agy -p` is only "
+                "for your own scripts and CI, and wrapping it in third-party applications is not supported under consumer "
+                "plans and can lead to account suspension (https://antigravity.google/docs/faq/, confirmed 2026-10-16). "
+                "Use the Gemini API source instead (NCTE_LLM_PROVIDER=gemini with a Google AI Studio key in "
+                "GEMINI_API_KEY), or another source.")
+
+
+def agy_selected(cfg: Config) -> bool:
+    """Whether this configuration asks the disabled agy source for anything (its source, a step model, a review or
+    fallback model, cross-proofreading)."""
+    o = cfg.openrouter
+    models = [o.model, *o.stage_models.values(), o.review_model, *o.fallback_models, cfg.review.cross_proofread_model]
+    return o.provider == "agy" or any(str(m).startswith("agy/") for m in models if m)
 
 
 def load_config(path: str | Path | None = None, *, workspace: str | None = None) -> Config:
@@ -252,8 +273,8 @@ def load_config(path: str | Path | None = None, *, workspace: str | None = None)
         cfg.app.workspace = env_ws
     provider = os.environ.get("NCTE_LLM_PROVIDER") or _read_dotenv(Path(".env")).get("NCTE_LLM_PROVIDER")
     if provider:
-        if provider not in PROVIDERS:
-            raise ConfigError("NCTE_LLM_PROVIDER must be openrouter, fal, claude, codex, agy or local "
+        if provider not in (*PROVIDERS, "agy"):  # agy is kept so the settings page can say why it stops (ADR-105)
+            raise ConfigError("NCTE_LLM_PROVIDER must be openrouter, fal, claude, codex, gemini or local "
                               "(agent is set by `ncte agent` itself for the runs it starts)")
         cfg.openrouter.provider = provider  # type: ignore[assignment]
     cross = os.environ.get("NCTE_CROSS_PROOFREAD")
@@ -267,8 +288,8 @@ def load_config(path: str | Path | None = None, *, workspace: str | None = None)
         use_local_models(cfg)
     elif cfg.openrouter.provider == "codex":
         use_codex_models(cfg)
-    elif cfg.openrouter.provider == "agy":
-        use_agy_models(cfg)
+    elif cfg.openrouter.provider == "gemini":
+        use_gemini_models(cfg)
     return cfg
 
 
@@ -284,7 +305,7 @@ CLAUDE_READ_STAGES = ("scene_windows", "scene_analyze", "memory_update", "impres
 
 # A model id with one of these prefixes names its own source, whatever the run's source is: a step may run on the
 # Claude plan while the rest runs locally, or the other way round (the client routes by prefix)
-ROUTED_PREFIXES = ("claude/", "local/", "codex/", "agy/")
+ROUTED_PREFIXES = ("claude/", "local/", "codex/", "agy/", "gemini/")
 LOCAL_MODEL = "local/default"  # the model the local server has loaded (else the first it lists)
 
 
@@ -337,8 +358,9 @@ AGY_CONCURRENCY = 5
 
 
 def use_agy_models(cfg: Config) -> None:
-    """Models for the Antigravity provider (ADR-082): a configured ``agy/…`` model is kept; any other model id is
-    replaced or dropped. agy takes no temperature; a step's level picks the listed model of that level."""
+    """Models for the Antigravity provider (ADR-082; disabled, ADR-105: no configuration path calls this any more, the
+    adapter's own tests do): a configured ``agy/…`` model is kept; any other model id is replaced or dropped. agy takes
+    no temperature; a step's level picks the listed model of that level."""
     o = cfg.openrouter
 
     def agy(m: str | None) -> bool:
@@ -353,6 +375,27 @@ def use_agy_models(cfg: Config) -> None:
     o.reasoning_effort = o.reasoning_effort or "medium"
     if "max_concurrency" not in o.model_fields_set:
         o.max_concurrency = AGY_CONCURRENCY
+
+
+# the Gemini API (ADR-105): the Flash model the Gemini API docs list as current (models, thinking and caching pages,
+# read 2026-10-24) — the same model as the OpenRouter default (``DEFAULT_MODEL``), priced from OpenRouter's public list
+GEMINI_MODEL = "gemini/gemini-3.8-flash"
+
+
+def use_gemini_models(cfg: Config) -> None:
+    """Models for the Gemini API source: a configured ``gemini/…`` (or another routed source's) model is kept; an
+    OpenRouter id (``google/…``) is replaced or dropped. Temperature and reasoning stay as configured: what the model
+    takes is checked against its catalog entry when the run starts."""
+    o = cfg.openrouter
+
+    def keep(m: str | None) -> bool:
+        return _routed(m) and not str(m).startswith("agy/")
+
+    if not str(o.model).startswith("gemini/"):
+        o.model = GEMINI_MODEL
+    o.stage_models = {k: v for k, v in o.stage_models.items() if keep(v)}
+    o.review_model = o.review_model if keep(o.review_model) else None
+    o.fallback_models = [m for m in o.fallback_models if keep(m)]
 
 
 def use_local_models(cfg: Config) -> None:
@@ -381,8 +424,15 @@ def _read_dotenv(path: Path) -> dict[str, str]:
     return out
 
 
+KEY_NAMES = {"fal": "FAL_KEY", "gemini": "GEMINI_API_KEY"}  # anything else: OPENROUTER_API_KEY
+
+
+def key_name(provider: str) -> str:
+    return KEY_NAMES.get(provider, "OPENROUTER_API_KEY")
+
+
 def get_api_key(provider: str = "openrouter") -> str | None:
-    name = "FAL_KEY" if provider == "fal" else "OPENROUTER_API_KEY"
+    name = key_name(provider)
     key = os.environ.get(name)
     if key:
         return key.strip() or None
@@ -390,13 +440,14 @@ def get_api_key(provider: str = "openrouter") -> str | None:
 
 
 def redact(text: str, key: str | None = None) -> str:
-    """Remove the API key (and anything that looks like an OpenRouter key) from text."""
+    """Remove the API key (and anything that looks like an OpenRouter or Google API key) from text."""
     import re
 
-    for secret in (key, get_api_key(), get_api_key("fal")):
+    for secret in (key, get_api_key(), get_api_key("fal"), get_api_key("gemini")):
         if secret:
             text = text.replace(secret, "***")
-    return re.sub(r"sk-or-[A-Za-z0-9_\-]{8,}", "sk-or-***", text)
+    text = re.sub(r"sk-or-[A-Za-z0-9_\-]{8,}", "sk-or-***", text)
+    return re.sub(r"AIza[A-Za-z0-9_\-]{20,}", "AIza***", text)
 
 
 # On the Claude plan (and the ChatGPT plan through Codex) proofreading does two passes unless the configuration says otherwise (ADR-066, 2026-10-20): in
@@ -412,7 +463,7 @@ def proofread_passes(cfg: Config) -> int:
     n = cfg.context.proofread_passes
     if n is not None:
         return n
-    return CLAUDE_PROOFREAD_PASSES if cfg.openrouter.provider in ("claude", "codex", "agy") else 1
+    return CLAUDE_PROOFREAD_PASSES if cfg.openrouter.provider in ("claude", "codex") else 1
 
 
 READS_LIKE_ANALYSIS = ("scene_read", "speaker_lookback")  # steps that take scene_analyze's model and effort

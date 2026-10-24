@@ -89,15 +89,18 @@ def key_status(env_path: Path, provider: str = "openrouter") -> dict[str, Any]:
 
         found = codex_found()
         return {"provider": provider, "set": bool(found), "hint": None, "file": str(env_path.resolve()), "codex": found}
-    if provider == "agy":  # no key: the Antigravity CLI's own sign-in on this computer
-        from ..llm.agy_cli import found as agy_found
-
-        found = agy_found()
-        return {"provider": provider, "set": bool(found), "hint": None, "file": str(env_path.resolve()), "agy": found}
+    if provider == "agy":  # disabled (ADR-105): the page says why and asks for another connection
+        return {"provider": provider, "set": False, "hint": None, "file": str(env_path.resolve()),
+                "disabled": AGY_DISABLED_ZH}
     if provider == "local":  # no key: is a model server answering, and which model has it loaded?
         return {"provider": provider, **local_status(), "hint": None, "file": str(env_path.resolve())}
     key = get_api_key(provider)
     return {"provider": provider, "set": bool(key), "hint": f"…{key[-4:]}" if key else None, "file": str(env_path.resolve())}
+
+
+AGY_DISABLED_ZH = ("Antigravity（agy）已停用：Google 的 Antigravity 常見問題（2026-10-16 論壇工作人員確認）說明，"
+                   "無頭模式 agy -p 只能用在你自己的腳本與 CI；包在第三方程式或應用程式裡不受消費者方案支援，"
+                   "可能導致帳號停權。NCTE 就是這樣的應用程式。請改用「Gemini API（Google AI Studio 金鑰）」或其他連線方式。")
 
 
 def local_status(base_url: str | None = None) -> dict[str, Any]:
@@ -115,15 +118,18 @@ def local_status(base_url: str | None = None) -> dict[str, Any]:
 
 
 def set_key(env_path: Path, key: str, provider: str = "openrouter") -> dict[str, Any]:
+    from ..config import key_name
+
     key = key.strip()
-    if provider not in ("openrouter", "fal"):
+    if provider not in ("openrouter", "fal", "gemini"):
         raise NCTEError("未知的連線方式")
     if provider == "fal" and not re.fullmatch(r"[A-Za-z0-9_:.-]{10,}", key):
         raise NCTEError("fal 金鑰格式不正確")
     if provider == "openrouter" and not re.fullmatch(r"sk-or-[A-Za-z0-9_\-]{20,}", key):
         raise NCTEError("這不像 OpenRouter 的金鑰（應以 sk-or- 開頭）")
-    name = "FAL_KEY" if provider == "fal" else "OPENROUTER_API_KEY"
-    _save_env(env_path, name, key)
+    if provider == "gemini" and not re.fullmatch(r"[A-Za-z0-9_\-]{20,}", key):
+        raise NCTEError("這不像 Google AI Studio 的金鑰（只有英數字、底線與連字號，至少 20 個字元）")
+    _save_env(env_path, key_name(provider), key)
     return key_status(env_path, provider)
 
 
@@ -140,9 +146,9 @@ def set_provider(env_path: Path, cfg: Any, provider: str) -> dict[str, Any]:
     from ..config import (
         DEFAULT_MODEL,
         PROVIDERS,
-        use_agy_models,
         use_claude_models,
         use_codex_models,
+        use_gemini_models,
         use_local_models,
     )
 
@@ -157,17 +163,19 @@ def set_provider(env_path: Path, cfg: Any, provider: str) -> dict[str, Any]:
         use_local_models(cfg)
     elif provider == "codex":
         use_codex_models(cfg)
-    elif provider == "agy":
-        use_agy_models(cfg)
-    elif was in ("claude", "local", "codex", "agy"):  # back to an API: its default model, not another source's alias
+    elif provider == "gemini":
+        use_gemini_models(cfg)
+    elif was in ("claude", "local", "codex", "agy", "gemini"):  # back to OpenRouter: its default, not another's id
         cfg.openrouter.model = DEFAULT_MODEL
         cfg.openrouter.stage_models = {}
         cfg.openrouter.temperature = type(cfg.openrouter)().temperature
     return key_status(env_path, provider)
 
 
-# another company's model a proofreading pass can use (ADR-082), by the command line tool found on this computer
-CROSS_CHOICES = (("agy", "agy/gemini-flash", "Gemini Flash（Antigravity 方案）", "Google"),
+# another company's model a proofreading pass can use (ADR-082), by the command line tool found on this computer or
+# the key set here (the Gemini API, ADR-105: billed by Google per use; agy is not offered)
+CROSS_CHOICES = (("gemini", "gemini/gemini-3.8-flash", "Gemini Flash（Gemini API，Google AI Studio 金鑰，按用量計費）",
+                  "Google"),
                  ("codex", "codex/gpt-6.1-sol", "GPT（Codex，ChatGPT 方案）", "OpenAI"),
                  ("claude", "claude/opus", "Claude Opus（Claude 方案）", "Anthropic"))
 
@@ -177,10 +185,10 @@ def cross_status(cfg: Any) -> dict[str, Any]:
     other than the run's own source."""
     import shutil
 
-    from ..llm.agy_cli import found as agy_found
+    from ..config import get_api_key
     from ..llm.codex_cli import found as codex_found
 
-    found = {"agy": agy_found(), "codex": codex_found(),
+    found = {"gemini": get_api_key("gemini"), "codex": codex_found(),
              "claude": shutil.which(os.environ.get("NCTE_CLAUDE_BIN") or "claude")}
     options = [{"model": m, "label": label, "company": who} for src, m, label, who in CROSS_CHOICES
                if found.get(src) and src != cfg.openrouter.provider]

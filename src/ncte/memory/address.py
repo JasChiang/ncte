@@ -42,11 +42,17 @@ def name_forms(conn: sqlite3.Connection, book_id: str, upto: int | None = None) 
     from .repository import FINDABLE
 
     # a form names only a card a name finds: never one known only by other cards' words, nor one of another time
-    chars = conn.execute(f"SELECT id, book_id, canonical_name, aliases_json, known_from_ordinal FROM characters "
-                         f"WHERE {SERIES_SCOPE} AND {FINDABLE}", (book_id,)).fetchall()
+    chars = conn.execute(f"SELECT * FROM characters WHERE {SERIES_SCOPE} AND {FINDABLE}", (book_id,)).fetchall()
+    visible: dict[str, list[str]] = {}  # with ``upto``: each card's forms as visible there (a form given later is not)
     if upto is not None:
+        from .visibility import character_view, form_positions
+
         hz = pos(conn, book_id, upto)
         chars = [c for c in chars if pos(conn, c["book_id"], c["known_from_ordinal"]) <= hz]
+        forms_at = form_positions(conn, book_id)
+        for c in chars:
+            v = character_view(conn, book_id, c, upto, forms_at, lookup=True)
+            visible[c["id"]] = [v["name_ja"], *v["aliases_ja"]] if v else []
     claims: dict[str, set[str]] = {}
 
     def claim(form: str | None, cid: str) -> None:
@@ -56,7 +62,7 @@ def name_forms(conn: sqlite3.Connection, book_id: str, upto: int | None = None) 
 
     by_name: dict[str, str] = {}
     for c in chars:
-        for f in [c["canonical_name"], *json.loads(c["aliases_json"])]:
+        for f in visible[c["id"]] if upto is not None else [c["canonical_name"], *json.loads(c["aliases_json"])]:
             claim(f, c["id"])
             by_name.setdefault(f, c["id"])
     groups: dict[str, list[str]] = {}

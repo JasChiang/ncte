@@ -189,7 +189,7 @@ def test_an_answer_to_the_reading_s_own_question_about_a_line_sets_its_speaker(c
     conn.execute("DELETE FROM verify_answers")  # (asked again, as after a re-read)
     items, item = _question(conn, s, s["a"])
     parsed = VerifyOutput.model_validate({"items": [{"ref": item["ref"], "answer": "母親が言った", "reason": "x",
-                                                     "character_id": s["a"], "line_ref": utt}]})
+                                                     "character_id": s["a"], "line_ref": utt, "line_role": "speaker"}]})
     stats = verify.apply(conn, s["book"].id, items, parsed, lambda *a: None)
     row = conn.execute("SELECT * FROM utterances WHERE id=?", (utt,)).fetchone()
     assert (row["speaker_id_nullable"], row["status"], row["resolution_source"]) == (s["a"], "inferred", "verify")

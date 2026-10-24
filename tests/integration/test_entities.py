@@ -382,9 +382,19 @@ def test_words_of_an_earlier_card_mean_it_only_when_the_model_says_nothing_other
     assert got["matched"] == [{"ref": "new_1", "name_ja": "母親", "character_id": mother}]
     refs, got = read(name_ja="義母上")
     assert refs["new_1"] == mother
-    for other in ({"other_person": True}, {"period": "前世"}, {"other_person": True, "period": "前世"}, {"group": True}):
+    for other in ({"period": "前世"}, {"other_person": True, "period": "前世"}):
+        # the model says another time: one path — a labelled card marked as maybe the card with the words (ADR-103)
         refs, got = read(name_ja="母親", **other)
-        assert refs.get("new_1") != mother and not got["matched"] and got["rejected"] == 1, other
+        row = conn.execute("SELECT * FROM characters WHERE id=?", (refs["new_1"],)).fetchone()
+        assert row["id"] != mother and repo.may_be(row) == [mother] and repo.period_of(row) == "前世", other
+    refs, got = read(name_ja="母親", group=True)
+    assert refs.get("new_1") != mother and not got["matched"] and got["rejected"] == 1
+    # someone of the present said to be another person than the card with the words: a card of their own, marked
+    # as maybe that card for the second look (ADR-103), not a card of another time
+    refs, got = read(name_ja="母親", other_person=True)
+    marked = conn.execute("SELECT * FROM characters WHERE id=?", (refs["new_1"],)).fetchone()
+    assert marked["id"] != mother and not got["matched"] and repo.may_be(marked) == [mother]
+    assert repo.period_of(marked) is None
     refs, got = read(name_ja="黒衣の男")
     assert not got["matched"] and got["rejected"] == 0 and got["unconfirmed"] == 1
     card = conn.execute("SELECT * FROM characters WHERE id=?", (refs["new_1"],)).fetchone()
@@ -423,11 +433,13 @@ def test_a_known_card_reached_through_an_alias_follows_the_models_word_on_who_it
         return refs
 
     assert read()["new_1"] == mother  # nothing said otherwise: the card with those words
-    for other in ({"period": "前世"}, {"other_person": True}):
-        got = read(**other)["new_1"]
-        assert got != mother, other
-        assert tuple(conn.execute("SELECT canonical_name, label FROM characters WHERE id=?", (got,)).fetchone()) == \
-            ("来訪者", other.get("period", "另一人"))
+    got = read(period="前世")["new_1"]
+    assert got != mother
+    assert tuple(conn.execute("SELECT canonical_name, period FROM characters WHERE id=?", (got,)).fetchone()) == \
+        ("来訪者", "前世")
+    got = read(other_person=True)["new_1"]  # another person of the present: marked, not another time (ADR-103)
+    row = conn.execute("SELECT * FROM characters WHERE id=?", (got,)).fetchone()
+    assert got != mother and row["canonical_name"] == "来訪者" and repo.may_be(row) == [mother]
     assert read(group=True).get("new_1") != mother
 
 
@@ -466,7 +478,8 @@ def test_words_two_cards_have_are_not_for_the_program_to_pick_between(conn, cfg,
     assert (card["canonical_name"], card["label"], set(repo.may_be(card))) == ("来訪者", "3", mothers)
     assert not conn.execute("SELECT 1 FROM memory_rejections WHERE book_id=?", (book.id,)).fetchone()
     past = conn.execute("SELECT * FROM characters WHERE id=?", (read(name_ja="母親", period="前世")["new_1"],)).fetchone()
-    assert past["id"] not in mothers and not repo.may_be(past)
+    # another time: the same one path, marked as maybe the cards with the words; the time is the model's reading
+    assert past["id"] not in mothers and set(repo.may_be(past)) == mothers and repo.period_of(past) == "前世"
 
 
 def test_only_cards_seen_before_the_scene_decide_whose_words_these_are(conn, cfg, fixtures):

@@ -1,12 +1,12 @@
 # NCTE configuration example. Copy to ./ncte.yaml (auto-loaded) or pass --config.
-# The API key is NOT configured here: use the OPENROUTER_API_KEY env var or ./.env
+# The API key is NOT configured here: use the OPENROUTER_API_KEY (FAL_KEY, GEMINI_API_KEY) env var or ./.env
 app:
   workspace: "./workspace"
   language: "zh-TW"
   mode: "baseline"          # baseline | context
   lookahead_scope: "current_scene"
 openrouter:
-  provider: "openrouter"  # openrouter | fal | claude | local; fal uses FAL_KEY; claude = your Claude plan via `claude -p` (no key; model claude/opus, reading on claude/sonnet); agent = set only by `ncte agent` for its own runs (not accepted from NCTE_LLM_PROVIDER)
+  provider: "openrouter"  # openrouter | fal | claude | codex | gemini | local; fal uses FAL_KEY; gemini = the Gemini API with GEMINI_API_KEY (model gemini/gemini-3.8-flash, priced from OpenRouter's public list); claude = your Claude plan via `claude -p` (no key; model claude/opus, reading on claude/sonnet); agent = set only by `ncte agent` for its own runs (not accepted from NCTE_LLM_PROVIDER)
   # local = a model server on this computer (LM Studio, llama-server, mlx_lm.server); model local/default = the loaded one
   # local_base_url: "http://localhost:1234"
   # local_models_dir: "~/.lmstudio/models"      # where chat_template.jinja / GGUF files are (switches thinking off)
@@ -50,8 +50,8 @@ context:
   term_definitions: true       # ADR-069: after reading, the model says what the recurring terms mean; sent with each request where the term occurs (false: not asked, not sent)
   read_in_one_request: false   # ADR-065: a scene's analysis and memory update from one request (read_first only; off until an A/B shows the quality holds)
   card_voice: true             # ADR-104: each card in a scene's reading carries the tally of its earlier lines (self-reference, second person, forms of address), how others are recorded calling it, and up to 3 facts known by then
-  scene_state: false           # ADR-104: the model writes who is present, where and doing what before it attributes the lines (off until the A/B shows it helps)
-  speaker_lookback: false      # ADR-104: lines whose neighbouring line has a recorded word for someone other than the speaker/addressee go back to the model once per scene (off until the A/B shows it helps)
+  scene_state: false           # ADR-104: the model writes who is present, where and doing what before it attributes the lines (off: no gain in the 13-scene A/B, ADR-104)
+  speaker_lookback: false      # ADR-104: lines whose neighbouring line has a recorded word for someone other than the speaker/addressee go back to the model once per scene (off: no gain in the 13-scene A/B, ADR-104)
 memory:
   fts_enabled: true
   vector_rag_enabled: false

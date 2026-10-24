@@ -816,15 +816,15 @@
       | 查找 | 會找到的卡 |
       |---|---|
       | `upsert_character`（模型給的名字、已知的名字） | 只有一般的卡 |
-      | `alias_map`（讀場景時寫法→卡） | 一般的卡優先，再來有標籤的同名卡（「母親（3）」）；另一個時期的卡不收 |
-      | 讀場景的 `known_by`／`owners`（這個寫法屬於哪幾張卡） | 一般的卡與有標籤的同名卡（它們都是「可能是誰」的對象）；另一個時期的卡不收；重讀時找回的卡從自己的候選裡扣掉 |
+      | `alias_map`（讀場景時寫法→卡） | 一般的卡優先，再來有標籤的同名卡（「母親（3）」）；有時期的卡不收（它由 id 找到） |
+      | 讀場景的 `known_by`／`owners`（這個寫法屬於哪幾張卡） | 一般的卡與有標籤的同名卡，另一個時期的卡也算（實測三起：它們都是「可能是誰」的對象）；重讀時找回的卡從自己的候選裡扣掉 |
       | `entities.character_for_form`、`ensure_entity`、`reconcile_characters` | 只有一般的卡 |
       | `address.name_forms`（稱呼的寫法→說話對象） | 只有一般的卡 |
       | `cache.glossary_entries` 的別名 | 只有一般的卡 |
       | 系列合併（`workspace._merge_duplicates`） | 只有一般的卡 |
       | 定名的「名字是稱呼」檢查（`suspicious_characters` 的另一張卡） | 只有一般的卡 |
       | 覆核的揭曉合併檢查（官方連結的目標） | 一般的卡優先，再來另一個時期而有名字的卡；不找有標籤的同名卡 |
-      | `other_time_card` | 只有同一個時期、卡名或別名是這個寫法的卡 |
+      | `other_time_card`（實測三起只是 `unconfirmed_card` 加上時期） | 不以字或時期找卡；以讀場景的鍵找 |
       | `unconfirmed_card` | 以讀場景的鍵找（卡被合併後是留下的卡），不以名字找 |
       | 不是查找：`naming` 的「這個寫法是人名嗎」（任何卡）、定名改譯名時更新同卡名的譯名（任何同名卡）、重讀清卡時名詞表是否還有別的卡用（任何卡） | — |
   - 第四輪：
@@ -860,6 +860,35 @@
     - 實測的診斷（`workspace/exp/synthetic-run/diagnosis/`）：
       - 後來才揭曉的名字只管那個名字什麼時候出現，不讓卡在之前消失：名稱連結「汐乃→（敘述者）」在第 382 段揭曉，原本連結的兩個字都從那裡起才看得到，敘述者卡在之前的每一段都不見（覆核在敘述者合併前跑，1–20 場的候選沒有他，答對的那題沒有 `character_id`）。改成每個寫法以它跟這張卡一起出現的位置為準，連結的揭曉只延後名字本身；最先出現的寫法照樣從卡的第一次出現起顯示（敘述者的佔位名優先，同時出現時卡名優先）（`visibility.character_view`）。所有後來揭曉名字的卡都一樣。
       - 讀場景自己提的疑問（`u:`）的回答原本只記在場景上，不改台詞的說話者。改成疑問附上它所在段落的台詞（`lines`，每句一個 `line_ref`）；回答說是某個人（`character_id`，這個場景的人）時，經和台詞重看同一條路（`verify._set_speaker`：推測、人工決定的不動）改那句的說話者——指明哪句，或段落裡只有一句；回答不知道就不動。台詞重看的候選加上這個場景裡說話或在場的人，不只讀的時候列的候選。
+    - 實測二（`workspace/exp/synthetic-v2-run/`：第 8 章三位母親；`workspace/exp/synthetic-run/rerun-ws`）：
+      - 新人物原文唯一的字是別的卡已有的字時，即使模型標成普通名詞（「ルカの母親」不在原文，別名「母親」標 `common`：「母親」是今世母親的名字、麵包店老闆娘的別名），也走有標籤的卡：以那個字建卡、標「可能是」有這個字的那幾張，模型的稱呼記成它的描述。這種卡不會被那個字找到，所以 ADR-101 不收普通名詞的理由（「男」找到某張卡）不適用；沒有任何卡有的普通名詞照舊不當名字。原本整筆拒絕，兩人的 7 句台詞、2 筆在場一起丟掉。
+      - 模型說是另一個人（`other_person`）但沒說時期：是故事當下的人，走有標籤的卡並標「可能是」有這個字的卡（覆核再問）；另一時期的卡只給真的有時期的。原本進「母親（另一人）」：名字找不到、沒有標記、覆核也不看。答案沒指出排除的是哪張卡，所以不預先記「不是」。
+      - 名字揭曉時才建的卡（イレナ，第 473 段），讀場景把揭曉前的台詞（第 462 段）也給了她：卡從這一場裡第一個說話或在場的段落起就在，用那時這一場已出現的她的字（「母親」）；揭曉的名字照舊只從揭曉處顯示（`scene._known_from_attributed`）。原本那句在揭曉前沒有說話者。
+      - 補問性別的段落依卡找（說話、被說話、在場，都依 id），和其他卡共用的字（三位「母親」）不拿來找；只給卡出現之後的段落。性別只在後面才讀到（前世的母親第 384 段，卡從第 24 段就在）時，之前那段照樣算沒有性別，用到那裡之前的段落問（人工設定、或從卡出現時就有的不算）。
+      - 讀場景的疑問的回答要說是關於誰說（`line_role: speaker`）還是對誰說（`addressee`）才改台詞：說話者照舊經台詞重看的路，說話對象寫入那句的說話對象（推測；原文寫明的、人工決定的、說話者本人不改）；都沒說就只記答案。原本段落裡只有一句時，問「『君』是誰」的回答把說話者改了。一個回答可以列好幾句（`line_refs`）。
+      - 同一人的關係卡自己對自己（`a_ref` 等於 `b_ref`）有自己的拒絕理由。
+      - 沒改：一個寫法屬於一張卡的規則（「母上」意思改變的情況）等使用者決定（後來決定了，見下面「一個寫法可以屬於幾張卡」）。
+    - 實測三（`workspace/exp/synthetic-v2-run/ws2`）：走哪條路原本取決於模型自由填的欄位——這次模型給兩位母親都填 `other_person: true`、時期「本場景」，於是都進了另一時期的卡，又因為以「字＋時期」找卡而併成一張，沒有標記、覆核也不問。改成一條路：
+      - 新人物的字已有卡時（卡名或代替名字的別名），只要有好幾張卡有這個字、或模型說是別人（`other_person`）或給了時期，就是有標籤、標「可能是」那幾張卡的卡（`unconfirmed_card`，重讀以讀場景的鍵——場景、字、這次讀的第幾個——找回；同一次讀的兩個提案永遠是兩張卡）。沒有卡有這個字、但有時期的人也是有標籤的卡（沒有標記），讓那個字仍然只找到故事當下的人。只有一張卡有這個字、模型也沒說是別人時，照舊就是那張卡（ADR-101）。
+      - 時期只是模型的判讀，記在卡上（`period`；給模型的名字寫成「母親〔前世〕」，網頁顯示「母親（前世）」，和之前一樣），不再決定走哪條路，也不是找卡的鍵。另一時期的卡就是有時期的有標籤卡：名字找不到它、它也是「可能是誰」的對象（之前不算），覆核可以答「不同」。名字揭曉時時期留在有名字的卡上，標籤換成下一個號碼（唯一鍵）。拿掉以「字＋時期」找卡（`other_time_card` 只剩建卡）。
+      - 提示詞（讀場景、一次讀完）：`period` 只寫故事時間軸上的另一個時期；故事當下的另一個人只填 `other_person`、不填時期。
+      - 名字揭曉時才建的卡把第一次出現往前移到它第一句台詞時，模型在這一場給它的字（名字與每個別名，普通名詞也算）中那時已出現的，記在卡上當顯示用的寫法（`character_forms`，不進別名）：卡從那段起就看得到、用那個字（「母親」），揭曉的名字照舊只從揭曉處起；顯示用的寫法不是名字，任何以名字找卡的地方都找不到它（那些只看卡名與別名）。
+      - 補問性別的段落也包括整理記憶以 id 指到這張卡的地方：事實（主詞或受詞）、關係、稱呼（叫或被叫）、讀場景的動作（做或承受）——「うちの娘」是母親說到她，這段原本只靠字比對，共用字的規則把它拿掉了。仍然不以共用的字找。
+      - 讀場景自己的疑問的候選：這個場景的人在前，再加上到那裡為止所有看得到的人物（問的人可能不在場，例如寫信的人）。
+  - **一個寫法可以屬於幾張卡**（使用者 2026-10-24 決定；`workspace/exp/synthetic-run/rerun-ws`：「母上」前面是主角過世的生母，第 5 章起是還在世的繼母，整理記憶以「這個寫法已經是別的人物的」拒絕了 3 次）：
+    - 讀場景的其他寫法（`other_forms`）把別的卡已有的寫法給另一張卡時照收：每張卡從模型把這個寫法給它的位置起有這個寫法（`character_forms`），不再拒絕。這種寫法不建名稱連結（連結的揭曉位置對所有有這個寫法的卡都生效，會把前一張卡的寫法也藏到那裡），也不改 `alias_map` 裡原本的那張。
+    - 以字找卡時，有位置的地方只看在那個位置看得到這個寫法的卡；幾張都看得到就不替模型選（有標籤的卡標「可能是」、或不歸給誰）：讀場景的 `known_by`（場景開頭看得到的寫法）、稱呼的說話對象（`address.name_forms(upto)`：改用那個位置看得到的寫法）。沒有位置的查找，幾張卡有這個寫法就不選：`character_for_form` 回 None、整理記憶的 `_card_for` 拒絕並寫明理由（要 `character_ref`）、指令列請使用者以 id 指定。
+    - 證據與可見性的檢查不變：寫法要逐字在證據段落、單獨出現；揭曉前不顯示。
+    - 補進上表：讀場景的 `other_forms`——別的卡也有的寫法照收，從這裡起屬於這張卡；`address.name_forms(upto)`——只看在那個位置看得到寫法的卡；`character_for_form`——幾張就不選。
+  - 實測四（`workspace/exp/synthetic-v2-run/ws3`）：
+    - 帶 `character_ref` 的名稱連結只歸給那張卡：「イレナ」在讀場景揭曉、併進米歐母親的有標籤卡（成為名字找得到的卡），整理記憶又回 `{"term":"イレナ","same_as":"母親","character_ref":她}`；原本那張卡名字找得到，程式就把「イレナ」連到「母親」的實體——那是今世母親的——連帶把米歐母親的讀場景鍵和「イレナ」搬到今世母親身上。改成：有 `character_ref` 時，寫法照舊給那張卡；只有 `same_as` 的字正好只屬於那張卡時才連實體，屬於別的卡或好幾張卡時不連（記在那張卡上，不算拒絕）。
+    - 讀場景的回答要涵蓋程式找到的台詞：第 6 章第 1 場的回答 `utterances` 是空的，9 句台詞全沒了說話者，覆核也沒問。改成：回答沒提到的台詞（接著上一段的不算，它們跟著開頭那句），同一次讀場景裡帶著這一場與這一場新建的人物再問一次，只問那幾句（`only_quotes`，`ContextOrchestrator._fill_missing_lines`，在整理記憶之前；一次讀完的也一樣）；再問仍沒有回答的台詞記上「(to look at)」，覆核的台詞重看會問。提示詞要求每一句都回答（看不出說話者也回 `unknown`）。FakeLLM 預設照提示詞每句都回答（`complete_lines`）。
+  - 實測四之後的審閱（ad6dd9d..96a2c19）：
+    - 名稱連結的另一個字（`same_as`）也照同樣的規則：沒有 `character_ref`、而那個字屬於好幾張卡時（「母親」是兩位母親的），拒絕並寫明理由；原本只看 `term`，「エレナ → 母親」被接受，エレナ併進了其中一位。
+    - 只用來顯示的寫法（`character_forms` 裡、不在卡名與別名的，例如揭曉前的「白衣の女」）只用在顯示（網頁、給模型的名字），不用在找人：`character_view(lookup=True)` 只給卡名與別名，讀場景的「這個寫法屬於哪幾張卡」與稱呼的說話對象都用它。
+    - 覆核每個要套用的人物 id 都順著同一次覆核的合併找到現在的卡（說話者、說話對象、動作的人）；那張卡已不在、也沒有合併可循時，當作沒回答（不記為答過，列入沒問到）。原本同一人的回答把 B 併進 A 之後，後面指 B 的回答會讓覆核整個中斷。
+    - 整理記憶同一個回答裡給同一張卡好幾個字（「澄枝」「エレナ」都指她）時，每寫一個就重讀那張卡，不再只留下最後一個。
+    - 再審：讀場景的疑問記下的人物是順著合併之後的卡；回答指的卡已不在（沒有合併可循）時，疑問上什麼都不記（原本答案已寫上，疑問從此不再問），下次照樣問。動作的回答指到已不在的卡也當沒回答：不改動作、不標「已看過」（原本這種卡被濾掉後成了空答案，繞過「要引段落」的檢查，把做的人清空並標成已看過）。
 - 不做：標籤不當名字，所以不加在 `visible_names`、翻譯與審稿看到的說話者名字上（兩位「母親」在譯文裡本來就都是母親）；程式不比對誰像誰。
 - 限制：舊書照舊要重讀才會套用（舊書是測試資料）。定名改卡名（rename）時，新名字沒有自己的首次位置，跟著卡。定名把有標籤的卡改名後標籤還在（只影響網頁顯示）。覆核的 `same_person` 只看每張卡第一次出現前後與最多 4 句台詞的段落，判斷所需的線索在別處時模型會答 `unknown`，標記留著。
 
@@ -872,13 +901,35 @@
      - `called_as`：整理記憶記下別人怎麼叫他（最多 4 個，用得多的先）。
      - `facts_so_far`：本場景之前揭露、附原文出處的他的事實，最多 3 條，依翻譯步驟的 `chosen_facts` 和本場景文字最相關的先。
      什麼都沒記下的卡不加任何欄位。
-  2. **先想像場面**（`context.scene_state`，預設關，等 A/B）：請求多 `write_situation: true` 時，提示詞（`_shared/situation.md`）要模型在 `new_characters` 之後、`utterances` 之前先寫 `situation`：從哪一段起（`at`）、在哪裡、誰在場、各自在做什麼／拿著什麼／對著誰（`ref` 是卡或新人物的 `temp_id`；沒有卡的人寫原文稱呼 `who`；`doing` 二十字內），場景開頭一筆，之後只在有人進出、換地方、東西換手、說話對象換人時再寫，通常一到四筆；並以通則要模型對照場面判斷台詞（回話叫的人通常是前一句的說話者、台詞後的敘述常寫聽的人）。程式核對：段落在本場景（不在的丟掉、記拒絕）、`ref` 是讀場景認得的卡（不認得又沒有 `who` 的人丟掉、記拒絕），依故事順序、最多 8 筆每筆 8 人、字數截斷，存在場景的 `state_json.situation`。之後用到的地方：下一場的讀場景（`previous_scene_state`：上一場最後一筆，只給這個請求看得到的卡）、覆核的台詞項目（台詞當時那一筆）、回頭看一次（同）。schema：`SituationPoint`、`SituationPerson`（`SceneAnalysisOutput.situation`，預設空）。
-  3. **回頭看一次**（`context.speaker_lookback`，預設關，等 A/B）：一場讀完（兩個請求時在整理記憶之後、一個請求時在兩部分寫入之後；交錯模式在分析之後、翻譯之前），程式只用字串與位置收集「對不上紀錄」的台詞，不判斷意思；收到的才用一個小請求（`prompts/speaker_lookback`，模型與思考程度跟 `scene_analyze`）連同前後段落與當時的場面送回模型確認或改正；沒收到就不送。每次讀這場只看一次（`state_json.lookback`；重讀會重看）。
+  2. **先想像場面**（`context.scene_state`，預設關：A/B 沒有幫助）：請求多 `write_situation: true` 時，提示詞（`_shared/situation.md`）要模型在 `new_characters` 之後、`utterances` 之前先寫 `situation`：從哪一段起（`at`）、在哪裡、誰在場、各自在做什麼／拿著什麼／對著誰（`ref` 是卡或新人物的 `temp_id`；沒有卡的人寫原文稱呼 `who`；`doing` 二十字內），場景開頭一筆，之後只在有人進出、換地方、東西換手、說話對象換人時再寫，通常一到四筆；並以通則要模型對照場面判斷台詞（回話叫的人通常是前一句的說話者、台詞後的敘述常寫聽的人）。程式核對：段落在本場景（不在的丟掉、記拒絕）、`ref` 是讀場景認得的卡（不認得又沒有 `who` 的人丟掉、記拒絕），依故事順序、最多 8 筆每筆 8 人、字數截斷，存在場景的 `state_json.situation`。之後用到的地方：下一場的讀場景（`previous_scene_state`：上一場最後一筆，只給這個請求看得到的卡）、覆核的台詞項目（台詞當時那一筆）、回頭看一次（同）。schema：`SituationPoint`、`SituationPerson`（`SceneAnalysisOutput.situation`，預設空）。
+  3. **回頭看一次**（`context.speaker_lookback`，預設關：A/B 沒有作用）：一場讀完（兩個請求時在整理記憶之後、一個請求時在兩部分寫入之後；交錯模式在分析之後、翻譯之前），程式只用字串與位置收集「對不上紀錄」的台詞，不判斷意思；收到的才用一個小請求（`prompts/speaker_lookback`，模型與思考程度跟 `scene_analyze`）連同前後段落與當時的場面送回模型確認或改正；沒收到就不送。每次讀這場只看一次（`state_json.lookback`；重讀會重看）。
      - 收集的台詞：不是「明確」、不是人工決定的。一句話跨段時當一句（延續段跟著開頭）。
-     - 比對的字（紀錄上屬於某張卡）：卡在場景結尾時看得到的名字與別名（兩字以上、不是代名詞；另一時期的卡不算，和所有用字找卡的地方一樣）；整理記憶記下別人用來叫某張卡的稱呼（當稱呼用的，場景結尾前第一次用）；自稱：某人在本場景之前的台詞裡用過的自稱（每句第一個 `FIRST_PERSON`）與整理記憶記下的他的自稱。比對時長的字先找，被長的字包住的短字不算（「ミナミ」裡的「ミナ」）。
+     - 比對的字（紀錄上屬於某張卡）：卡在場景結尾時看得到、找卡模式的名字與別名（`character_view(..., lookup=True)`，只供顯示的寫法不算身分）（兩字以上、不是代名詞；另一時期的卡不算，和所有用字找卡的地方一樣）；整理記憶記下別人用來叫某張卡的稱呼（當稱呼用的，場景結尾前第一次用）；自稱：某人在本場景之前的台詞裡用過的自稱（每句第一個 `FIRST_PERSON`）與整理記憶記下的他的自稱。比對時長的字先找，被長的字包住的短字不算（「ミナミ」裡的「ミナ」）。
      - 收集的條件：(a) 下一句（開頭距這句不超過 3 段）有屬於某張卡的字，而那張卡不是這句的說話者、也不是下一句自己的說話者（回話叫「姉さん」，這句卻判給別人；這句判為對她說的也算，因為回話叫的是它回應的人）；(b) 上一句（結尾距這句不超過 3 段）有屬於某張卡的字，而那張卡不是這句的說話者、不是這句的說話對象、也不是上一句自己的說話者；(c) 這句本身有只屬於它的說話者的字（像在叫自己）；(d) 這句的自稱在紀錄上屬於場景裡另一個人、說話者的紀錄裡沒有（說話者沒有自稱紀錄時不比；沒有說話者時只在剛好屬於一個人時）。一個字屬於幾張卡時，其中有一張合得上就不算。一場最多 10 句。
      - 請求只有這些台詞：每句的 `noticed`（在哪一句、哪個字、紀錄上屬於誰、是哪種紀錄）、前後兩段（含相鄰台詞）原文、當時的場面、可能的人物（場景裡說話或在場的人、`noticed` 裡的卡）。提示詞寫明 `noticed` 不是答案，站得住就照原樣回答。
      - 套用：改說話者要引用這一項裡的段落、改成這一項的人物之一（或 null：原文看不出），經覆核同一條路（`verify._set_speaker`，`resolution_source='lookback'`、狀態是推測或未定；讀場景標了「要再看」的台詞覆核照樣會問）；延續段跟著改；收集之後被改過或人工決定的台詞不動；沒附段落的修改、不在人物裡的答案不採用。說話對象同樣要附段落才改。之後稱呼紀錄跟著台詞換人（`follow_speakers`），口吻統計重算。
+- A/B 結果（2026-10-24，13 場、Claude 方案 Sonnet、每個 arm 兩次，`workspace/exp/speaker-ab/results/ctx-*`；判對句數，共 143 句）：base（e0b922c）123、122；voice 130、127；voice+state 125、122；voice+state+lookback 127、126（回頭看各收到 38、39 句：第一次前後一樣，第二次只把一句未定改成錯）。結論：卡上的口吻與事實有效（多對 4–8 句）；先寫場面沒有幫助（比只加 voice 少 5 句左右）；回頭看幾乎沒有作用。預設照此定：`card_voice` 開、`scene_state` 關、`speaker_lookback` 關，後兩個的程式保留。
 - 離線實驗（不叫模型）：在全書實跑的判讀上（`after-read.db`，13 場），條件收到 40 句，其中 6 句是那次讀錯或未定的（共 21 句）；其他錯的線索多半是第二人稱（「君」）或人人都可叫的稱謂（「先生」「殿下」只記在其中一人），這些不是某張卡的紀錄，程式不收（收就幾乎每句都收）。真的效果要看 A/B：每個 arm 的回頭看是在那個 arm 自己的判讀上做。
 - 後果：`card_voice` 每場讀場景的輸入多一些（每張有台詞的卡約數十到一兩百字）；場面每場輸出多約一到四筆短句；回頭看在收到台詞的場景多一個小請求（離線估計 13 場中 10 場、平均 4 句）。翻譯與校稿的請求不變。
 - 限制：統計與稱呼只看同一本書（系列前幾集的台詞不算）；`facts_so_far` 只給有出處的事實；回頭看依賴整理記憶記下的稱呼，稱呼沒記下或只記在一人身上時收不到；預估費用（dry-run）還沒算回頭看的請求。
+
+## ADR-105（2026-10-24）：停用 Antigravity（agy）來源；新增直接連 Gemini API 的來源（`gemini`）
+- 背景：Google 的 Antigravity 常見問題（https://antigravity.google/docs/faq/ ，現行政策；2026-10-16 開發者論壇的回覆也說以常見問題為準，回覆者未標示身分：https://discuss.ai.google.dev/t/clarification-on-consumer-plan-policy-for-invoking-official-agy-via-local-subprocess/189905 ）說明：無頭模式 `agy -p` 只供使用者自己直接寫的腳本與 CI；把 agy 包在第三方 coding agent 或應用程式裡不受消費者方案支援，可能導致停權；第三方工具應改用 Google AI Studio 或 Gemini Enterprise 的 API 金鑰。NCTE 就是這樣的應用程式。使用者決定：停用、隱藏 agy，新增直接連 Gemini API 的來源。
+- 決定（agy）：
+  - 程式碼不刪（`llm/agy_cli.py` 與它的單元測試照舊，測試直接建 `AgyCLIClient`，不需要開發者開關）。沒有任何讓使用者打開的方式。
+  - 不再提供：`config.PROVIDERS` 拿掉 agy（`NCTE_LLM_PROVIDER=agy` 仍讀得進來，只為了網頁能說明原因）；`load_config` 不再套 `use_agy_models`；網頁連線方式沒有 agy、交叉校稿的選項沒有 agy（`CROSS_CHOICES` 改成 Gemini API）、設定頁與書庫頁遇到還設著 agy 的 `.env` 時顯示停用說明與 FAQ 連結；`set_provider("agy")`、`set_cross("agy/…")` 回 400。README 拿掉 agy 來源、加上政策說明。
+  - 選到就停：`make_client` 在建任何 client 之前檢查 `config.agy_selected`（來源是 agy、或任何步驟模型、審稿／後備模型、交叉校稿是 `agy/…`），丟出 `AGY_DISABLED`（引 FAQ 與日期、指向 Gemini API）。新的執行與續跑舊的 agy 執行都一樣，不會送出任何請求。`cli._agy_client` 與 routing 的 agy 分支拿掉。
+  - 舊紀錄：設定的 `Literal` 留著 agy，舊執行的設定照樣載入；成本報告、方案用量照舊認得 agy 的紀錄。對照校稿的預設輪數不再把 agy 當訂閱方案（反正不會執行）。
+- 決定（Gemini API，`llm/gemini.py`）：只實作 Gemini API 文件（2026-10-24 讀：`/api/generate-content`、`/api/models`、thinking、caching、api-errors、pricing、billing、api-key）寫明的：
+  - `POST v1beta/models/{model}:generateContent`，金鑰放 `x-goog-api-key` 標頭（不放網址、經 `redact` 不進紀錄；`redact` 也遮 `AIza…` 形式的字串）；`GEMINI_API_KEY`（環境變數、`.env` 或網頁設定）。步驟規則放 `systemInstruction`（第一個送出的部分：文件說隱性快取命中要相同的前綴），其他訊息放 `contents`（`user`／`model`）。
+  - 結構化輸出：`generationConfig.responseFormat.text = {mimeType: APPLICATION_JSON, schema}`。參考文件把 `responseSchema`、`_responseJsonSchema` 標為 deprecated、寫「Use responseFormat instead」，所以用 `responseFormat`；`json_object` 模式只送 `responseMimeType: application/json`。被拒（400）時照現有流程降級。
+  - 思考：步驟的推理程度 → `thinkingConfig.thinkingLevel`（MINIMAL／LOW／MEDIUM／HIGH；文件：Gemini 3 以後建議用、更早的模型會報錯）；`max:N` → `thinkingBudget`；沒設就不送（模型自己的預設）。可用的程度照模型目錄（下一項）檢查。
+  - 用量：`usageMetadata` 換成報告讀的形式：`prompt_tokens`＝`promptTokenCount`（文件：含快取的部分）、`completion_tokens`＝`candidatesTokenCount`＋`thoughtsTokenCount`（價目表：輸出價「including thinking tokens」）、`prompt_tokens_details.cached_tokens`＝`cachedContentTokenCount`、`completion_tokens_details.reasoning_tokens`＝`thoughtsTokenCount`；原始數字另存 `usage.gemini`，`modelVersion` 存 `usage.model_version`。
+  - 回答：`promptFeedback.blockReason` 或 `finishReason` 是 SAFETY、RECITATION、BLOCKLIST、PROHIBITED_CONTENT、SPII（與圖片的同類）→ `ContentBlockedError`（照現有的拆段重送、保留原文）；`PUP_LIMITED_DISABLED`（帳號被限制）→ `FatalAPIError`；`MAX_TOKENS` → `finish_reason="length"`（翻譯器照舊提高上限再問）；沒有文字 → `EmptyAnswerError`（帶用量）。`thought: true` 的部分不算答案。
+  - 錯誤：408／409／425／429／499／5xx、逾時 → 退避重試（照 `Retry-After`）；400 `FAILED_PRECONDITION`（文件：帳單等前提沒設好）與 401／402／403／404 → `FatalAPIError` 停下；其他 400／413／422 → `RequestRejectedError`。
+  - 模型目錄與價格：`models.list`（分頁、只取支援 `generateContent` 的）列出這把金鑰能用的模型，id 是 `gemini/<模型>`。Gemini API 不回報價格：每個模型的價格取 OpenRouter 公開 `/models` 上的 `google/<模型>`（不送任何金鑰給 OpenRouter，同 fal 的做法），可用參數與推理程度也取那一筆；Gemini 的 `thinking` 是 false 就拿掉 reasoning。OpenRouter 沒有列的模型沒有價格（`pricing_missing`），執行與試算都拒絕並說明原因（費用未知，預算擋不住）；不寫死任何價格。OpenRouter 的價目讀不到時所有模型都沒有價格，記在 notes。
+  - 費用：回應沒有費用，照 Google 回報的 token × 那份價格估算（`estimated_from_tokens`）；快取讀到的 token 照快取價（`Pricing.cost(cached_tokens=)`，目錄有 `input_cache_read` 時；其他來源沒有回報費用時同樣適用）。試算說明寫明價格來源；有過去執行時，Gemini API 的校準也採用這種估算的紀錄（只限這個來源）。預算、試算、續跑與 OpenRouter 相同；沒有餘額查詢、沒有 `/generation` 補查。
+  - 設定：`provider: gemini`、`use_gemini_models`（非 `gemini/` 的 API 模型 id 換成 `GEMINI_MODEL`＝`gemini/gemini-3.8-flash`：文件的模型頁、thinking 與 caching 頁列為現行的 Flash，也和 OpenRouter 的預設同一個模型；其他來源前綴的步驟模型保留，agy 的拿掉）。`gemini/` 加進 `ROUTED_PREFIXES`：其他來源的執行可以把某一步（例如交叉校稿）交給 Gemini API。對照校稿預設一輪（付費來源）。
+  - 網頁：連線方式「Gemini API（Google AI Studio 金鑰）」；金鑰欄（只存 `.env`，畫面只顯示末四碼）、取得金鑰與帳單的步驟（AI Studio 金鑰頁、Google 說明的預付最少 US$5、免費方案的資料使用說明）、估價用 OpenRouter 公開價目的說明；交叉校稿在有 Gemini 金鑰時可選 Gemini API。
+- 沒做（文件有、這次不需要）：顯式快取（建立快取物件有儲存費用；隱性快取已自動折扣）、Interactions API、串流、Batch／Flex。
+- 限制：沒有金鑰、沒有實測（使用者沒有同意花費）：請求格式、`responseFormat`、思考程度、錯誤格式都只照文件並以 MockTransport 測。文件現在多以 Interactions API 示範，generateContent 參考頁的 `responseJsonSchema` 說明自相矛盾，第一次實測要先確認 `responseFormat` 被接受。OpenRouter 的價目與 Google 的實際價格可能不同（Google 價目表寫明 gemini-3.8-flash 從 2027-01-01 起價格加倍；OpenRouter 何時跟上不知道），所以估價與花費只是參考，以 Google 帳單為準。預設模型是固定的 id，不會自己換成 models.list 上更新的 Flash。

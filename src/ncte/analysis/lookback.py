@@ -17,7 +17,8 @@ citing the paragraphs its answer rests on. A change without a cited paragraph of
 person set is never touched; nothing gathered, no request.
 
 What is matched (strings and positions only; the program never decides what a word means here):
-- a card's recorded forms: its name and aliases as known at the scene's end (``character_view``), two characters or
+- a card's recorded forms: its name and aliases as known at the scene's end (``character_view`` in lookup mode: never
+  a form kept for display only), two characters or
   more and not a pronoun; cards of another time (``period``) are left out, as everywhere words find a card;
 - forms of address the memory step recorded others using for a card (``address_terms``, used as address), first used
   by the scene's end;
@@ -89,7 +90,8 @@ def recorded_forms(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row) -
     for c in vis.visible_characters(conn, book_id, end):
         if repo.period_of(c) is not None:
             continue
-        if v := vis.character_view(conn, book_id, c, end, forms_at):
+        # lookup mode: only the words that find the card, never a form recorded for display only (ADR-103)
+        if v := vis.character_view(conn, book_id, c, end, forms_at, lookup=True):
             add(v["name_ja"], c["id"], "name")
             for a in v["aliases_ja"]:
                 add(a, c["id"], "alias")
@@ -203,16 +205,25 @@ def build_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row,
 
 
 def apply(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, items: list[dict[str, Any]],
-          parsed: SpeakerLookbackOutput) -> dict[str, int]:
+          parsed: SpeakerLookbackOutput, *, went: dict[str, str] | None = None) -> dict[str, int]:
     """The model's answers: a line's speaker changed only with a paragraph of its item cited, to someone of the item's
     people (or to no one: the text does not tell), through the second look's speaker path; a line changed since it
     was gathered or set by a person is left. Whom a line is said to changes the same way. The lines continuing a
-    changed speech follow it."""
+    changed speech follow it. As in the second look (``verify.apply``), a card the answer names is followed through
+    the merges ``went`` records (card merged away → the card it went into); a card gone with no chain is not an
+    answer (``unapplied``), never written."""
     from ..memory.address import follow_speakers
     from .verify import _set_speaker
 
+    went = went or {}
+
+    def alive(cid: str) -> str | None:
+        while cid in went:
+            cid = went[cid]
+        return cid if conn.execute("SELECT 1 FROM characters WHERE id=?", (cid,)).fetchone() else None
+
     by_ref = {i["ref"]: i for i in items}
-    stats = {"asked": len(items), "speakers_changed": 0, "speakers_unknown": 0, "speakers_kept": 0, "uncited": 0,
+    stats = {"unapplied": 0, "asked": len(items), "speakers_changed": 0, "speakers_unknown": 0, "speakers_kept": 0, "uncited": 0,
              "ignored": 0, "addressees_changed": 0}
     changed: dict[str, str | None] = {}
     for a in parsed.lines:
@@ -228,6 +239,9 @@ def apply(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, items: lis
         if new is not None and new not in item["_people"]:
             stats["ignored"] += 1
             continue
+        if new is not None and (new := alive(new)) is None:
+            stats["unapplied"] += 1
+            continue
         cited = [e for e in a.evidence_unit_ids if e in item["_units"]]
         note = f"look back: {new or 'unknown'} — {a.reason[:160]}"
         if new == u["speaker_id_nullable"]:
@@ -242,7 +256,7 @@ def apply(conn: sqlite3.Connection, book_id: str, scene: sqlite3.Row, items: lis
                 if row is not None and row["status"] != "human_verified" and row[0] == item["_speaker"]:
                     _set_speaker(conn, line, new, status, note, stats if line == item["_utt"] else {
                         "speakers_changed": 0, "speakers_unknown": 0, "speakers_kept": 0}, changed, source="lookback")
-        to = [x for x in dict.fromkeys(a.to) if x in item["_people"] and x != new]
+        to = [y for x in dict.fromkeys(a.to) if x in item["_people"] and (y := alive(x)) and y != new]
         if a.to and cited and len(to) == len(set(a.to)) and set(to) != set(item["to"]):
             conn.execute("UPDATE utterances SET addressee_ids_json=?, addressee_status=? WHERE id=?",
                          (json.dumps(to), "inferred" if to else None, item["_utt"]))

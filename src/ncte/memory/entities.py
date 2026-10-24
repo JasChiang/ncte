@@ -194,6 +194,8 @@ def _drop_alias(conn: sqlite3.Connection, book_id: str, term: str, entity_forms:
             aliases.remove(term)
             conn.execute("UPDATE characters SET aliases_json=?, updated_at=? WHERE id=?",
                          (json.dumps(aliases, ensure_ascii=False), utcnow(), cid))
+            # nor a word the card is shown by (``character_forms``)
+            conn.execute("DELETE FROM character_forms WHERE character_id=? AND form=?", (cid, term))
 
 
 def record_link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_type: str, *, origin: str,
@@ -273,10 +275,13 @@ def character_for_form(conn: sqlite3.Connection, book_id: str, name: str) -> str
     # a card known only by other cards' words (ADR-103) is never the one a form finds
     chars = conn.execute(f"SELECT id, canonical_name, aliases_json FROM characters WHERE {SERIES_SCOPE} AND {FINDABLE}",
                          (book_id,)).fetchall()
+    # a form several cards have (「母上」 of two mothers, each from her own place in the story): with no position to
+    # tell which, none is picked (ADR-103)
     for f in forms:
-        for c in chars:
-            if f == c[1] or f in json.loads(c[2]):
-                return str(c[0])
+        if len(hits := {str(c[0]) for c in chars if f == c[1] or f in json.loads(c[2])}) == 1:
+            return next(iter(hits))
+        if hits:
+            return None
     return None
 
 

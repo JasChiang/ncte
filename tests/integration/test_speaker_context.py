@@ -292,3 +292,17 @@ def test_a_reply_calling_whom_the_line_was_said_to_still_jars_and_so_does_a_line
     items = {i["unit_id"]: i for i in lookback.gather(conn, book.id, get_scene(conn, book.id, sc[2]["id"]))}
     assert [n["word"] for n in items[u[26]["id"]]["noticed"]] == ["姉さん"]
     assert items[u[33]["id"]]["noticed"][0] == {"in": "this_line", "word": "カイト", "of": kaito, "recorded_as": "name"}
+
+
+def test_the_look_back_follows_merges_as_the_second_look_does(conn, cfg, fixtures):
+    """An answer naming a card merged away goes to the card it went into; one gone with no chain is not written."""
+    book, _, _, u, sc = _book(conn, cfg, fixtures)
+    mina, kaito, sera = _sister_scene(conn, book.id, u, sc, "mina")
+    scene = get_scene(conn, book.id, sc[2]["id"])
+    items = lookback.gather(conn, book.id, scene)
+    answer = SpeakerLookbackOutput.model_validate(
+        {"lines": [{"ref": items[0]["ref"], "speaker": sera, "evidence": [u[28]["id"]], "reason": ""}]})
+    stats = lookback.apply(conn, book.id, scene, items, answer, went={sera: "c_not_there"})
+    assert stats["unapplied"] == 1 and _speaker_of(conn, u[26]["id"])["speaker_id_nullable"] == mina
+    stats = lookback.apply(conn, book.id, scene, items, answer, went={sera: kaito})
+    assert stats["speakers_changed"] == 1 and _speaker_of(conn, u[26]["id"])["speaker_id_nullable"] == kaito

@@ -281,7 +281,8 @@ class DbRecorder:
             pt, ct = int(u.get("prompt_tokens") or 0), int(u.get("completion_tokens") or 0)
             if pt or ct:
                 pricing = self.models.get(resp.model, self.pricing)
-                cost, status = pricing.cost(pt, ct), "estimated_from_tokens"
+                cached = int((u.get("prompt_tokens_details") or {}).get("cached_tokens") or 0)
+                cost, status = pricing.cost(pt, ct, cached_tokens=cached), "estimated_from_tokens"
             else:
                 status = "unknown"
         req_status = "succeeded" if parse_status in ("strict", "repaired_fence") else f"invalid_output:{parse_status}"

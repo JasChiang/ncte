@@ -1244,9 +1244,56 @@ open workspace/eval/<timestamp>/report.html
 - 覆核：讀場景自己的疑問附上段落裡的台詞（`lines`／`line_ref`），回答某人時經 `_set_speaker`（和台詞重看共用）改那句的說話者；台詞重看的候選加上場景裡說話或在場的人（`_scene_people`）。`VerifyItem.line_ref`；提示詞 `verify` 說明。
 - 測試：`test_unconfirmed_realrun.py` 新增 3 個（改之前都失敗）。889 passed、5 skipped；ruff、mypy 通過。
 
+## ADR-103 實測二修正（2026-10-24，分支 unnamed-placeholders-2026-10-23）
+- `scene.apply_scene_analysis`：新人物原文唯一的字是看得到的卡已有的字（普通名詞也算）時走有標籤的卡（`_owned_word`），模型的稱呼記成描述；`other_person` 沒有時期時走有標籤的卡並標「可能是」，另一時期的卡只給有時期的；`_known_from_attributed`：卡從這一場第一個說話或在場的段落起就在，用那時已出現的字。
+- `gender_gaps.candidates`：段落依 id（說話、被說話、在場），共用的字不拿來找，只取卡出現後（有較晚的性別紀錄時只到那裡之前）的段落；較晚才讀到性別的卡也問。提示詞 `gender_gaps` 說明。
+- 覆核：`VerifyItem.line_role`（speaker／addressee）、`line_refs`；`_set_addressee`。提示詞 `verify` 說明。
+- 整理記憶：自己對自己的關係有自己的理由。
+- 測試：`tests/integration/test_unconfirmed_realrun2.py`（新，9 個；8 個改之前失敗，「沒有卡有的普通名詞仍不當名字」是保留的行為）；`test_entities.py` 2 個、`test_unconfirmed_realrun.py` 1 個改成新行為。898 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 實測三修正（2026-10-24，分支 unnamed-placeholders-2026-10-23）
+- `scene.apply_scene_analysis`：新人物的字已有卡時一條路——好幾張卡有、或模型說是別人或給了時期，就是有標籤、標「可能是」的卡（`marked`）；有時期但沒有卡有這個字也是有標籤的卡；`known_by`／`owners` 包括有時期的卡；揭曉時時期留下、標籤取下一個號碼（`repository.next_label`）。`unconfirmed_card(period=…)`；`other_time_card` 只剩建卡（不再以字＋時期找）；`card_label` 與網頁 `tag` 有時期就顯示時期。
+- `_known_from_attributed`：卡的第一次出現往前移時，記下模型在這一場給它、那時已出現的字（顯示用，`character_forms`）；`visibility.form_positions` 的第三項改為每張卡的寫法表，`character_view` 把顯示用的寫法也列入；`entities._drop_alias` 一併刪掉寫法紀錄。
+- `gender_gaps.candidates`：加上以 id 指到這張卡的事實、關係、稱呼、動作的段落（`referred`）。覆核：讀場景的疑問的候選加上所有看得到的人物。提示詞 `scene_analyze`、`scene_read`（時期的用法）、`gender_gaps` 更新。
+- 測試：`tests/integration/test_unconfirmed_realrun3.py`（新，5 個；用上一版的程式都失敗）；`test_certainty.py` 2 個、`test_entities.py` 3 個、`test_unconfirmed_cards.py` 1 個改成新行為（時期不再是標籤；有時期的卡也是「可能是誰」的對象）。903 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-105：停用 agy、新增 Gemini API 來源（2026-10-24，分支 gemini-api-2026-10-24）
+- 停用 agy（政策見 ADR-105）：`config.AGY_DISABLED`、`agy_selected`；`PROVIDERS` 拿掉 agy、加 gemini；`make_client` 遇到 agy（來源、步驟模型、交叉校稿）在建 client 前停下；`cli._agy_client` 拿掉；網頁連線方式、交叉校稿選項沒有 agy，還設著 agy 時顯示停用說明；dry-run 的 agy 說明拿掉。`llm/agy_cli.py` 與 `test_agy_cli.py` 保留。
+- Gemini API：`llm/gemini.py`（`GeminiClient`：generateContent、responseFormat、thinkingLevel／thinkingBudget、usageMetadata、重試、內容審查、空答案、models.list＋OpenRouter 公開價目）；`config.GEMINI_MODEL`、`use_gemini_models`、`key_name`（`GEMINI_API_KEY`）、`redact` 遮 Google 金鑰；`cli._gemini_client` 與 `gemini/` 路由；`Pricing.cost(cached_tokens=)`、`Pricing.from_model_json` 對沒有價格的模型說明原因；`DbRecorder.success` 估價算快取；試算說明與 Gemini 的歷史校準；網頁連線方式、金鑰、說明、交叉校稿選項；`.env.example`、`config.example.yaml`。
+- README：來源清單拿掉 agy、加 Gemini API 與 agy 停用的說明（FAQ 連結、日期）；網頁用法、模型、安裝、隱私、已知限制、專案結構都更新。agy 的整本實測結果**留在〈測試結果〉並標為歷史紀錄**（是 Gemini Flash 在這套流程上的唯一整本資料），「時間與費用」裡的 agy 一行拿掉（不是可選的來源了）。
+- 測試：新增 `tests/unit/test_gemini.py`（37：請求形狀、結構化輸出、思考程度對應、用量含思考與快取、思考部分不算答案、429／5xx 重試與 Retry-After、放棄、不重試的錯誤、金鑰不進錯誤訊息、提示被擋、候選被擋、帳號受限、空答案、MAX_TOKENS、沒有金鑰、目錄與分頁、OpenRouter 不收任何金鑰、沒有價格就拒絕、價目讀不到、resolve_pricing 與快照、快取價、環境設定、make_client 與路由、agy 在三處都停下）；`test_agy_cli.py` 改成 CLI 不會建 agy；`test_gui_manage.py` 交叉校稿改 Gemini API、新增 Gemini 金鑰與 agy 停用的網頁測試。全部離線（MockTransport），沒有呼叫任何模型或 API。
+- 重現：`PYTHONPATH=src pytest`、`ruff check src tests`、`mypy src`。
+- 限制：沒有金鑰、沒有線上實測；見 ADR-105。
+
+## ADR-103 一個寫法可以屬於幾張卡（2026-10-24，分支 unnamed-placeholders-2026-10-23；使用者決定）
+- `scene.apply_scene_analysis` 的其他寫法：別的卡已有的寫法照收（每張卡從模型給它的位置起有，`character_forms`），這種寫法不建名稱連結、不改 `alias_map` 原本的卡；拿掉「這個寫法已經是別的人物的」拒絕。
+- `address.name_forms(upto)`：只看在那個位置看得到的寫法；`entities.character_for_form`：幾張卡有這個寫法就回 None。
+- 測試：`tests/integration/test_form_changes_meaning.py`（新，1 個；改之前失敗）。943 passed、5 skipped；ruff、mypy 通過。合併了 main（ADR-105）。
+
+## ADR-103 實測四修正（2026-10-24，分支 unnamed-placeholders-2026-10-23）
+- `memory_update`：帶 `character_ref` 的名稱連結只在 `same_as` 的字正好只屬於那張卡時才連實體（`_owners_of`），否則只給那張卡寫法。
+- `ContextOrchestrator._fill_missing_lines`：讀場景（含一次讀完）沒回答的台詞再問一次（`only_quotes`）；`apply_scene_analysis`：仍沒回答的台詞記「(to look at)」交覆核。提示詞 `scene_analyze`、`scene_read`：每一句都要回答，`only_quotes` 的補問。`FakeLLM(complete_lines=True)` 預設每句都回答。
+- 測試：`tests/integration/test_unconfirmed_realrun4.py`（新，2 個；改之前都失敗）。945 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 實測四之後的審閱修正（2026-10-24，分支 unnamed-placeholders-2026-10-23）
+- `memory_update._card_for`：`same_as` 屬於好幾張卡且沒有 `character_ref` 時拒絕；以 id 寫入別名後重讀那張卡。
+- `visibility.character_view(lookup=True)`：只給卡名與別名（不含只用來顯示的寫法）；讀場景的 `known_by` 與 `address.name_forms` 用它。
+- `verify.apply`：`alive()` 讓說話者、說話對象、動作的人物都順著同一次覆核的合併；卡不在時 `unanswered()`。
+- 測試：`tests/integration/test_unconfirmed_review2.py`（新，4 個；改之前都失敗）。949 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 再審修正（2026-10-24，分支 unnamed-placeholders-2026-10-23）
+- `verify.apply`：疑問的 `answer_character_id` 存順著合併後的卡；回答指的卡已不在時先判定、不寫入疑問（`unanswered()`，下次再問）；動作的回答有已不在的卡時當沒回答，不改動作、不標 verified。
+- 測試：`test_unconfirmed_review2.py` 新增 3 個（用上一版的程式都失敗）。952 passed、5 skipped；ruff、mypy 通過。
+
 ## ADR-104 說話者判斷的三個補充（2026-10-23，分支 speaker-context-2026-10-23，基於 unnamed-placeholders-2026-10-23）
 - 讀場景的人物卡（`scene.card_evidence`，`context.card_voice` 預設開）：`earlier_lines`（之前判給他的台詞句數與其中的自稱、第二人稱、他叫別人的稱呼，分明確／推測）、`called_as`（別人怎麼叫他）、`facts_so_far`（最多 3 條有出處的事實）；都只算本場景開頭以前。提示詞 `scene_analyze`、`scene_read` 用條件區塊說明（`_shared/card_voice.md`）。整理自 A/B arm 2 的 `_card_evidence`。
 - 場面（`context.scene_state` 預設關）：schema `SituationPoint`／`SituationPerson`、`SceneAnalysisOutput.situation`；請求帶 `write_situation` 時提示詞（`_shared/situation.md`）要模型先寫場面再判斷台詞；`scene.situation_points` 核對後存進 `state_json.situation`；下一場讀場景的 `previous_scene_state`、覆核台詞項目的 `situation`（提示詞 `verify` 條件區塊）。
 - 回頭看一次（`context.speaker_lookback` 預設關）：`analysis/lookback.py`（`gather`／`build_payload`／`apply`）、提示詞 `prompts/speaker_lookback/v1.md`、schema `SpeakerLookbackOutput`、`ContextOrchestrator.stage_speaker_lookback`（讀場景之後，沒收到台詞不送）；步驟的模型與思考程度跟 `scene_analyze`（`config.READS_LIKE_ANALYSIS`）；`verify._set_speaker` 多 `source`。FakeLLM 的回頭看照原判斷回答。
 - 測試：`tests/integration/test_speaker_context.py`（新，8 個）。897 passed、5 skipped；ruff、mypy 通過。
 - A/B（Claude 方案、Sonnet，不在 repo）：`workspace/exp/speaker-ab/run_ctx.sh`、`harness_ctx.py`、`recall.py`；arms：base（e0b922c）、voice、voice-state、voice-state-lookback。離線（判讀用全書實跑的結果）：回頭看在 13 場收到 40 句，含那次讀錯或未定 21 句中的 6 句。
+
+## ADR-104 併入 main（2026-10-24，分支 speaker-context-2026-10-23；main 0e3e74f：ADR-103 合併後的改動、ADR-105）
+- 衝突：`context_pipeline.stage_scene_read`（main 把分析的請求留成 `analysis_payload` 給補問沒回答的台詞用，這邊加了讀場景的開關）——兩邊都留：`analysis_payload = build_analysis_payload(..., **self._reading_switches())`；`decisions.md`、`changelog.md` 兩邊的段落都留（ADR-104 在 ADR-105 前）。
+- 照 main 的 ADR-103：回頭看比對的字只用找卡模式的人物卡（`character_view(..., lookup=True)`，只供顯示的寫法不算）；卡上的事實挑選也用找卡模式的寫法；回頭看的答案和覆核一樣順著合併找到現在的卡（`lookback.apply(..., went=)`），卡已不在又沒有去向時不寫入（`unapplied`）。
+- A/B 結果寫進 ADR-104；預設 `card_voice` 開、`scene_state`、`speaker_lookback` 關（程式保留）。
+- 測試：`test_speaker_context.py` 新增 1 個（回頭看順著合併）。961 passed、5 skipped；ruff、mypy 通過。

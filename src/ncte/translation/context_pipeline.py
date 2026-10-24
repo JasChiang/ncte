@@ -1855,9 +1855,8 @@ class ContextOrchestrator(Orchestrator):
                 if gone := forget_scene_cards(self.conn, self.book.id, scene, memory_too=True):
                     self.log(f"  re-read: {len(gone)} card(s) only the last reading of this scene made were dropped")
             gl = [{"ja": g["source_term"], "zh": g["target_term"]} for g in self.glossary]
-            payload = scene_read_payload(build_analysis_payload(self.conn, self.book.id, scene, gl,
-                                                                **self._reading_switches()),
-                                         build_memory_payload(self.conn, self.book.id, scene, gl))
+            analysis_payload = build_analysis_payload(self.conn, self.book.id, scene, gl, **self._reading_switches())
+            payload = scene_read_payload(analysis_payload, build_memory_payload(self.conn, self.book.id, scene, gl))
         try:
             parsed = self._llm("scene_read", self.read_prompt, payload, [u["unit_id"] for u in payload["units"]])
         except FatalAPIError:
@@ -1866,6 +1865,7 @@ class ContextOrchestrator(Orchestrator):
             self.log(f"  one-request read failed ({type(exc).__name__}); read with two requests")
             return False
         assert isinstance(parsed, SceneReadOutput)
+        parsed = parsed.model_copy(update={"analysis": self._fill_missing_lines(analysis_payload, parsed.analysis)})
         refs: dict[str, str] = {}
         with self.lock, Transaction(self.conn):
             stats = apply_scene_analysis(self.conn, self.book.id, scene, parsed.analysis, run_id=self.run_id, refs=refs)
@@ -1883,6 +1883,32 @@ class ContextOrchestrator(Orchestrator):
         self._set_job("memory_update", sid, "succeeded", None, {**mstats, "one_request": True})
         self.log(f"  memory: {mstats}")
         return True
+
+    def _fill_missing_lines(self, payload: dict[str, Any], parsed: SceneAnalysisOutput) -> SceneAnalysisOutput:
+        """The lines the program found that the reading's answer says nothing about (an empty ``utterances`` left nine
+        lines without a speaker): asked again, those only, in one small request with the scene and the people the
+        reading made new here — like the proofreading's verdict coverage (ADR-089). What is still unanswered is marked
+        for the second look when the analysis is applied (``apply_scene_analysis``), so it is asked there (ADR-102)."""
+        got = {(u.unit_id, u.quote_index) for u in parsed.utterances}
+        # (the rest of a speech running on from the paragraph before follows its start: not asked on its own)
+        missing = [q for q in payload.get("quotes", []) if (q["unit_id"], q["quote_index"]) not in got
+                   and not q.get("continues_previous_quote")]
+        if not missing:
+            return parsed
+        small = {**payload, "quotes": missing, "only_quotes": True,
+                 "new_characters": [{"temp_id": n.temp_id, "name_ja": n.name_ja} for n in parsed.new_characters]}
+        try:
+            extra = self._llm("scene_analyze", self.analyze_prompt, small, [u["unit_id"] for u in payload["units"]])
+        except FatalAPIError:
+            raise
+        except LLMError as exc:
+            self.log(f"  {len(missing)} line(s) the reading left out could not be asked again ({type(exc).__name__})")
+            return parsed
+        assert isinstance(extra, SceneAnalysisOutput)
+        keys = {(q["unit_id"], q["quote_index"]) for q in missing}
+        add = [u for u in extra.utterances if (u.unit_id, u.quote_index) in keys and (u.unit_id, u.quote_index) not in got]
+        self.log(f"  {len(missing)} line(s) the reading left out asked again: {len(add)} answered")
+        return parsed.model_copy(update={"utterances": [*parsed.utterances, *add]})
 
     def stage_scene_analyze(self, sid: str) -> None:
         job = self._job("scene_analyze", sid)
@@ -1905,6 +1931,7 @@ class ContextOrchestrator(Orchestrator):
                 parsed = self._read("scene_analyze", self.analyze_prompt, payload, sid)
                 if parsed is None:
                     raise ContentBlockedError("content filter refused every part of the scene")
+                parsed = self._fill_missing_lines(payload, parsed)
             except FatalAPIError:
                 raise
             except LLMError as exc:

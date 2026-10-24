@@ -155,26 +155,24 @@ OTHER_PERSON = "另一人"  # the label of a card for someone of another time wh
 
 
 def other_time_card(conn: sqlite3.Connection, book_id: str, words: str, period: str, *, unit_id: str, ordinal: int,
-                    origin: str) -> tuple[str, bool]:
-    """A past life's 「母親」, not the mother of this one (ADR-101): a card named by the book's words, with the model's
-    reading of its time in ``period`` (empty: another person, time not given). The time is also its ``label`` — 「母親
-    （前世）」 on the page only, never a name form (ADR-103). Reading the scene again, the same words with the same time
-    find the same card. Returns (id, created)."""
-    label = period or OTHER_PERSON
-    # the card of that time known by these words — also once a name was revealed for it (リリア, still of 前世)
-    row = conn.execute(f"SELECT id FROM characters WHERE {SERIES_SCOPE} AND period=? AND (canonical_name=? OR EXISTS "
-                       "(SELECT 1 FROM json_each(aliases_json) WHERE value=?)) ORDER BY canonical_name!=?, label!=? "
-                       "LIMIT 1", (book_id, period, words, words, words, label)).fetchone()
-    if row is not None:
-        seen_earlier(conn, str(row[0]), words, book_id, unit_id, ordinal)
-        return str(row[0]), False
-    cid = character_id_for(book_id, f"{words}（{label}）")
-    conn.execute(
-        "INSERT INTO characters(id, book_id, canonical_name, display_name_zh, aliases_json, known_from_unit_id, "
-        "known_from_ordinal, status, origin, created_at, updated_at, label, period) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (cid, book_id, words, None, "[]", unit_id, ordinal, "partial", origin, utcnow(), utcnow(), label, period))
-    note_forms(conn, cid, [words], book_id, ordinal)
-    return cid, True
+                    origin: str, key: str | None = None) -> tuple[str, bool]:
+    """A person of another time (a past life's 「母親」): a labelled card like any person known by words other cards may
+    have (``unconfirmed_card``), with the model's reading of the time on it (``period``). Not a path of its own and not
+    found by its words and time: found again by its reading key only (ADR-103 實測三)."""
+    return unconfirmed_card(conn, book_id, words, aliases=[], may_be=[], unit_id=unit_id, ordinal=ordinal,
+                            is_group=False, origin=origin, key=key, period=period)
+
+
+def next_label(conn: sqlite3.Connection, book_id: str, words: str) -> str:
+    """The next number for a card named ``words`` (「3」: the third card known by these words), never one in use."""
+    holders = sum(1 for c in characters(conn, book_id) if words == c["canonical_name"] or words in json.loads(
+        c["aliases_json"] or "[]"))
+    taken = {r[0] for r in conn.execute(f"SELECT label FROM characters WHERE {SERIES_SCOPE} AND canonical_name=?",
+                                        (book_id, words))}
+    n = max(holders, 1) + 1
+    while str(n) in taken:
+        n += 1
+    return str(n)
 
 
 def placeholder_name(name: str) -> bool:
@@ -202,7 +200,7 @@ def model_name(c: Any) -> str:
 
 def unconfirmed_card(conn: sqlite3.Connection, book_id: str, words: str, *, aliases: list[str], may_be: list[str],
                      unit_id: str, ordinal: int, is_group: bool, origin: str,
-                     key: str | None = None) -> tuple[str, bool]:
+                     key: str | None = None, period: str | None = None) -> tuple[str, bool]:
     """A card for a person the model reads as new but knows only by words other cards have (several unnamed mothers,
     each 「母親」 in the book): named by those words, as the book names them, and marked as maybe one of ``may_be`` —
     the second look asks the model which, or whether someone else (ADR-103). The program does not pick.
@@ -226,26 +224,22 @@ def unconfirmed_card(conn: sqlite3.Connection, book_id: str, words: str, *, alia
         old = json.loads(row["aliases_json"] or "[]")
         merged = old + [a for a in dict.fromkeys([words, *aliases]) if a not in old and a != row["canonical_name"]]
         # never its own candidate; the cards an answer was about stay answered: no mark is left with nothing to ask
-        conn.execute("UPDATE characters SET may_be_json=?, aliases_json=?, updated_at=? WHERE id=?",
+        conn.execute("UPDATE characters SET may_be_json=?, aliases_json=?, period=?, updated_at=? WHERE id=?",
                      (json.dumps([x for x in may_be if x not in answered and x != cid]),
-                      json.dumps(merged, ensure_ascii=False), utcnow(), cid))
+                      json.dumps(merged, ensure_ascii=False), period, utcnow(), cid))
         note_forms(conn, cid, [words, *aliases], book_id, ordinal)
         return cid, False
-    holders = sum(1 for c in characters(conn, book_id) if words == c["canonical_name"] or words in json.loads(
-        c["aliases_json"] or "[]"))
-    taken = {r[0] for r in conn.execute(f"SELECT label FROM characters WHERE {SERIES_SCOPE} AND canonical_name=?",
-                                        (book_id, words))}
-    n = max(holders, 1) + 1
-    while str(n) in taken:
-        n += 1
+    n = next_label(conn, book_id, words)
     cid = character_id_for(book_id, f"{words}\0{n}")
+    while conn.execute("SELECT 1 FROM characters WHERE id=?", (cid,)).fetchone() is not None:
+        cid = character_id_for(book_id, f"{words}\0{n}\0{cid}")
     conn.execute(
         "INSERT INTO characters(id, book_id, canonical_name, display_name_zh, aliases_json, known_from_unit_id, "
-        "known_from_ordinal, status, origin, created_at, updated_at, is_group, label, may_be_json, reading_keys_json) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "known_from_ordinal, status, origin, created_at, updated_at, is_group, label, may_be_json, reading_keys_json, "
+        "period) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (cid, book_id, words, None, json.dumps([a for a in aliases if a != words], ensure_ascii=False), unit_id,
-         ordinal, "partial", origin, utcnow(), utcnow(), int(is_group), str(n), json.dumps(may_be),
-         json.dumps([key] if key else [])))
+         ordinal, "partial", origin, utcnow(), utcnow(), int(is_group), n, json.dumps(may_be),
+         json.dumps([key] if key else []), period))
     note_forms(conn, cid, [words, *aliases], book_id, ordinal)
     return cid, True
 
@@ -255,9 +249,8 @@ def card_label(c: Any, name: str | None = None) -> str:
     known by words other cards have, its number (「母親（3）」). Never sent to a model as a name, never a glossary term,
     never in a translation (ADR-103)."""
     shown = name or c["display_name_zh"] or c["canonical_name"]
-    label = label_of(c)
-    if not label and (when := period_of(c)) is not None:  # a named person of another time (リリア of a past life)
-        label = when or OTHER_PERSON
+    when = period_of(c)  # someone of another time: shown with the model's reading of the time (「母親（前世）」)
+    label = (when or OTHER_PERSON) if when is not None else label_of(c)
     return f"{shown}（{label}）" if label else shown
 
 

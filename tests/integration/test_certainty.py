@@ -112,9 +112,9 @@ def test_the_same_word_for_another_person_gets_a_card_of_its_own(conn, cfg, fixt
                                                  "proposed_name_zh": "", "evidence_unit_ids": [unit["id"]],
                                                  "other_person": True, "period": "前世"}]})
     apply_scene_analysis(conn, book.id, scene, out)
-    cards = {(r[0], r[1]): r[2] for r in conn.execute("SELECT canonical_name, label, id FROM characters WHERE book_id=?",
-                                                       (book.id,))}
-    assert cards[(word, "")] == mother and (word, "前世") in cards  # the book's words, its time as the label (ADR-103)
+    cards = {(r[0], r[1]): r[2] for r in conn.execute("SELECT canonical_name, coalesce(period, ''), id FROM characters "
+                                                       "WHERE book_id=?", (book.id,))}
+    assert cards[(word, "")] == mother and (word, "前世") in cards  # the book's words, its time the model's reading
 
 
 def test_another_person_met_first_in_the_scene_still_gets_the_time_label(conn, cfg, fixtures):
@@ -135,7 +135,8 @@ def test_another_person_met_first_in_the_scene_still_gets_the_time_label(conn, c
         "pov": None, "location": None, "time": None, "participants": [], "utterances": [], "actions": [], "props": [],
         "uncertainties": [], "new_characters": [nc("new_1", True, "前世"), nc("new_2", False, "")]})
     apply_scene_analysis(conn, book.id, scene, out)
-    cards = {(r[0], r[1]) for r in conn.execute("SELECT canonical_name, label FROM characters WHERE book_id=?", (book.id,))}
+    cards = {(r[0], r[1]) for r in conn.execute("SELECT canonical_name, coalesce(period, '') FROM characters WHERE "
+                                                "book_id=?", (book.id,))}
     assert {(word, ""), (word, "前世")} <= cards
 
 

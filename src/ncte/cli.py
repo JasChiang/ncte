@@ -87,6 +87,10 @@ def make_client(cfg: Config, *, fake: bool = False, need_key: bool = True,
         return FakeLLM(models=models)
     if cfg.openrouter.provider == "agent":
         raise NCTEError("this run is answered by an agent through tasks: continue it with `ncte agent resume -w …`")
+    from .config import AGY_DISABLED, agy_selected
+
+    if agy_selected(cfg):  # ADR-105: the agy source is never built; a new run and a resumed one stop here alike
+        raise NCTEError(AGY_DISABLED)
     return _with_routes(cfg, _primary_client(cfg, need_key=need_key, log=log), log=log)
 
 
@@ -106,13 +110,15 @@ def _codex_client(cfg: Config, log: Callable[[str], None] | None = None) -> Any:
                           log=log)
 
 
-def _agy_client(cfg: Config, log: Callable[[str], None] | None = None) -> Any:
-    from .llm.agy_cli import AgyCLIClient
+def _gemini_client(cfg: Config, *, need_key: bool = True) -> Any:
+    from .llm.gemini import GeminiClient
 
+    key = get_api_key("gemini")
+    if need_key and not key:
+        raise NCTEError("GEMINI_API_KEY is not set (a Google AI Studio key). Export it, put it in ./.env, or set it in "
+                        "the web settings.")
     o = cfg.openrouter
-    return AgyCLIClient(models=[o.model, *o.stage_models.values(), *([o.review_model] if o.review_model else [])],
-                        log=log, plain_agent=o.agy_plain_agent,
-                        plain_agent_stages=o.agy_plain_agent_stages)
+    return GeminiClient(key, timeout=o.timeout_seconds, max_attempts=o.max_attempts)
 
 
 def _local_client(cfg: Config) -> Any:
@@ -130,8 +136,8 @@ def _primary_client(cfg: Config, *, need_key: bool, log: Callable[[str], None] |
         return _local_client(cfg)
     if cfg.openrouter.provider == "codex":
         return _codex_client(cfg, log)
-    if cfg.openrouter.provider == "agy":
-        return _agy_client(cfg, log)
+    if cfg.openrouter.provider == "gemini":
+        return _gemini_client(cfg, need_key=need_key)
     from .llm.openrouter import OpenRouterClient
 
     key = get_api_key(cfg.openrouter.provider)
@@ -162,8 +168,8 @@ def _with_routes(cfg: Config, primary: Any, log: Callable[[str], None] | None = 
         routes["local/"] = _local_client(cfg)
     if any(m.startswith("codex/") for m in wanted) and primary.name != "codex":
         routes["codex/"] = _codex_client(cfg, log)
-    if any(m.startswith("agy/") for m in wanted) and primary.name != "agy":
-        routes["agy/"] = _agy_client(cfg, log)
+    if any(m.startswith("gemini/") for m in wanted) and primary.name != "gemini":
+        routes["gemini/"] = _gemini_client(cfg)
     return RoutingClient(primary, routes) if routes else primary
 
 
@@ -375,7 +381,7 @@ def _run(book: Book, opts: Any, *, fake: bool, as_json: bool = False, run_id: st
     if fake:
         typer.echo("⚠ using FakeLLM: output is placeholder text, not a translation")
     rid = run_id or create_run(state.conn, cfg, book, opts)
-    via = "" if fake else f"  via={ {'fal': 'fal', 'claude': 'Claude Code (plan, not billed)', 'local': 'local server (not billed)', 'codex': 'Codex (ChatGPT plan, not billed)', 'agy': 'Antigravity (plan, not billed)'}.get(client.name, 'OpenRouter')}"  # NCTE_LLM_PROVIDER in .env applies here
+    via = "" if fake else f"  via={ {'fal': 'fal', 'claude': 'Claude Code (plan, not billed)', 'local': 'local server (not billed)', 'codex': 'Codex (ChatGPT plan, not billed)', 'gemini': 'Gemini API (billed by Google)'}.get(client.name, 'OpenRouter')}"  # NCTE_LLM_PROVIDER in .env applies here
     typer.echo(f"run {rid}  book {book.id}  mode={opts.mode}  model={opts.model}{via}  budget=${opts.budget_usd}")
     orch = _orchestrator(cfg, client, book, rid, opts)
     summary = orch.run()
