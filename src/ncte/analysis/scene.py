@@ -719,17 +719,20 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             if not ev or not _standalone(form, scene_text, [*existing_alias, *(n for ns in names_of.values() for n in ns)]):
                 rej(of.model_dump(), "form not found standing alone in its evidence units")
                 continue
-            if existing_alias.get(form, who) != who:
-                rej(of.model_dump(), "form already names another character")
-                continue
+            # a form another card has too (「母上」: the late birth mother early, the stepmother from a later chapter) is
+            # this card's as well from here — each card from where the model gave it the form (``character_forms``);
+            # where both are visible, a lookup by the words picks neither (the user's decision, ADR-103)
+            shared = existing_alias.get(form, who) != who
             first = next(t for t in texts if t.id in ev)
             conn.execute("UPDATE characters SET aliases_json=?, updated_at=? WHERE id=?",
                          (json.dumps([*json.loads(row[1]), form], ensure_ascii=False), utcnow(), who))
             repo.note_forms(conn, str(who), [form], book_id, first.ordinal)  # known from here, wherever the card is
-            record_link(conn, book_id, form, row[0], "alias", origin="scene_analysis", status="accepted",
-                        unit_id=first.id, quote=None, ordinal=first.ordinal)
+            if not shared:  # a link reveals the form for every card that has it: not for a form another card had
+                record_link(conn, book_id, form, row[0], "alias", origin="scene_analysis", status="accepted",
+                            unit_id=first.id, quote=None, ordinal=first.ordinal)
             names_of.setdefault(str(who), []).append(form)
-            existing_alias[form] = str(who)
+            if not shared:
+                existing_alias[form] = str(who)
             stats["forms"] = stats.get("forms", 0) + 1
 
     all_visible = vis.visible_characters(conn, book_id, scene["end_ordinal"])

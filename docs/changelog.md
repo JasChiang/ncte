@@ -1264,3 +1264,8 @@ open workspace/eval/<timestamp>/report.html
 - 測試：新增 `tests/unit/test_gemini.py`（37：請求形狀、結構化輸出、思考程度對應、用量含思考與快取、思考部分不算答案、429／5xx 重試與 Retry-After、放棄、不重試的錯誤、金鑰不進錯誤訊息、提示被擋、候選被擋、帳號受限、空答案、MAX_TOKENS、沒有金鑰、目錄與分頁、OpenRouter 不收任何金鑰、沒有價格就拒絕、價目讀不到、resolve_pricing 與快照、快取價、環境設定、make_client 與路由、agy 在三處都停下）；`test_agy_cli.py` 改成 CLI 不會建 agy；`test_gui_manage.py` 交叉校稿改 Gemini API、新增 Gemini 金鑰與 agy 停用的網頁測試。全部離線（MockTransport），沒有呼叫任何模型或 API。
 - 重現：`PYTHONPATH=src pytest`、`ruff check src tests`、`mypy src`。
 - 限制：沒有金鑰、沒有線上實測；見 ADR-105。
+
+## ADR-103 一個寫法可以屬於幾張卡（2026-10-24，分支 unnamed-placeholders-2026-10-23；使用者決定）
+- `scene.apply_scene_analysis` 的其他寫法：別的卡已有的寫法照收（每張卡從模型給它的位置起有，`character_forms`），這種寫法不建名稱連結、不改 `alias_map` 原本的卡；拿掉「這個寫法已經是別的人物的」拒絕。
+- `address.name_forms(upto)`：只看在那個位置看得到的寫法；`entities.character_for_form`：幾張卡有這個寫法就回 None。
+- 測試：`tests/integration/test_form_changes_meaning.py`（新，1 個；改之前失敗）。943 passed、5 skipped；ruff、mypy 通過。合併了 main（ADR-105）。
