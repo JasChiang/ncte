@@ -481,7 +481,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         forms_at = vis.form_positions(conn, book_id)
         known_by: dict[str, set[str]] = {}  # the words each person is known by so far, and whose they are
         for card in known:
-            if view := vis.character_view(conn, book_id, card, scene["start_ordinal"] - 1, forms_at):
+            if view := vis.character_view(conn, book_id, card, scene["start_ordinal"] - 1, forms_at, lookup=True):
                 for f in [view["name_ja"], *view["aliases_ja"]]:
                     known_by.setdefault(f, set()).add(card["id"])
         group_cards = {c["id"] for c in known if "is_group" in c.keys() and c["is_group"]}

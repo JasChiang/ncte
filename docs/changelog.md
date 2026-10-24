@@ -1274,3 +1274,9 @@ open workspace/eval/<timestamp>/report.html
 - `memory_update`：帶 `character_ref` 的名稱連結只在 `same_as` 的字正好只屬於那張卡時才連實體（`_owners_of`），否則只給那張卡寫法。
 - `ContextOrchestrator._fill_missing_lines`：讀場景（含一次讀完）沒回答的台詞再問一次（`only_quotes`）；`apply_scene_analysis`：仍沒回答的台詞記「(to look at)」交覆核。提示詞 `scene_analyze`、`scene_read`：每一句都要回答，`only_quotes` 的補問。`FakeLLM(complete_lines=True)` 預設每句都回答。
 - 測試：`tests/integration/test_unconfirmed_realrun4.py`（新，2 個；改之前都失敗）。945 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 實測四之後的審閱修正（2026-10-24，分支 unnamed-placeholders-2026-10-23）
+- `memory_update._card_for`：`same_as` 屬於好幾張卡且沒有 `character_ref` 時拒絕；以 id 寫入別名後重讀那張卡。
+- `visibility.character_view(lookup=True)`：只給卡名與別名（不含只用來顯示的寫法）；讀場景的 `known_by` 與 `address.name_forms` 用它。
+- `verify.apply`：`alive()` 讓說話者、說話對象、動作的人物都順著同一次覆核的合併；卡不在時 `unanswered()`。
+- 測試：`tests/integration/test_unconfirmed_review2.py`（新，4 個；改之前都失敗）。949 passed、5 skipped；ruff、mypy 通過。

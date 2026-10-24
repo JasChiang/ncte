@@ -141,6 +141,8 @@ def _card_for(conn: sqlite3.Connection, book_id: str, term: str, ref: str, chars
             conn.execute("UPDATE characters SET aliases_json=?, updated_at=? WHERE id=?",
                          (json.dumps([*aliases, term], ensure_ascii=False), utcnow(), ref))
             repo.note_forms(conn, ref, [term], book_id, ordinal)
+            # the next word for the same card in this answer starts from what is written now (not the old aliases)
+            chars[ref] = conn.execute("SELECT * FROM characters WHERE id=?", (ref,)).fetchone()
         return ref, None
 
     def has(c: Any, w: str) -> bool:
@@ -151,7 +153,8 @@ def _card_for(conn: sqlite3.Connection, book_id: str, term: str, ref: str, chars
         return None, ("the words are also those of a card of another time or of one known only by other cards' words: "
                       "which card is not given (character_ref)")
     held = {c["id"] for c in owners if has(c, term)}
-    if len(held) > 1:
+    # the other word of a link too (エレナ → 「母親」 of two mothers): joining it would pick one of them
+    if len(held) > 1 or len({c["id"] for c in owners if has(c, also)}) > 1:
         return None, "several cards have these words: which card is not given (character_ref)"
     return (next(iter(held)) if held else None), None
 

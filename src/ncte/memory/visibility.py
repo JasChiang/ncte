@@ -118,7 +118,7 @@ def form_positions(conn: sqlite3.Connection, book_id: str) -> FormPositions:
 
 
 def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
-                   forms_at: FormPositions | None = None) -> dict[str, Any] | None:
+                   forms_at: FormPositions | None = None, *, lookup: bool = False) -> dict[str, Any] | None:
     """The names of character row ``c`` as known at ``upto``: ``name_ja``/``name_zh``/``aliases_ja``.
 
     The form that appeared first is the anchor; any other form is shown once it has appeared *and* its link to
@@ -132,7 +132,10 @@ def character_view(conn: sqlite3.Connection, book_id: str, c: Any, upto: int,
     mine = held.get(c["id"], {})
     # the card's names, and the words the book called it by where it was first given a line before its name came
     # (recorded with the card only, ADR-103 實測三: shown, never a name a lookup finds it by)
-    names = list(dict.fromkeys([c["canonical_name"], *json.loads(c["aliases_json"] or "[]"), *mine]))
+    # ``lookup``: for finding who words name (the reading's owners of a word, a form of address) — only the card's
+    # names; the words it is only shown by never name it (ADR-103)
+    names = list(dict.fromkeys([c["canonical_name"], *json.loads(c["aliases_json"] or "[]"),
+                                *([] if lookup else mine)]))
     # where each form is first seen with this card: a recorded position (a card moved earlier on a re-read does not
     # take its later forms with it, ADR-103), never before the form first appears in the book; else with the card
     def seen_at(n: str) -> Pos:

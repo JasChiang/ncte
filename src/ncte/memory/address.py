@@ -51,7 +51,7 @@ def name_forms(conn: sqlite3.Connection, book_id: str, upto: int | None = None) 
         chars = [c for c in chars if pos(conn, c["book_id"], c["known_from_ordinal"]) <= hz]
         forms_at = form_positions(conn, book_id)
         for c in chars:
-            v = character_view(conn, book_id, c, upto, forms_at)
+            v = character_view(conn, book_id, c, upto, forms_at, lookup=True)
             visible[c["id"]] = [v["name_ja"], *v["aliases_ja"]] if v else []
     claims: dict[str, set[str]] = {}
 
