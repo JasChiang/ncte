@@ -213,8 +213,8 @@ class Config(_Strict):
 
 PROVIDERS = ("openrouter", "fal", "claude", "codex", "gemini", "local")  # what NCTE_LLM_PROVIDER and the settings page choose
 
-# ADR-105: the Antigravity CLI is not offered. Google's Antigravity FAQ (confirmed by Google staff on the developer forum,
-# 2026-10-16): headless `agy -p` is only for your own scripts and CI; wrapping it in third-party applications is not
+# ADR-105: the Antigravity CLI is not offered. Google's Antigravity FAQ (a developer-forum reply of
+# 2026-10-16, author's role not shown, says the FAQ is the current policy): headless `agy -p` is only for your own scripts and CI; wrapping it in third-party applications is not
 # supported under consumer plans and can lead to suspension. NCTE is such an application. The adapter stays (its tests
 # build it directly); choosing it anywhere (NCTE_LLM_PROVIDER, an ``agy/…`` step model, cross-proofreading) stops before
 # any request with this message.

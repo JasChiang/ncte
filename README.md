@@ -9,7 +9,7 @@
 - **OpenRouter**：沒有訂閱時，用 OpenRouter 上的模型（預設 Gemini），需要金鑰並儲值，依用量付費。
 - **本機模型（實驗）**：原文不離開電腦，但目前品質還比不上上面幾種。
 
-> **不再提供 Google Antigravity（`agy`）**：Google 的 [Antigravity 常見問題](https://antigravity.google/docs/faq/)（2026-10-16 在[開發者論壇](https://discuss.ai.google.dev/t/clarification-on-consumer-plan-policy-for-invoking-official-agy-via-local-subprocess/189905)由 Google 工作人員確認）說明，無頭模式 `agy -p` 只能用在你自己的腳本與 CI；把 agy 包在第三方程式或應用程式裡不受消費者方案支援，可能導致帳號停權，第三方工具應改用 Google AI Studio 或 Gemini Enterprise 的 API 金鑰。NCTE 就是這樣的應用程式，所以拿掉了 agy，改成直接連 Gemini API。設定還選著 agy 的話，NCTE 會在送出任何請求之前停下來說明原因。
+> **不再提供 Google Antigravity（`agy`）**：Google 的 [Antigravity 常見問題](https://antigravity.google/docs/faq/)（2026-10-16 [開發者論壇](https://discuss.ai.google.dev/t/clarification-on-consumer-plan-policy-for-invoking-official-agy-via-local-subprocess/189905)上的回覆也說以這份常見問題為準；回覆者未標示身分）說明，無頭模式 `agy -p` 只能用在你自己的腳本與 CI；把 agy 包在第三方程式或應用程式裡不受消費者方案支援，可能導致帳號停權，第三方工具應改用 Google AI Studio 或 Gemini Enterprise 的 API 金鑰。NCTE 就是這樣的應用程式，所以拿掉了 agy，改成直接連 Gemini API。設定還選著 agy 的話，NCTE 會在送出任何請求之前停下來說明原因。
 
 ## 它怎麼翻：先像譯者一樣讀完，再動筆
 一般的機器翻譯一次只看一小段，所以常常搞錯「這句是誰說的」「這個角色是男是女」「敘述是不是主角自己在講」。日文又常省略主語，前後文一斷就容易翻錯。NCTE 模仿譯者的做法：**先把整本讀完、做筆記，翻譯時帶著筆記翻**。
@@ -405,7 +405,7 @@ ncte export tests/fixtures/basic.epub
 - 訂閱方案是透過各家的命令列工具呼叫模型。這些工具原本是寫程式用的 agent，NCTE 能把它們「關成單純的模型」的程度不同：
   - Claude Code：可以整個換掉它的系統提示、不帶任何工具，最接近直接呼叫模型（每個請求多約一千 token）。
   - Codex：可以換掉內建指示、關掉大部分功能，但每個請求仍帶約八千 token 的固定說明，比較吃額度。
-  - Antigravity（`agy`）：已停用。Google 的 [Antigravity 常見問題](https://antigravity.google/docs/faq/)（2026-10-16 確認）說明把 agy 包在第三方應用程式裡不受消費者方案支援、可能導致停權，所以 NCTE 不再提供；要用 Gemini 請改用 Gemini API 金鑰。
+  - Antigravity（`agy`）：已停用。Google 的 [Antigravity 常見問題](https://antigravity.google/docs/faq/)（2026-10-16 論壇回覆也以此為準）說明把 agy 包在第三方應用程式裡不受消費者方案支援、可能導致停權，所以 NCTE 不再提供；要用 Gemini 請改用 Gemini API 金鑰。
 - 內容審查：雲端模型可能誤擋正常段落（例如未成年角色加上可疑大人的情境）。翻譯被擋時先拿掉記憶資料、再切小重送；讀被擋時把場景對半切重讀。仍被擋的段落保留原文或只用程式分析，並列入報告。
 - Gemini API 來源還沒有用真的金鑰實測過：請求格式、結構化輸出、思考程度、用量欄位都照 Google 的 API 文件（2026-10-24 讀）實作並以離線測試驗證；第一次使用建議先拿一小段試（`--limit-units`）。
 - Gemini 等推理模型的推理 token 以輸出價計費（翻譯的輸出約一半是推理），推理量難以事先知道。試算涵蓋每個步驟：有過去實際花費的步驟依最近的執行校正（一般值與最貴的一次再加餘裕），沒有的依抽樣中的占比估，標為未校正。

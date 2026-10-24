@@ -786,7 +786,7 @@
 - 限制：一起驗收時，驗收請求變大、單個請求失敗影響的段落變多（單獨再問一次照舊）；暫停時已寫入的修正照樣驗收完才停。請求失敗的再問一次會多送請求（兩半各一個）。
 
 ## ADR-105（2026-10-24）：停用 Antigravity（agy）來源；新增直接連 Gemini API 的來源（`gemini`）
-- 背景：Google 的 Antigravity 常見問題（https://antigravity.google/docs/faq/ ，現行政策；2026-10-16 開發者論壇 Google 工作人員回覆確認：https://discuss.ai.google.dev/t/clarification-on-consumer-plan-policy-for-invoking-official-agy-via-local-subprocess/189905 ）說明：無頭模式 `agy -p` 只供使用者自己直接寫的腳本與 CI；把 agy 包在第三方 coding agent 或應用程式裡不受消費者方案支援，可能導致停權；第三方工具應改用 Google AI Studio 或 Gemini Enterprise 的 API 金鑰。NCTE 就是這樣的應用程式。使用者決定：停用、隱藏 agy，新增直接連 Gemini API 的來源。
+- 背景：Google 的 Antigravity 常見問題（https://antigravity.google/docs/faq/ ，現行政策；2026-10-16 開發者論壇的回覆也說以常見問題為準，回覆者未標示身分：https://discuss.ai.google.dev/t/clarification-on-consumer-plan-policy-for-invoking-official-agy-via-local-subprocess/189905 ）說明：無頭模式 `agy -p` 只供使用者自己直接寫的腳本與 CI；把 agy 包在第三方 coding agent 或應用程式裡不受消費者方案支援，可能導致停權；第三方工具應改用 Google AI Studio 或 Gemini Enterprise 的 API 金鑰。NCTE 就是這樣的應用程式。使用者決定：停用、隱藏 agy，新增直接連 Gemini API 的來源。
 - 決定（agy）：
   - 程式碼不刪（`llm/agy_cli.py` 與它的單元測試照舊，測試直接建 `AgyCLIClient`，不需要開發者開關）。沒有任何讓使用者打開的方式。
   - 不再提供：`config.PROVIDERS` 拿掉 agy（`NCTE_LLM_PROVIDER=agy` 仍讀得進來，只為了網頁能說明原因）；`load_config` 不再套 `use_agy_models`；網頁連線方式沒有 agy、交叉校稿的選項沒有 agy（`CROSS_CHOICES` 改成 Gemini API）、設定頁與書庫頁遇到還設著 agy 的 `.env` 時顯示停用說明與 FAQ 連結；`set_provider("agy")`、`set_cross("agy/…")` 回 400。README 拿掉 agy 來源、加上政策說明。
