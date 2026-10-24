@@ -943,3 +943,28 @@
   - 網頁：連線方式「Gemini API（Google AI Studio 金鑰）」；金鑰欄（只存 `.env`，畫面只顯示末四碼）、取得金鑰與帳單的步驟（AI Studio 金鑰頁、Google 說明的預付最少 US$5、免費方案的資料使用說明）、估價用 OpenRouter 公開價目的說明；交叉校稿在有 Gemini 金鑰時可選 Gemini API。
 - 沒做（文件有、這次不需要）：顯式快取（建立快取物件有儲存費用；隱性快取已自動折扣）、Interactions API、串流、Batch／Flex。
 - 限制：沒有金鑰、沒有實測（使用者沒有同意花費）：請求格式、`responseFormat`、思考程度、錯誤格式都只照文件並以 MockTransport 測。文件現在多以 Interactions API 示範，generateContent 參考頁的 `responseJsonSchema` 說明自相矛盾，第一次實測要先確認 `responseFormat` 被接受。OpenRouter 的價目與 Google 的實際價格可能不同（Google 價目表寫明 gemini-3.8-flash 從 2027-01-01 起價格加倍；OpenRouter 何時跟上不知道），所以估價與花費只是參考，以 Google 帳單為準。預設模型是固定的 id，不會自己換成 models.list 上更新的 Flash。
+
+## ADR-106（2026-10-24）：場面的段落代號照欄位名還原、沒問的欄位不出現在 schema；目次跟著章節標題；照搬日文漢字詞的修正不是偏好
+- 背景：
+  1. ADR-104 的場面每一筆都被丟掉：模型寫 `"at": "P2"`（`SituationPoint.unit_id` 的 alias），`short_ids.decode` 只還原 `_REF_KEYS` 與 `_id`／`_ids`… 結尾的鍵，`at` 兩邊都不是，留著「P2」，`scene.situation_points` 就以「不在本場景的段落」拒絕。Codex 樣本書的 `memory_rejections`：英雄と賢者 10 筆、悪魔公女 47 筆（`workspace/exp/codex-sample/`）。同一個缺口：`conflicts`（`contradictions` 的 alias，寫人物的文字）裡的人物代號沒換成名字。另外 `scene_state` 關的時候，模型拿到的 schema 仍有 `situation`：Codex 把整份 schema 放進指示，沒問也寫，浪費輸出。
+  2. 英雄と賢者 樣本的目次頁（書籍資訊，ADR-024：照常翻譯、不讀、不做同形詞、不校對、不做讀者檢查）把「電子書籍版特典『この英雄と賢者は特別な訓練を受けています』」譯成「這位英雄與賢者…」（兩個人用「這位」，應為「這對」）。同一標題是特典章的標題（正文）與 NAV 的項目。現況：NAV／NCX／`<title>`（`META_KINDS`）在執行最後翻，`reuse_heading_translations` 只在那時、只對還沒翻的項目、照 `plain_text` 完全相同抄 `heading_hints` 的譯文；`heading_hints` 也收書籍資訊裡與目次相同的段落（目次頁本身）。目次頁的段落自己翻、從來不跟標題對齊；之後標題被校對、同形詞、人工修改，NAV 也不會跟著改（下次執行有快取就不再翻）。另外特典章在「あとがき」之後，`matter.classify` 把它算成書末資訊，標題本身也沒有讀、沒有校對。
+  3. fix_check 以「讀者看不看得懂」判斷，把同形詞步驟找到的照搬詞（「葬列」→「送葬隊伍」）判 `issue_invalid`：「『葬列』可理解為送葬的行列…換成『送葬隊伍』只是表達偏好」。同形詞步驟要找的正是臺灣中文不這樣用的照搬詞，讀者猜得出意思不代表臺灣中文會這樣說。
+- 決定：
+  1. **短鍵照它代表的欄位還原**（`short_ids._ALIASES`）：從所有答案 schema 收集 alias → 欄位名（同一個 alias 代表兩個欄位名時 import 就失敗），`decode` 先把鍵換成欄位名再判斷是不是 id 或寫人物的文字。`at` → `unit_id`（還原成段落 id）、`conflicts` → `contradictions`（人物代號換名字）；其他 alias（`ref`、`evidence`、`speaker`、`to`、`candidates`…）結果不變；`from`（印象的 `since`）是請求自己的 `l1`／`f1`，本來就不經過代號。
+  2. **沒問的欄位不給**（`schemas.ASKED_ONLY`）：（schema、欄位）→ 請求裡要它的鍵；目前只有（`SceneAnalysisOutput`、`situation`）→ `write_situation`。`strict_json_schema(model, payload)` 依請求拿掉沒問的欄位（巢狀的 `SceneReadOutput.analysis` 也一樣）；所有來源（OpenRouter、fal、Claude 的 `--json-schema`、Codex 的指示、本機、Gemini、agent 的任務）都用這份 schema。答案仍寫了的話，解析時（`parse_json_output(..., payload)` 以請求作 validation context）當沒寫，`scene_state` 關時不存場面。不給 payload 時（測試、agent 檢查答案格式）是整份 schema。讀場景的請求雜湊因此改變（ADR-094 只重用讀完之後的請求，不受影響）。
+  3. **目次跟著章節標題**（`translation/headings.py`，使用者同意的做法）：程式不判斷意思（ADR-059），只把模型翻譯、校對後已定的標題譯文抄過去。
+     - 標題（領頭）：故事檔案（`story_hrefs`）裡的 `heading`，以及和 NAV／NCX 項目原文相同、40 字以內的段落（用段落當標題的書；與 `heading_hints` 同條件，但只限故事）。
+     - 跟著的：書籍資訊檔裡的段落與標題（目次頁），以及 NAV／NCX／`<title>`／書名（`export.translate_nav_titles` 開時）。故事本身的段落不跟。
+     - 對得上：原文去掉讀音、placeholder 與所有空白後相同（`headings.key`）。只有在明確時才抄：有這個原文的標題全都有譯文、全都譯得一樣、裡面沒有行內標記；跟著的項目整段最多包一層 placeholder（`⟦1⟧…⟦/1⟧`），裡面沒有其他標記。兩個同原文的標題譯得不一樣（例如兩個「幕間」）時哪一個都不抄，項目保留自己的譯文。
+     - 何時：每次執行最後（`run_meta`，不論這次有沒有要翻的項目，所以前一次執行之後才改的標題也會跟上），以及每次匯出之前（`export_book`：之後才校對、修正、人工修改、重翻的標題，匯出時一定跟上）。標題沒有譯文時項目照舊自己翻（模型）。
+     - 紀錄：抄過去的譯文是一筆新的 `translations`（`context_hash = "heading:<標題的 unit_id>"`，提示詞版本、模型、模式照標題那筆，`run_id` 是抄的那次執行、匯出時為空）。項目目前已經是標題現在這一版的抄本時不再寫（標題重翻過、即使文字相同也重抄）。人工改過的項目不動。快取（`is_cached`）把跟著標題的譯文當作已翻：之後的執行不再為它自己送翻譯（`--force` 重翻的話，結束時又跟回標題）。
+     - 書末資訊的判斷（`matter.classify`）：書末資訊開始以後，有自己的目次項目、項目名稱不是書籍資訊（`FRONT`／`BACK` 都不符）的檔案重新算故事，到下一個後記、版權頁為止。「あとがき」後面的「電子書籍版特典『…』」因此是故事：讀、校對，標題成為目次的領頭。兩本 Codex 樣本書的目次都這樣分得對（英雄と賢者：p-028 是故事、p-colophon 是書末；悪魔公女：書き下ろし本來就在あとがき之前）。
+  4. **fix_check 的通則**（`prompts/fix_check/v1.md`，兩處、不舉例詞）：指出的是照搬日文漢字詞（`false_friend`）時，臺灣中文不用、或不這樣用這個詞（意思、用法不同）就是錯，讀者猜得出意思也不是偏好，`after` 換成臺灣中文自然的說法、意思與原文一致就判 `fixed`；`issue_invalid` 只用在這個詞在這裡本來就是臺灣中文通行的說法、意思相同時。`new_error` 的「日文漢字詞照搬」也從「意思不同」改為「臺灣中文不這樣用或意思不同」。中文表達問題的「只是偏好就保留 `before`」照舊（臺灣中文本來就這樣說的寫法）。
+- 實測（2026-10-24，Claude 方案 `claude/opus`、思考 medium；Codex 方案在 5 小時上限，沒有用 Codex 重跑；資料庫都在 scratchpad 的複本上跑，`review._check_fixes` 一次一個修正，舊提示詞與新提示詞各問一次，其中五項再各問兩次）：
+  - 葬列（英雄と賢者，原本是 Codex 判 `issue_invalid`）：舊 3/3、新 3/3 都判 `fixed`。Opus 用舊提示詞已經不把它當偏好，這個例子在 Claude 上分不出新舊；原本拒絕的是 Codex，新提示詞在 Codex 上的效果沒有測到。
+  - 其他被 fix_check 拒絕的同形詞修正（銀河鉄道の夜，原本是 agy 的 Gemini 判的）：長靴→雨鞋＋鶴嘴鋤→十字鎬、信號手→號誌員、正面→正前方，新舊都判 `issue_invalid`（長靴、正面各 3/3）。理由都是「這個詞臺灣中文本來就這樣說、意思相同」（長靴＝長筒靴；鶴嘴鋤是現成的工具名；「車站正面的時鐘」），正是新規則保留 `issue_invalid` 的情況。
+  - 對照：同形詞被接受的伝令→消息、白鳥區→天鵝座區新舊都 `fixed`；桔梗色→藍紫色（原本被接受）新舊都 `issue_invalid`（3/3，理由：「桔梗」在臺灣也是同一種花）。對照校稿以偏好拒絕的語氣修正（好→喔）新舊都 `issue_invalid`；「岳父大人」→「…就好」與「國家的重鎮」→「權貴」新舊都 `fixed`（原本是本機模型判的拒絕）。
+  - 意思類的對照（その身一つ：一己之力→肉身，`proofread_omission`）：舊 0/3、新 2/3 判 `fixed`。新規則只寫照搬詞，這段兩種讀法都說得通，看起來是每次回答的差異，要再看。
+  - 用量：42 個請求（輸入約 47.8 萬 token、輸出約 3.6 萬），方案 5 小時用量 56%→59%（第一個請求之後讀到 56%；之前最後一次讀數是 08:11Z，那個窗已重置），每週 75%→75%。
+- 後果：讀場景在 `scene_state` 關時 schema 小一點；`scene_state` 開時場面真的會存下來。ADR-104 A/B 的 state 兩個 arm 存下的答案裡場面的段落是「P2」這類代號（`workspace/exp/speaker-ab/results/ctx-voice-state-r1/answers/`），照當時的程式都會被丟掉：「先寫場面沒有幫助」的結論是在場面沒進到之後步驟的情況下得到的，要重看。目次、NAV、NCX 與章節標題一致；匯出多幾次查詢與可能的幾筆寫入。後記之後的特典短篇會被讀、做同形詞、校對（多一些請求）。
+- 限制：只認原文相同（去讀音、placeholder 與空白）的標題；目次寫法和標題不同（「第一章」對「第一章　出会い」、多了頁碼）的不跟，照舊自己翻。網頁的章節標題在下一次執行或匯出前仍是舊的 NAV 譯文。`classify` 的改變只看目次項目名稱：後記之後名稱不像書籍資訊的其他頁（例如畫廊）也會算故事。

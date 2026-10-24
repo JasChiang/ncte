@@ -172,9 +172,13 @@ def test_retranslate_single_unit_preserves_others(conn, cfg, fixtures):
     target = next(iter(before))
     _, rid2, s2 = run_book(conn, cfg, fixtures["basic"], FakeLLM(), unit_ids=[target], force=True)
     assert s2.status == "completed" and s2.counts == {"succeeded": 1}
-    after = {k: v["id"] for k, v in latest_texts(conn, book.id).items()}
+    best = latest_texts(conn, book.id)
+    after = {k: v["id"] for k, v in best.items()}
     assert after[target] != before[target]
-    assert {k: v for k, v in after.items() if k != target} == {k: v for k, v in before.items() if k != target}
+    # the TOC entries of a heading follow it (ADR-106): copied again from the heading translated again
+    follows = {k for k, v in best.items() if v["context_hash"] == f"heading:{target}"}
+    kept = {target} | follows
+    assert {k: v for k, v in after.items() if k not in kept} == {k: v for k, v in before.items() if k not in kept}
 
 
 def test_limit_units_smoke(conn, cfg, fixtures):

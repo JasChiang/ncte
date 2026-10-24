@@ -1309,3 +1309,14 @@ open workspace/eval/<timestamp>/report.html
 - `scene._uses_before`：依系列的故事位置（`series.pos`／`volumes`、`scope_clause`）數場景前的使用，後面的集數與系列外的書不算。
 - `lookback.apply`：說話對象是否已確定在改說話者之前讀（`settled`），原文寫明的不因改說話者而被 `to` 清掉或換掉。
 - 測試：`test_speaker_context.py` 新增 2 個（用 97f64e3 的程式都失敗）。967 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-106 場面代號、沒問的 schema 欄位、目次跟著標題、fix_check 的照搬詞（2026-10-24，分支 situation-toc-fixcheck-2026-10-24，基於 main 282a1f1）
+- `llm/short_ids.py`：`_ALIASES`（從 `llm/schemas.py` 收集 alias → 欄位名），`decode` 以欄位名判斷；場面的 `at` 還原成段落 id，`conflicts` 的人物代號換名字。
+- `llm/schemas.py`：`ASKED_ONLY`、`asked()`；`strict_json_schema(model, payload)` 拿掉請求沒問的欄位；`SceneAnalysisOutput.situation` 在請求沒問時（validation context）當空。`translation/translator.py`：`call_structured` 用請求的 schema，`parse_json_output(..., payload)`。
+- `translation/headings.py`（新）：`key`、`heading_texts`、`follow_headings`；`Orchestrator.run_meta` 先讓目次跟著標題（取代 `reuse_heading_translations`），`exporter.export_book` 匯出前也跟一次；`cache.FOLLOWS_HEADING`，`is_cached` 把跟著標題的譯文當已翻。
+- `epub/matter.classify`：書末資訊之後有自己目次項目（不是書籍資訊）的檔案重新算故事（後記之後的特典短篇）。
+- `prompts/fix_check/v1.md`：照搬日文漢字詞的通則（兩處）。
+- 測試：`tests/unit/test_short_ids.py`、`tests/unit/test_schemas.py` 各新增 1 個；`tests/integration/test_toc_follows.py`（新，3 個：特典章算故事；目次頁、NAV、NCX、`<title>` 跟著標題，標題之後被修改時匯出跟上、人工改的項目不動、下一次執行不再翻；只有明確時才抄）；`test_pipeline.test_retranslate_single_unit_preserves_others` 允許重翻的標題的目次項目跟著換。
+- fix_check 實測（Claude 方案 Opus，資料庫複本，舊／新提示詞）：結果與用量見 ADR-106。葬列在 Opus 上新舊都 `fixed`（原本拒絕的是 Codex，未在 Codex 上重測：該方案在 5 小時上限）；銀河鉄道の夜被拒絕的三個同形詞修正新舊都 `issue_invalid`，看理由判得對（臺灣中文本來就這樣說）。
+- 未重跑說話者 A/B（交由主線決定）。ADR-104 A/B 的 state 兩個 arm 的場面當時都會被丟掉（本 ADR 第 1 點），結論需重看。
+- 測試結果：972 passed、5 skipped（EPUBCheck 不在 worktree；指定 `EPUBCHECK_JAR` 後 `test_roundtrip.py` 13 passed）；ruff、mypy 通過。

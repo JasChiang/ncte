@@ -111,10 +111,10 @@ class BatchResult:
     structured_mode: str = ""
 
 
-def parse_json_output(content: str, model: type[BaseModel],
-                      decode: Callable[[Any], Any] | None = None) -> tuple[BaseModel, str]:
+def parse_json_output(content: str, model: type[BaseModel], decode: Callable[[Any], Any] | None = None,
+                      payload: Any = None) -> tuple[BaseModel, str]:
     """Strict parse; the only local repair is removing a single Markdown code fence. ``decode`` maps short ids back
-    before the answer is checked."""
+    before the answer is checked; ``payload``: the request, so a field it did not ask for is not kept (ADR-106)."""
     text = content.strip()
     status = "strict"
     try:
@@ -131,7 +131,7 @@ def parse_json_output(content: str, model: type[BaseModel],
     if decode is not None:
         data = decode(data)
     try:
-        return model.model_validate(data), status
+        return model.model_validate(data, context={"payload": payload} if payload is not None else None), status
     except ValidationError as exc:
         raise ModelOutputError(f"schema validation failed: {str(exc)[:400]}") from exc
 
@@ -202,7 +202,7 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
         max_tokens = auto_max_tokens(messages[-1]["content"], reasoning_setting(cfg, stage))
     while True:
         req = LLMRequest(stage=stage, model=model, messages=messages, schema_name=f"ncte_{stage.split(':')[0]}",
-                         json_schema=strict_json_schema(schema_model) if current == "json_schema" else None,
+                         json_schema=strict_json_schema(schema_model, payload) if current == "json_schema" else None,
                          structured_mode=current, temperature=temperature,
                          max_tokens=max_tokens, prompt_version=prompt.version_id,
                          extra={"reasoning": rp} if (rp := reasoning_param(reasoning_setting(cfg, stage))) else {},
@@ -210,7 +210,7 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
         answered = getattr(recorder, "answered", None)  # only the run's record (the database) keeps answers
         if reuse and answered is not None and (prev := answered(req)) is not None:
             try:
-                parsed, _status = parse_json_output(prev[1], schema_model, ids.decode)
+                parsed, _status = parse_json_output(prev[1], schema_model, ids.decode, payload)
                 if (took := getattr(recorder, "took", None)) is not None:
                     took(bool(prev[2]) if len(prev) > 2 else False)
                 return parsed, prev[0], current
@@ -244,7 +244,7 @@ def call_structured(client: LLMClient, recorder: Recorder, *, stage: str, model:
                 continue
             raise ModelOutputError("output truncated (finish_reason=length)")
         try:
-            parsed, status = parse_json_output(resp.content, schema_model, ids.decode)
+            parsed, status = parse_json_output(resp.content, schema_model, ids.decode, payload)
         except ModelOutputError:
             recorder.success(rid, resp, "invalid")
             raise

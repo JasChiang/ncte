@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 
 class _M(BaseModel):
@@ -215,6 +215,11 @@ class SceneAnalysisOutput(_M):
     uncertainties: list[Uncertainty]
     narration: NarrationOut | None = None
     other_forms: list[OtherForm] = Field(default_factory=list)
+
+    @field_validator("situation")
+    @classmethod
+    def _situation_asked(cls, v: list[SituationPoint], info: ValidationInfo) -> list[SituationPoint]:
+        return v if asked(info.context, "SceneAnalysisOutput", "situation") else []
 
 
 # ------------------------------------------------------------------ memory update
@@ -605,6 +610,22 @@ SCHEMAS: dict[str, type[BaseModel]] = {
 }
 
 
+# A field a step writes only when its request asks for it (ADR-106): (schema, field) → the payload key that asks. Left
+# out of the schema the model is shown otherwise (a source shown the whole schema, Codex, fills it unasked and spends
+# output on it), and an answer that writes it anyway is read without it (validated with the request as ``context``).
+ASKED_ONLY: dict[tuple[str, str], str] = {("SceneAnalysisOutput", "situation"): "write_situation"}
+
+
+def asked(context: Any, model: str, field: str) -> bool:
+    """Whether ``field`` of ``model`` is asked for: always, unless it is an ``ASKED_ONLY`` field and the request
+    (``context["payload"]``, when given) does not say its key. Validation without a context keeps what was written."""
+    key = ASKED_ONLY.get((model, field))
+    if key is None or not isinstance(context, dict) or "payload" not in context:
+        return True
+    payload = context["payload"]
+    return isinstance(payload, dict) and payload.get(key) is True
+
+
 def output_model(stage: str, payload: Any = None) -> type[BaseModel] | None:
     """The schema a step's answer is checked against: a translation asked to read through first (the payload says
     ``"read_through": true``) answers with the list before its translations."""
@@ -624,17 +645,23 @@ def _empty_default(prop: dict[str, Any]) -> bool:
     return "default" not in prop or prop["default"] in ("", None, False, [], {})
 
 
-def strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
+def strict_json_schema(model: type[BaseModel], payload: Any = None) -> dict[str, Any]:
     """Inline $defs and forbid additional properties; every property is required except optional ones whose default
-    is empty (see ``_empty_default``)."""
+    is empty (see ``_empty_default``). With the request's ``payload``: an ``ASKED_ONLY`` field it does not ask for is
+    left out."""
     raw = model.model_json_schema()
     defs = raw.pop("$defs", {})
+    context = {"payload": payload} if payload is not None else None
 
-    def fix(node: Any) -> Any:
+    def fix(node: Any, name: str | None = None) -> Any:
         if isinstance(node, dict):
             if "$ref" in node:
-                name = node["$ref"].split("/")[-1]
-                return fix(copy.deepcopy(defs[name]))
+                ref = node["$ref"].split("/")[-1]
+                return fix(copy.deepcopy(defs[ref]), ref)
+            if name is not None and isinstance(node.get("properties"), dict):
+                drop = {k for k in node["properties"] if not asked(context, name, k)}
+                node = {**node, "properties": {k: v for k, v in node["properties"].items() if k not in drop},
+                        **({"required": [k for k in node["required"] if k not in drop]} if "required" in node else {})}
             out = {k: fix(v) for k, v in node.items() if k not in ("title", "default")}
             if out.get("type") == "object" and "properties" in out:
                 out["additionalProperties"] = False
@@ -648,4 +675,4 @@ def strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
             return [fix(x) for x in node]
         return node
 
-    return fix(raw)
+    return fix(raw, model.__name__)

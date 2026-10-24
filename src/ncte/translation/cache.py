@@ -18,6 +18,9 @@ from ..memory.repository import FINDABLE
 from ..series import SERIES_SCOPE
 
 VALID_MACHINE = ("succeeded", "needs_review")
+# ``context_hash`` of a TOC entry's translation copied from its chapter heading (ADR-106): it follows the heading, so
+# it is not asked again for itself
+FOLLOWS_HEADING = "heading:"
 
 
 def glossary_entries(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
@@ -102,6 +105,8 @@ def is_cached(row: sqlite3.Row | None, *, prompt_version: str, model: str, mode:
     if row is None:
         return False
     if row["status"] == "human":
+        return True
+    if "context_hash" in row.keys() and (row["context_hash"] or "").startswith(FOLLOWS_HEADING):
         return True
     return (prompt_major(row["prompt_version"]) == prompt_major(prompt_version) and row["model_id"] == model
             and row["mode"] == mode and row["glossary_version"] == gl_hash)

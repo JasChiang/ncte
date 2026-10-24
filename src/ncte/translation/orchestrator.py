@@ -861,41 +861,24 @@ class Orchestrator:
             self.log(f"  review: {stats}")
 
     def run_meta(self) -> None:
-        meta_rows = self.pending_rows(meta=True)
-        if not meta_rows:
-            return
-        reused = self.reuse_heading_translations(meta_rows)
-        rest = [r for r in meta_rows if r["id"] not in reused]
-        self.run_batches(make_batches(rest, self.cfg.translation.unit_target_japanese_chars))
+        """The titles last: a TOC entry whose source is a story heading's takes the heading's final text (ADR-106,
+        also those translated in an earlier run, so a heading fixed since is followed); the rest are translated."""
+        from .headings import follow_headings
 
-    def reuse_heading_translations(self, rows: list[sqlite3.Row]) -> set[str]:
-        hints = {h["ja"]: h["zh"] for h in heading_hints(self.conn, self.book.id)}
-        done: set[str] = set()
         with self.lock, Transaction(self.conn):
-            for r in rows:
-                zh = hints.get(r["plain_text"])
-                if not zh:
-                    continue
-                src = r["source_text"]
-                if src == r["plain_text"]:
-                    text = zh
-                elif src == f"⟦1⟧{r['plain_text']}⟦/1⟧":
-                    text = f"⟦1⟧{zh}⟦/1⟧"
-                else:
-                    continue
-                self.conn.execute(
-                    "INSERT INTO translations(unit_id, target_lang, text, source_hash, prompt_version, model_id, "
-                    "glossary_version, mode, status, run_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                    (r["id"], self.cfg.app.language, text, r["source_hash"], self.prompt.version_id, self.model,
-                     glossary_hash(relevant_glossary(self.glossary, r["plain_text"])), self.opts.mode, "succeeded",
-                     self.run_id, utcnow()))
-                self.conn.execute("UPDATE jobs SET status='succeeded', checkpoint_json=?, updated_at=? WHERE "
-                                  "run_id=? AND stage='translate' AND target_id=?",
-                                  (json.dumps({"reused_heading": True}), utcnow(), self.run_id, r["id"]))
-                done.add(r["id"])
-        if done:
-            self.log(f"TOC/title: reused {len(done)} chapter-heading translations")
-        return done
+            got = follow_headings(self.conn, self.book.id, run_id=self.run_id,
+                                  meta=self.opts.include_meta and self.cfg.export.translate_nav_titles)
+            meta_rows = self.pending_rows(meta=True)
+            # a book-matter entry is a body unit (translated with its scene); a title waiting is taken from its heading
+            self.conn.executemany("UPDATE jobs SET status='succeeded', checkpoint_json=?, updated_at=? WHERE "
+                                  "run_id=? AND stage='translate' AND target_id=? AND status='pending'",
+                                  [(json.dumps({"follows_heading": True}), utcnow(), self.run_id, r["id"])
+                                   for r in meta_rows if r["id"] in got["followed"]])
+        if got["written"]:
+            self.log(f"TOC/title: {got['written']} entries follow their chapter heading")
+        rest = [r for r in meta_rows if r["id"] not in got["followed"]]
+        if rest:
+            self.run_batches(make_batches(rest, self.cfg.translation.unit_target_japanese_chars))
 
     def run_batches(self, batches: list[Batch], concurrency: int | None = None) -> None:
         if not batches:

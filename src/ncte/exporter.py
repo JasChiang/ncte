@@ -45,6 +45,11 @@ def export_book(conn: sqlite3.Connection, cfg: Config, book: Book, *, output: Pa
     for protected in (Path(book.source_path), Path(book.stored_path)):
         if protected.exists() and out.resolve() == protected.resolve():
             raise NCTEError("Refusing to overwrite the original EPUB")
+    from .memory.db import Transaction
+    from .translation.headings import follow_headings
+
+    with Transaction(conn):  # a heading fixed or edited since the run: its TOC entries follow it (ADR-106)
+        follow_headings(conn, book.id, meta=cfg.export.translate_nav_titles)
     units = {r["id"]: r for r in conn.execute("SELECT * FROM units WHERE book_id=?", (book.id,))}
     best = latest_texts(conn, book.id)
     patches: dict[tuple[str, str], TranslationPatch] = {}

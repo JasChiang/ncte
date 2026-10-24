@@ -53,7 +53,9 @@ def classify(hrefs: list[str], labels: dict[str, str], first_lines: dict[str, st
     The story starts at the first file whose TOC label is neither front nor back matter (everything before it —
     covers, illustrations, cautions, the table of contents — is front matter); without usable labels, at the first
     file whose name/first line does not look like front matter. Back matter starts at the first afterword /
-    colophon after that (label, file name or first line) and runs to the end."""
+    colophon after that (label, file name or first line) and runs to the end, except that a later file with a TOC label
+    of its own that is neither (a bonus story after the afterword: 「電子書籍版特典『…』」, ADR-106) is story again, up
+    to the next afterword / colophon."""
     first_lines = first_lines or {}
 
     def text(h: str) -> str:
@@ -69,6 +71,8 @@ def classify(hrefs: list[str], labels: dict[str, str], first_lines: dict[str, st
             kind = "story"
         if kind == "story" and BACK.search(text(h)):
             kind = "back"
+        elif kind == "back" and labels.get(h) and not FRONT.search(labels[h]) and not BACK.search(text(h)):
+            kind = "story"
         out[h] = kind
     return out
 

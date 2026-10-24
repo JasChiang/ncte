@@ -14,6 +14,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from pydantic import BaseModel
+
+from . import schemas
+
 _ID = re.compile(r"^(?:[ucf]_[0-9a-f]{12,16}|q_[0-9a-f]{16}_\d+)$")
 _LETTER = {"u": "P", "c": "C", "f": "F", "q": "Q"}
 READING_ORDER = ("context_before", "units", "items", "paragraphs", "context_after", "context")
@@ -28,6 +32,28 @@ _CODE = re.compile(r"(?<![A-Za-z0-9_])C\d+(?![0-9])")
 _PARAGRAPH_PROSE_KEYS = {"read_through"}
 _PARA_CODE = re.compile(r"(?<![A-Za-z0-9_])P\d+(?![0-9])")
 _NAME_KEYS = ("name_zh", "name_ja", "name")
+
+
+
+
+def _aliases() -> dict[str, str]:
+    """The short key the model writes (``alias``) → the field's own name, for every answer schema: a key is read by the
+    name it stands for, so 「"at": "P2"」 (``unit_id``) is mapped back like any ``_id`` field and 「"conflicts"」
+    (``contradictions``) like the prose it is. An alias standing for two different names would be ambiguous."""
+    out: dict[str, str] = {}
+    for model in vars(schemas).values():
+        if isinstance(model, type) and issubclass(model, BaseModel):
+            for name, field in model.model_fields.items():
+                if field.alias and field.alias != name:
+                    assert out.setdefault(field.alias, name) == name, (field.alias, name)
+    return out
+
+
+_ALIASES = _aliases()
+
+
+def _field(key: str | None) -> str | None:
+    return _ALIASES.get(key, key) if key is not None else None
 
 
 def _holds_ids(key: str | None) -> bool:
@@ -83,6 +109,7 @@ class ShortIds:
         return value
 
     def decode(self, value: Any, key: str | None = None) -> Any:
+        key = _field(key)  # a short key the schema gives a field is read as that field
         if isinstance(value, str):
             if _holds_ids(key) and value in self.to_long:
                 return self.to_long[value]
