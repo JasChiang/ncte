@@ -359,7 +359,9 @@ def question_items(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any
         people = {p.get("character_id") for p in state.get("participants", [])}
         people |= {r[0] for r in conn.execute("SELECT speaker_id_nullable FROM utterances WHERE book_id=? AND scene_id=? "
                                               "AND speaker_id_nullable IS NOT NULL", (book_id, sc["id"]))}
+        # the scene's people first, then anyone known by then: the one asked about may not be present (a note's writer)
         cands = {c: names[c] for c in sorted(x for x in people if x) if c in names}
+        cands.update({c: n for c, n in names.items() if c not in cands})
         for i, x in open_:
             at = [r[0] for r in conn.execute(
                 f"SELECT ordinal FROM units WHERE book_id=? AND id IN ({','.join('?' * len(x.get('unit_ids') or []))}) "

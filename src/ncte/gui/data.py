@@ -348,7 +348,8 @@ def characters(conn: sqlite3.Connection, book: Book, *, series: bool = False) ->
         # the name as known at each reading position: a name revealed later is not shown before it (ADR-032/103)
         out[cid]["names"] = _names_by_position(conn, book.id, c, forms_at, rendering, cv == here)
         # one of several cards the book calls by the same words, or someone of another time: told apart here only
-        if tag := label_of(c) or ((OTHER_PERSON if period_of(c) == "" else period_of(c)) or ""):
+        # (the time the model read for someone of another time, else the number)
+        if tag := ((period_of(c) or OTHER_PERSON) if period_of(c) is not None else label_of(c)):
             out[cid]["tag"] = tag
         # not yet known whether this is one of those people (the second look asks); each with where it is first
         # known, so the page names one only once the reading position reaches it
@@ -421,9 +422,9 @@ def _names_by_position(conn: sqlite3.Connection, book_id: str, c: sqlite3.Row, f
 
     here = pos(conn, book_id, 0)[0]
     first, linked, held = forms_at
-    forms = [c["canonical_name"], *json.loads(c["aliases_json"] or "[]")]
+    forms = [c["canonical_name"], *json.loads(c["aliases_json"] or "[]"), *held.get(c["id"], {})]
     start = c["known_from_ordinal"] if this_volume else -1
-    points = {start} | {p[1] for f in forms for p in (first.get(f), linked.get(f), held.get((c["id"], f)))
+    points = {start} | {p[1] for f in forms for p in (first.get(f), linked.get(f), held.get(c["id"], {}).get(f))
                         if p is not None and p[0] == here and p[1] > start}
     out: list[dict[str, Any]] = []
     for at in sorted(points):

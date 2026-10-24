@@ -1250,3 +1250,9 @@ open workspace/eval/<timestamp>/report.html
 - 覆核：`VerifyItem.line_role`（speaker／addressee）、`line_refs`；`_set_addressee`。提示詞 `verify` 說明。
 - 整理記憶：自己對自己的關係有自己的理由。
 - 測試：`tests/integration/test_unconfirmed_realrun2.py`（新，9 個；8 個改之前失敗，「沒有卡有的普通名詞仍不當名字」是保留的行為）；`test_entities.py` 2 個、`test_unconfirmed_realrun.py` 1 個改成新行為。898 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 實測三修正（2026-10-24，分支 unnamed-placeholders-2026-10-23）
+- `scene.apply_scene_analysis`：新人物的字已有卡時一條路——好幾張卡有、或模型說是別人或給了時期，就是有標籤、標「可能是」的卡（`marked`）；有時期但沒有卡有這個字也是有標籤的卡；`known_by`／`owners` 包括有時期的卡；揭曉時時期留下、標籤取下一個號碼（`repository.next_label`）。`unconfirmed_card(period=…)`；`other_time_card` 只剩建卡（不再以字＋時期找）；`card_label` 與網頁 `tag` 有時期就顯示時期。
+- `_known_from_attributed`：卡的第一次出現往前移時，記下模型在這一場給它、那時已出現的字（顯示用，`character_forms`）；`visibility.form_positions` 的第三項改為每張卡的寫法表，`character_view` 把顯示用的寫法也列入；`entities._drop_alias` 一併刪掉寫法紀錄。
+- `gender_gaps.candidates`：加上以 id 指到這張卡的事實、關係、稱呼、動作的段落（`referred`）。覆核：讀場景的疑問的候選加上所有看得到的人物。提示詞 `scene_analyze`、`scene_read`（時期的用法）、`gender_gaps` 更新。
+- 測試：`tests/integration/test_unconfirmed_realrun3.py`（新，5 個；用上一版的程式都失敗）；`test_certainty.py` 2 個、`test_entities.py` 3 個、`test_unconfirmed_cards.py` 1 個改成新行為（時期不再是標籤；有時期的卡也是「可能是誰」的對象）。903 passed、5 skipped；ruff、mypy 通過。

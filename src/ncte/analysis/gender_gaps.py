@@ -42,10 +42,31 @@ def candidates(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
         for f in _forms(x):
             owners.setdefault(f, set()).add(x["id"])
     present: dict[str, set[str]] = {}
+    referred: dict[str, set[str]] = {}  # paragraphs where the reading or the memory step refers to the card by id
     for (state,) in conn.execute("SELECT state_json FROM scenes WHERE book_id=?", (book_id,)):
-        for p in json.loads(state or "{}").get("participants") or []:
+        st = json.loads(state or "{}")
+        for p in st.get("participants") or []:
             for u in p.get("evidence_unit_ids") or []:
                 present.setdefault(str(p.get("character_id")), set()).add(u)
+        for a in st.get("actions") or []:  # who does or undergoes an action the source leaves out
+            for x in [*(a.get("subject_candidates") or []), *(a.get("object_candidates") or [])]:
+                if a.get("unit_id"):
+                    referred.setdefault(str(x), set()).add(a["unit_id"])
+    for who, ev in [*((r[0], r[2]) for r in conn.execute(  # facts about the card, and relations it is in
+            "SELECT subject, object_ref, evidence_unit_ids_json FROM facts WHERE book_id=? AND retracted_by IS NULL",
+            (book_id,))), *((r[1], r[2]) for r in conn.execute(
+            "SELECT subject, object_ref, evidence_unit_ids_json FROM facts WHERE book_id=? AND retracted_by IS NULL",
+            (book_id,))), *((r[0], r[2]) for r in conn.execute(
+            "SELECT a_id, b_id, evidence_unit_ids_json FROM relation_notes WHERE book_id=?", (book_id,))),
+            *((r[1], r[2]) for r in conn.execute(
+                "SELECT a_id, b_id, evidence_unit_ids_json FROM relation_notes WHERE book_id=?", (book_id,)))]:
+        if who:
+            referred.setdefault(str(who), set()).update(json.loads(ev or "[]"))
+    for r in conn.execute("SELECT speaker_id, addressee_id, first_unit_id FROM address_terms WHERE book_id=?",
+                          (book_id,)):  # who calls (or speaks of) whom what: both are in that paragraph
+        if r[2]:
+            for who in (r[0], r[1]):
+                referred.setdefault(str(who), set()).add(r[2])
     genders = {g["character_id"]: g for g in conn.execute(
         "SELECT g.* FROM character_gender g JOIN characters c ON c.id=g.character_id WHERE c.book_id=?", (book_id,))}
     rows = conn.execute("SELECT * FROM characters WHERE book_id=? AND is_group=0 ORDER BY known_from_ordinal",
@@ -78,6 +99,9 @@ def candidates(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
         for u in present.get(c["id"], set()):
             if u in paras and ok(u):
                 how.setdefault(u, set()).add("present")
+        for u in referred.get(c["id"], set()):
+            if u in paras and ok(u):
+                how.setdefault(u, set()).add("referred")
         mentions = 0
         for uid, r in paras.items():
             if forms and ok(uid) and any(f in match_text(r["plain_text"]) for f in forms):

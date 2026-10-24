@@ -298,8 +298,9 @@ def test_a_card_for_another_time_is_named_by_the_books_words_with_its_time_as_th
     book, s1 = s["book"], s["scenes"][1]
     past = _read(conn, book, s1, s["intro"], s["line"], other_person=True, period="前世")["new_1"]
     c = _card(conn, past)
-    assert past != s["mother"] and (c["canonical_name"], c["label"], json.loads(c["aliases_json"])) == ("母親", "前世", [])
-    assert repo.card_label(c) == "母親（前世）" and not repo.may_be(c)
+    assert past != s["mother"] and (c["canonical_name"], c["period"], json.loads(c["aliases_json"])) == ("母親", "前世", [])
+    assert c["label"].isdigit() and repo.card_label(c) == "母親（前世）"
+    assert repo.may_be(c) == [s["mother"]]  # one path: maybe the present mother, until the second look answers
     assert _read(conn, book, s1, s["intro"], s["line"], other_person=True, period="前世")["new_1"] == past  # re-read
     forms = [f for x in repo.characters(conn, book.id) for f in [x["canonical_name"], *json.loads(x["aliases_json"])]]
     assert not any("前世" in f for f in forms)
@@ -317,13 +318,16 @@ def test_a_card_for_another_time_is_named_by_the_books_words_with_its_time_as_th
     payload = build_analysis_payload(conn, book.id, get_scene(conn, book.id, s["scenes"][2]["id"]), [])
     known = {x["character_id"]: x for x in payload["known_characters"]}
     assert known[past]["period"] == "前世" and "（前世）" not in json.dumps(payload, ensure_ascii=False)
-    # the present 「母親」 is still the card the words find, in the evidence or from an earlier scene
+    # 「母親」 alone finds only the present mother (never the past one: a name lookup skips labelled cards) …
+    assert repo.upsert_character(conn, book.id, "母親", name_zh=None, aliases=[], unit_id=s["intro"]["id"],
+                                 ordinal=s["intro"]["ordinal"], origin="test")[0] == s["mother"]
+    assert repo.alias_map(repo.characters(conn, book.id))["母親"] == s["mother"]
+    # … but a new person proposed by 「母親」 once both are known may be either: one path, a marked card (ADR-103)
     later = s["scenes"][2]
     unit = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? AND kind='text' ORDER BY ordinal LIMIT 1",
                         (book.id, later["id"])).fetchone()
-    assert _read(conn, book, later, unit)["new_1"] == s["mother"]
-    assert _read(conn, book, s1, s["intro"])["new_1"] == s["mother"]
-    assert not conn.execute("SELECT 1 FROM characters WHERE may_be_json!='[]'").fetchone()
+    marked = _card(conn, _read(conn, book, later, unit)["new_1"])
+    assert set(repo.may_be(marked)) == {s["mother"], past}
 
 
 def test_a_name_revealed_for_another_times_card_is_linked_from_the_reveal(conn, cfg, fixtures):

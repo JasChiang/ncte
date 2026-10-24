@@ -194,6 +194,8 @@ def _drop_alias(conn: sqlite3.Connection, book_id: str, term: str, entity_forms:
             aliases.remove(term)
             conn.execute("UPDATE characters SET aliases_json=?, updated_at=? WHERE id=?",
                          (json.dumps(aliases, ensure_ascii=False), utcnow(), cid))
+            # nor a word the card is shown by (``character_forms``)
+            conn.execute("DELETE FROM character_forms WHERE character_id=? AND form=?", (cid, term))
 
 
 def record_link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_type: str, *, origin: str,
