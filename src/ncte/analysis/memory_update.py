@@ -348,7 +348,8 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
     for rel in parsed.relations:  # relations the text states, noted while reading (ADR-045)
         ev = [u for u in rel.evidence_unit_ids if u in text_of]
         if rel.a_ref not in chars or rel.b_ref not in chars or rel.a_ref == rel.b_ref or not rel.relation.strip():
-            rej(rel.model_dump(), "relation between unknown characters")
+            rej(rel.model_dump(), "relation of a card with itself (a_ref is b_ref)" if rel.a_ref == rel.b_ref
+                else "relation between unknown characters")
             continue
         rq = source_form(rel.evidence_quote)
         if not ev or not in_source(rq, "".join(text_of[u] for u in ev)) or len(rq) < 2:

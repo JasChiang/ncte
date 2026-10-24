@@ -548,13 +548,19 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             conn.execute("UPDATE scenes SET state_json=? WHERE book_id=? AND id=?",
                          (json.dumps(state, ensure_ascii=False), book_id, sid))
             stats["questions_answered"] = stats.get("questions_answered", 0) + 1
-            # who says a line of the question's paragraphs: the answer sets that line's speaker through the speaker
-            # path (a person of the scene, the line it names — or the only one there); unknown leaves it
+            # who says (or is told) a line of the question's paragraphs: only when the answer says which it is about
+            # (``line_role``): the speaker through the speaker path, who it is said to as the line's addressee — the
+            # lines it names, or the only one there; a person of the scene; unknown, or neither, leaves them
             lines = [x["line_ref"] for x in item.get("lines") or []]
-            line = a.line_ref if a.line_ref in lines else lines[0] if len(lines) == 1 else None
-            if line and answer != "unknown" and a.character_id in item["candidates"]:
-                _set_speaker(conn, line, a.character_id, "inferred", f"second look (question): {answer[:80]} — "
-                             f"{a.reason[:120]}", stats, changed)
+            named = [x for x in dict.fromkeys([*a.line_refs, a.line_ref]) if x in lines]
+            chosen = named or (lines if len(lines) == 1 else [])
+            if a.line_role and answer != "unknown" and a.character_id in item["candidates"]:
+                note = f"second look (question): {answer[:80]} — {a.reason[:120]}"
+                for line in chosen:
+                    if a.line_role == "speaker":
+                        _set_speaker(conn, line, a.character_id, "inferred", note, stats, changed)
+                    else:
+                        _set_addressee(conn, line, a.character_id, stats)
         elif kind == "a":  # who did an action the reading inferred and gave to someone absent
             sid, _, idx = key.rpartition(":")
             sc = conn.execute("SELECT state_json FROM scenes WHERE book_id=? AND id=?", (book_id, sid)).fetchone()
@@ -669,6 +675,18 @@ def _set_speaker(conn: sqlite3.Connection, utterance_id: str, new_id: str | None
     if new_id != u["speaker_id_nullable"]:
         repo.speaker_changed_addressees(conn, utterance_id, new_id)
     repo.remove_speech_examples_for(conn, utterance_id)
+
+
+def _set_addressee(conn: sqlite3.Connection, utterance_id: str, who: str, stats: dict[str, int]) -> None:
+    """The second look's answer to who a line is said to: that person, read (``inferred``). A line whose addressee the
+    text states, or whose speaker a person set, and a line said by that person themself, are left as they are."""
+    u = conn.execute("SELECT * FROM utterances WHERE id=?", (utterance_id,)).fetchone()
+    if u is None or u["status"] == "human_verified" or u["addressee_status"] == "explicit" \
+            or u["speaker_id_nullable"] == who:
+        return
+    conn.execute("UPDATE utterances SET addressee_ids_json=?, addressee_status='inferred', updated_at=? WHERE id=?",
+                 (json.dumps([who]), utcnow(), utterance_id))
+    stats["addressees_changed"] = stats.get("addressees_changed", 0) + 1
 
 
 def _narrator_is(conn: sqlite3.Connection, book_id: str, placeholder: str, named: str) -> None:

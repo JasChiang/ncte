@@ -497,6 +497,15 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                     and _standalone(a, scene_text, [name, *existing_alias,
                                                     *(source_form(x.name_ja) for x in parsed.new_characters)])]
 
+        def _owned_word(nc: Any, evidence: list[str]) -> tuple[str, set[str]] | None:
+            """An alias of the model's in the evidence that cards seen before this scene own (any kind, a common
+            noun too), with those cards; two characters at least, as for every form."""
+            for a in dict.fromkeys(source_form(x) for x in nc.aliases_ja):
+                if _valid_name(a) and len(a) >= MIN_FORM_LEN and known_by.get(a) \
+                        and any(in_source(a, t) for t in evidence):
+                    return a, set(known_by[a])
+            return None
+
         def unconfirmed(nc: Any, name: str, first: UnitText, cards: set[str], aliases: list[str]) -> None:
             """A new person known by words several cards have: the model's ``same_as_ref`` naming one of them is the
             model's reading of who this is; otherwise a card of its own, named by the book's words, labelled to tell
@@ -543,11 +552,25 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                     stats["matched_by_words"] = stats.get("matched_by_words", 0) + 1
                     continue
                 said = _said_alias(nc, [unit_src[u] for u in ev_ids])
-                if said is None and ev_ids and len(cards) > 1 and not nc.other_person and not nc.period.strip():
+                if said is None and ev_ids and not nc.period.strip() and (len(cards) > 1 or (nc.other_person and cards)):
                     # words an earlier scene gave several people (two unnamed mothers, each 「母親」), checked where
                     # they were read: which of them this is — or someone else — is the model's call, asked in the
-                    # second look; the person gets a card of their own meanwhile, so their lines keep a speaker
+                    # second look; the person gets a card of their own meanwhile, so their lines keep a speaker. Said
+                    # to be another person of the present: the same (a mark, not a card of another time)
                     unconfirmed(nc, name, next(t for t in texts if t.id in ev_ids), cards, [])
+                    continue
+                owned = _owned_word(nc, [unit_src[u] for u in ev_ids]) if said is None and ev_ids \
+                    and not nc.period.strip() else None
+                if owned is not None:
+                    # the book's only words for this person are a word cards seen before own (「母親」: the mother's
+                    # name, the baker's other name), even one the model calls common: a marked card known by it, never
+                    # found by it (a labelled card), so it takes no one's place — the ADR-101 reason a common word
+                    # names no card (a bare 「男」 finding someone) does not apply. The model's own label for the person
+                    # is kept as its description
+                    word, word_owners = owned
+                    labels[nc.temp_id] = (name, next(t.ordinal for t in texts if t.id in ev_ids))
+                    unconfirmed(nc, word, next(t for t in texts if t.id in ev_ids and in_source(word, unit_src[t.id])),
+                                word_owners, [])
                     continue
                 if said is None:  # none of the words the person is given is in the book: the hallucination guard
                     rej(nc.model_dump(), "name_ja not found verbatim in evidence units (possible hallucination)"
@@ -576,7 +599,12 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             # cards with it are not for the program to pick between; one is the card (not one first seen later).
             # Seen by none, the cards first known later decide the same way: one is that person found earlier
             seen = known_by.get(name, set()) or owners.get(name, set())
-            if not other and len(seen) > 1:
+            # someone of the present the model says is another person than the one with these words: a marked card
+            # (asked in the second look), not a card of another time — that is for a real time (``period``)
+            present_other = nc.other_person and not nc.period.strip()
+            if present_other and not seen and name in existing_alias:
+                seen = {existing_alias[name]}
+            if (not other and len(seen) > 1) or (present_other and seen):
                 # several people known by these words: not for the program to pick between (ADR-101), and not a
                 # reason to lose the person either — a card of its own, marked as maybe one of them (ADR-103)
                 unconfirmed(nc, name, first, seen, _aliases(nc, name))
@@ -589,7 +617,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 rej(nc.model_dump(), "name_ja not found verbatim in evidence units; its words name a known character "
                                      "the model says this is not")
                 continue
-            if other and (name in existing_alias or nc.period.strip()):
+            if nc.period.strip():
                 # 「母親」 of a past life is not the mother of this one: a card of its own, named by the book's words
                 # with the model's reading of its time beside it (``period``, ADR-103), and the bare word stays with
                 # the card it had (the reader tells them apart by the cards it is given) — also when the past one is
@@ -860,6 +888,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
         if res.status == "explicit" and res.speaker_id:
             repo.add_speech_example(conn, res.speaker_id, q.unit_id, utt_id, q.text, "explicit")
             stats["examples"] += 1
+    _known_from_attributed(conn, book_id, texts, unit_src, resolutions, quotes, participants)
     narration: dict[str, Any] | None = None
     segments = (narration_segments(parsed.narration.segments, rows, ref_map)
                 if parsed is not None and parsed.narration is not None else [])
@@ -894,6 +923,38 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
     if refs is not None:
         refs.update(ref_map)
     return stats
+
+
+def _known_from_attributed(conn: sqlite3.Connection, book_id: str, texts: list[UnitText], unit_src: dict[str, str],
+                           resolutions: dict[tuple[str, int], Resolution], quotes: list[Quote],
+                           participants: list[dict[str, object]]) -> None:
+    """A card is there from the first paragraph of the scene the reading gives it — a line it speaks, or where it is
+    present — even when its card was made where its name is revealed further on (イレナ named after a line of hers):
+    known from that paragraph, under the words for it the scene has by then (「母親」); the revealed name still only from
+    where it is first seen with the card (``character_forms``, ADR-103)."""
+    at = {t.id: t.ordinal for t in texts}
+    earliest: dict[str, int] = {}
+    for q in quotes:
+        res = resolutions.get((q.unit_id, q.index))
+        if res is not None and res.speaker_id and q.unit_id in at:
+            earliest[res.speaker_id] = min(earliest.get(res.speaker_id, at[q.unit_id]), at[q.unit_id])
+    for p in participants:
+        ev = p.get("evidence_unit_ids")
+        for u in ev if isinstance(ev, list) else []:
+            if isinstance(u, str) and u in at:
+                cid = str(p["character_id"])
+                earliest[cid] = min(earliest.get(cid, at[u]), at[u])
+    for cid, ordinal in earliest.items():
+        row = conn.execute("SELECT * FROM characters WHERE id=?", (cid,)).fetchone()
+        if row is None or row["book_id"] != book_id or row["known_from_ordinal"] <= ordinal:
+            continue
+        unit = next(t for t in texts if t.ordinal == ordinal)
+        repo.hold_forms(conn, row)  # its forms stay where they were first seen with it
+        conn.execute("UPDATE characters SET known_from_unit_id=?, known_from_ordinal=?, updated_at=? WHERE id=?",
+                     (unit.id, ordinal, utcnow(), cid))
+        for form in [row["canonical_name"], *json.loads(row["aliases_json"] or "[]")]:
+            if any(in_source(form, unit_src[t.id]) for t in texts if t.ordinal <= ordinal):
+                repo.note_forms(conn, cid, [form], book_id, ordinal)  # the words it is called by there
 
 
 MAX_SEGMENTS = 6

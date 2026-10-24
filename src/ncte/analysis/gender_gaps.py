@@ -34,26 +34,56 @@ def candidates(conn: sqlite3.Connection, book_id: str) -> list[dict[str, Any]]:
     """The characters of this volume without a gender who speak or are named often enough, each with the paragraphs
     (story order) where they speak, are named or are spoken to."""
     paras = {r["id"]: r for r in read_text(conn, book_id)}
-    rows = conn.execute("SELECT * FROM characters WHERE book_id=? AND is_group=0 AND id NOT IN (SELECT character_id "
-                        "FROM character_gender) ORDER BY known_from_ordinal", (book_id,)).fetchall()
+    every = repo.characters(conn, book_id)
+    # a word other cards have too (「母親」 of three people) finds no sentence for any of them: those are found by id,
+    # where the reading gave the person a line, said a line to them or saw them present (ADR-103)
+    owners: dict[str, set[str]] = {}
+    for x in every:
+        for f in _forms(x):
+            owners.setdefault(f, set()).add(x["id"])
+    present: dict[str, set[str]] = {}
+    for (state,) in conn.execute("SELECT state_json FROM scenes WHERE book_id=?", (book_id,)):
+        for p in json.loads(state or "{}").get("participants") or []:
+            for u in p.get("evidence_unit_ids") or []:
+                present.setdefault(str(p.get("character_id")), set()).add(u)
+    genders = {g["character_id"]: g for g in conn.execute(
+        "SELECT g.* FROM character_gender g JOIN characters c ON c.id=g.character_id WHERE c.book_id=?", (book_id,))}
+    rows = conn.execute("SELECT * FROM characters WHERE book_id=? AND is_group=0 ORDER BY known_from_ordinal",
+                        (book_id,)).fetchall()
     out = []
     for c in rows:
-        forms = _forms(c)
+        # a gender read only later than the card is first there leaves the stretch before it without one: asked with
+        # sentences up to where it was read (a person's choice, or one known from the start, is no gap)
+        g = genders.get(c["id"])
+        if g is not None and (g["origin"] == "human" or g["book_id"] != book_id
+                              or g["ordinal"] <= c["known_from_ordinal"]):
+            continue
+        until = g["ordinal"] if g is not None else None
+
+        def ok(uid: str, lo: int = c["known_from_ordinal"], hi: int | None = until) -> bool:  # this stretch only
+            o = paras[uid]["ordinal"]
+            return o >= lo and (hi is None or o < hi)
+
+        forms = [f for f in _forms(c) if owners.get(f, set()) <= {c["id"]}]
         how: dict[str, set[str]] = {}
         lines = 0
         for u in conn.execute("SELECT unit_id FROM utterances WHERE book_id=? AND speaker_id_nullable=?", (book_id, c["id"])):
-            lines += 1
-            if u[0] in paras:
+            if u[0] in paras and ok(u[0]):
+                lines += 1
                 how.setdefault(u[0], set()).add("speaks")
         for u in conn.execute("SELECT unit_id, addressee_ids_json FROM utterances WHERE book_id=? AND instr("
                               "addressee_ids_json, ?) > 0", (book_id, c["id"])):
-            if c["id"] in json.loads(u[1] or "[]") and u[0] in paras:
+            if c["id"] in json.loads(u[1] or "[]") and u[0] in paras and ok(u[0]):
                 how.setdefault(u[0], set()).add("addressed")
+        for u in present.get(c["id"], set()):
+            if u in paras and ok(u):
+                how.setdefault(u, set()).add("present")
         mentions = 0
         for uid, r in paras.items():
-            if forms and any(f in match_text(r["plain_text"]) for f in forms):
+            if forms and ok(uid) and any(f in match_text(r["plain_text"]) for f in forms):
                 mentions += 1
                 how.setdefault(uid, set()).add("named")
+        forms = forms or _forms(c)  # (shown with each sentence to mark where the person is; not used to find them)
         if lines < MIN_LINES and mentions < MIN_MENTIONS:
             continue
         hits = sorted(how, key=lambda u: paras[u]["ordinal"])

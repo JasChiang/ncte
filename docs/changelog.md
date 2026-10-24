@@ -1243,3 +1243,10 @@ open workspace/eval/<timestamp>/report.html
 - `visibility.character_view`：寫法的位置只看它跟這張卡一起出現的地方（不再被名稱連結的揭曉延後），最先出現的寫法（敘述者佔位名優先、同位置時卡名優先）從卡的第一次出現起顯示；後來揭曉的名字照舊只從揭曉處顯示。
 - 覆核：讀場景自己的疑問附上段落裡的台詞（`lines`／`line_ref`），回答某人時經 `_set_speaker`（和台詞重看共用）改那句的說話者；台詞重看的候選加上場景裡說話或在場的人（`_scene_people`）。`VerifyItem.line_ref`；提示詞 `verify` 說明。
 - 測試：`test_unconfirmed_realrun.py` 新增 3 個（改之前都失敗）。889 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-103 實測二修正（2026-10-24，分支 unnamed-placeholders-2026-10-23）
+- `scene.apply_scene_analysis`：新人物原文唯一的字是看得到的卡已有的字（普通名詞也算）時走有標籤的卡（`_owned_word`），模型的稱呼記成描述；`other_person` 沒有時期時走有標籤的卡並標「可能是」，另一時期的卡只給有時期的；`_known_from_attributed`：卡從這一場第一個說話或在場的段落起就在，用那時已出現的字。
+- `gender_gaps.candidates`：段落依 id（說話、被說話、在場），共用的字不拿來找，只取卡出現後（有較晚的性別紀錄時只到那裡之前）的段落；較晚才讀到性別的卡也問。提示詞 `gender_gaps` 說明。
+- 覆核：`VerifyItem.line_role`（speaker／addressee）、`line_refs`；`_set_addressee`。提示詞 `verify` 說明。
+- 整理記憶：自己對自己的關係有自己的理由。
+- 測試：`tests/integration/test_unconfirmed_realrun2.py`（新，9 個；8 個改之前失敗，「沒有卡有的普通名詞仍不當名字」是保留的行為）；`test_entities.py` 2 個、`test_unconfirmed_realrun.py` 1 個改成新行為。898 passed、5 skipped；ruff、mypy 通過。

@@ -382,9 +382,15 @@ def test_words_of_an_earlier_card_mean_it_only_when_the_model_says_nothing_other
     assert got["matched"] == [{"ref": "new_1", "name_ja": "母親", "character_id": mother}]
     refs, got = read(name_ja="義母上")
     assert refs["new_1"] == mother
-    for other in ({"other_person": True}, {"period": "前世"}, {"other_person": True, "period": "前世"}, {"group": True}):
+    for other in ({"period": "前世"}, {"other_person": True, "period": "前世"}, {"group": True}):
         refs, got = read(name_ja="母親", **other)
         assert refs.get("new_1") != mother and not got["matched"] and got["rejected"] == 1, other
+    # someone of the present said to be another person than the card with the words: a card of their own, marked
+    # as maybe that card for the second look (ADR-103), not a card of another time
+    refs, got = read(name_ja="母親", other_person=True)
+    marked = conn.execute("SELECT * FROM characters WHERE id=?", (refs["new_1"],)).fetchone()
+    assert marked["id"] != mother and not got["matched"] and repo.may_be(marked) == [mother]
+    assert repo.period_of(marked) is None
     refs, got = read(name_ja="黒衣の男")
     assert not got["matched"] and got["rejected"] == 0 and got["unconfirmed"] == 1
     card = conn.execute("SELECT * FROM characters WHERE id=?", (refs["new_1"],)).fetchone()
@@ -423,11 +429,13 @@ def test_a_known_card_reached_through_an_alias_follows_the_models_word_on_who_it
         return refs
 
     assert read()["new_1"] == mother  # nothing said otherwise: the card with those words
-    for other in ({"period": "前世"}, {"other_person": True}):
-        got = read(**other)["new_1"]
-        assert got != mother, other
-        assert tuple(conn.execute("SELECT canonical_name, label FROM characters WHERE id=?", (got,)).fetchone()) == \
-            ("来訪者", other.get("period", "另一人"))
+    got = read(period="前世")["new_1"]
+    assert got != mother
+    assert tuple(conn.execute("SELECT canonical_name, label FROM characters WHERE id=?", (got,)).fetchone()) == \
+        ("来訪者", "前世")
+    got = read(other_person=True)["new_1"]  # another person of the present: marked, not another time (ADR-103)
+    row = conn.execute("SELECT * FROM characters WHERE id=?", (got,)).fetchone()
+    assert got != mother and row["canonical_name"] == "来訪者" and repo.may_be(row) == [mother]
     assert read(group=True).get("new_1") != mother
 
 
