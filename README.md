@@ -417,23 +417,23 @@ ncte inspect ./samples/book.epub          # 結構、單元數、會保留原文
 # 2. 翻譯（Claude 方案：先讀再翻，不收費、不設預算）
 ncte translate ./samples/book.epub --mode context
 
-# 2'. 改用 OpenRouter：確認模型與當下費率（公開 /models API，價格不寫死）→ 試算 → 正式翻譯（預算上限，超過即停止，可續跑）
+# 3. 改用 OpenRouter：確認模型與當下費率（公開 /models API，價格不寫死）→ 試算 → 正式翻譯（預算上限，超過即停止，可續跑）
 export NCTE_LLM_PROVIDER=openrouter
 ncte models --refresh --filter gemini
 ncte translate ./samples/book.epub --mode context --dry-run
 ncte translate ./samples/book.epub --mode context --model google/gemini-3.8-flash --budget-usd 12
 
-# 5. 進度、續譯（Ctrl+C 可安全中斷）
+# 4. 進度、續譯（Ctrl+C 可安全中斷）
 ncte status ./samples/book.epub
 ncte resume --run-id <run-id>                    # 可加 --budget-usd 10 提高上限
 
-# 6. 匯出、驗證、報告
+# 5. 匯出、驗證、報告
 ncte export   ./samples/book.epub --lang zh-TW   # → workspace/exports/book.zh-TW.epub（另印一行「acceptance」）
 ncte validate ./workspace/exports/book.zh-TW.epub --original ./samples/book.epub
 ncte report --run-id <run-id> --format html      # → workspace/reports/<book>/run-<id>.html
 ncte report --run-id <run-id> --reconcile        # 以 /generation 回填最終費用
 
-# 7. 只重翻部分單元（其他譯文不受影響）
+# 6. 只重翻部分單元（其他譯文不受影響）
 ncte retranslate ./samples/book.epub --unit-id u_xxxxxxxx --budget-usd 0.5
 #   --model / --reasoning-effort low|medium|high|default 可用來比較模型（default＝模型自己的預設）
 ```
@@ -535,7 +535,7 @@ ncte gui            # 開啟 http://127.0.0.1:8780/ （只有這台電腦能開�
 | 頁面或功能 | 內容 |
 |---|---|
 | 翻譯 | 上傳 EPUB；開始／暫停／繼續翻譯（各階段進度與花費）；匯出與下載 |
-| 設定 | 連線方式（Claude 方案或 OpenRouter 金鑰與餘額） |
+| 設定 | 連線方式（Claude 方案、ChatGPT 方案、Gemini API 金鑰或 OpenRouter 金鑰與餘額） |
 | 對照審稿 | 點譯文直接修改、刪除譯註。每段可展開前後各 3 段。標出模型沒把握或證據核對不過的台詞，以及覆核結果 |
 | 定名 | 看例句選譯名；同一暱稱已定的譯名 |
 | 角色檔案 | 性別與依據，可修改 |
