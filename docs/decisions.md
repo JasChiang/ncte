@@ -877,3 +877,24 @@
       - 讀場景自己的疑問的候選：這個場景的人在前，再加上到那裡為止所有看得到的人物（問的人可能不在場，例如寫信的人）。
 - 不做：標籤不當名字，所以不加在 `visible_names`、翻譯與審稿看到的說話者名字上（兩位「母親」在譯文裡本來就都是母親）；程式不比對誰像誰。
 - 限制：舊書照舊要重讀才會套用（舊書是測試資料）。定名改卡名（rename）時，新名字沒有自己的首次位置，跟著卡。定名把有標籤的卡改名後標籤還在（只影響網頁顯示）。覆核的 `same_person` 只看每張卡第一次出現前後與最多 4 句台詞的段落，判斷所需的線索在別處時模型會答 `unknown`，標記留著。
+
+## ADR-105（2026-10-24）：停用 Antigravity（agy）來源；新增直接連 Gemini API 的來源（`gemini`）
+- 背景：Google 的 Antigravity 常見問題（https://antigravity.google/docs/faq/ ，現行政策；2026-10-16 開發者論壇的回覆也說以常見問題為準，回覆者未標示身分：https://discuss.ai.google.dev/t/clarification-on-consumer-plan-policy-for-invoking-official-agy-via-local-subprocess/189905 ）說明：無頭模式 `agy -p` 只供使用者自己直接寫的腳本與 CI；把 agy 包在第三方 coding agent 或應用程式裡不受消費者方案支援，可能導致停權；第三方工具應改用 Google AI Studio 或 Gemini Enterprise 的 API 金鑰。NCTE 就是這樣的應用程式。使用者決定：停用、隱藏 agy，新增直接連 Gemini API 的來源。
+- 決定（agy）：
+  - 程式碼不刪（`llm/agy_cli.py` 與它的單元測試照舊，測試直接建 `AgyCLIClient`，不需要開發者開關）。沒有任何讓使用者打開的方式。
+  - 不再提供：`config.PROVIDERS` 拿掉 agy（`NCTE_LLM_PROVIDER=agy` 仍讀得進來，只為了網頁能說明原因）；`load_config` 不再套 `use_agy_models`；網頁連線方式沒有 agy、交叉校稿的選項沒有 agy（`CROSS_CHOICES` 改成 Gemini API）、設定頁與書庫頁遇到還設著 agy 的 `.env` 時顯示停用說明與 FAQ 連結；`set_provider("agy")`、`set_cross("agy/…")` 回 400。README 拿掉 agy 來源、加上政策說明。
+  - 選到就停：`make_client` 在建任何 client 之前檢查 `config.agy_selected`（來源是 agy、或任何步驟模型、審稿／後備模型、交叉校稿是 `agy/…`），丟出 `AGY_DISABLED`（引 FAQ 與日期、指向 Gemini API）。新的執行與續跑舊的 agy 執行都一樣，不會送出任何請求。`cli._agy_client` 與 routing 的 agy 分支拿掉。
+  - 舊紀錄：設定的 `Literal` 留著 agy，舊執行的設定照樣載入；成本報告、方案用量照舊認得 agy 的紀錄。對照校稿的預設輪數不再把 agy 當訂閱方案（反正不會執行）。
+- 決定（Gemini API，`llm/gemini.py`）：只實作 Gemini API 文件（2026-10-24 讀：`/api/generate-content`、`/api/models`、thinking、caching、api-errors、pricing、billing、api-key）寫明的：
+  - `POST v1beta/models/{model}:generateContent`，金鑰放 `x-goog-api-key` 標頭（不放網址、經 `redact` 不進紀錄；`redact` 也遮 `AIza…` 形式的字串）；`GEMINI_API_KEY`（環境變數、`.env` 或網頁設定）。步驟規則放 `systemInstruction`（第一個送出的部分：文件說隱性快取命中要相同的前綴），其他訊息放 `contents`（`user`／`model`）。
+  - 結構化輸出：`generationConfig.responseFormat.text = {mimeType: APPLICATION_JSON, schema}`。參考文件把 `responseSchema`、`_responseJsonSchema` 標為 deprecated、寫「Use responseFormat instead」，所以用 `responseFormat`；`json_object` 模式只送 `responseMimeType: application/json`。被拒（400）時照現有流程降級。
+  - 思考：步驟的推理程度 → `thinkingConfig.thinkingLevel`（MINIMAL／LOW／MEDIUM／HIGH；文件：Gemini 3 以後建議用、更早的模型會報錯）；`max:N` → `thinkingBudget`；沒設就不送（模型自己的預設）。可用的程度照模型目錄（下一項）檢查。
+  - 用量：`usageMetadata` 換成報告讀的形式：`prompt_tokens`＝`promptTokenCount`（文件：含快取的部分）、`completion_tokens`＝`candidatesTokenCount`＋`thoughtsTokenCount`（價目表：輸出價「including thinking tokens」）、`prompt_tokens_details.cached_tokens`＝`cachedContentTokenCount`、`completion_tokens_details.reasoning_tokens`＝`thoughtsTokenCount`；原始數字另存 `usage.gemini`，`modelVersion` 存 `usage.model_version`。
+  - 回答：`promptFeedback.blockReason` 或 `finishReason` 是 SAFETY、RECITATION、BLOCKLIST、PROHIBITED_CONTENT、SPII（與圖片的同類）→ `ContentBlockedError`（照現有的拆段重送、保留原文）；`PUP_LIMITED_DISABLED`（帳號被限制）→ `FatalAPIError`；`MAX_TOKENS` → `finish_reason="length"`（翻譯器照舊提高上限再問）；沒有文字 → `EmptyAnswerError`（帶用量）。`thought: true` 的部分不算答案。
+  - 錯誤：408／409／425／429／499／5xx、逾時 → 退避重試（照 `Retry-After`）；400 `FAILED_PRECONDITION`（文件：帳單等前提沒設好）與 401／402／403／404 → `FatalAPIError` 停下；其他 400／413／422 → `RequestRejectedError`。
+  - 模型目錄與價格：`models.list`（分頁、只取支援 `generateContent` 的）列出這把金鑰能用的模型，id 是 `gemini/<模型>`。Gemini API 不回報價格：每個模型的價格取 OpenRouter 公開 `/models` 上的 `google/<模型>`（不送任何金鑰給 OpenRouter，同 fal 的做法），可用參數與推理程度也取那一筆；Gemini 的 `thinking` 是 false 就拿掉 reasoning。OpenRouter 沒有列的模型沒有價格（`pricing_missing`），執行與試算都拒絕並說明原因（費用未知，預算擋不住）；不寫死任何價格。OpenRouter 的價目讀不到時所有模型都沒有價格，記在 notes。
+  - 費用：回應沒有費用，照 Google 回報的 token × 那份價格估算（`estimated_from_tokens`）；快取讀到的 token 照快取價（`Pricing.cost(cached_tokens=)`，目錄有 `input_cache_read` 時；其他來源沒有回報費用時同樣適用）。試算說明寫明價格來源；有過去執行時，Gemini API 的校準也採用這種估算的紀錄（只限這個來源）。預算、試算、續跑與 OpenRouter 相同；沒有餘額查詢、沒有 `/generation` 補查。
+  - 設定：`provider: gemini`、`use_gemini_models`（非 `gemini/` 的 API 模型 id 換成 `GEMINI_MODEL`＝`gemini/gemini-3.8-flash`：文件的模型頁、thinking 與 caching 頁列為現行的 Flash，也和 OpenRouter 的預設同一個模型；其他來源前綴的步驟模型保留，agy 的拿掉）。`gemini/` 加進 `ROUTED_PREFIXES`：其他來源的執行可以把某一步（例如交叉校稿）交給 Gemini API。對照校稿預設一輪（付費來源）。
+  - 網頁：連線方式「Gemini API（Google AI Studio 金鑰）」；金鑰欄（只存 `.env`，畫面只顯示末四碼）、取得金鑰與帳單的步驟（AI Studio 金鑰頁、Google 說明的預付最少 US$5、免費方案的資料使用說明）、估價用 OpenRouter 公開價目的說明；交叉校稿在有 Gemini 金鑰時可選 Gemini API。
+- 沒做（文件有、這次不需要）：顯式快取（建立快取物件有儲存費用；隱性快取已自動折扣）、Interactions API、串流、Batch／Flex。
+- 限制：沒有金鑰、沒有實測（使用者沒有同意花費）：請求格式、`responseFormat`、思考程度、錯誤格式都只照文件並以 MockTransport 測。文件現在多以 Interactions API 示範，generateContent 參考頁的 `responseJsonSchema` 說明自相矛盾，第一次實測要先確認 `responseFormat` 被接受。OpenRouter 的價目與 Google 的實際價格可能不同（Google 價目表寫明 gemini-3.8-flash 從 2027-01-01 起價格加倍；OpenRouter 何時跟上不知道），所以估價與花費只是參考，以 Google 帳單為準。預設模型是固定的 id，不會自己換成 models.list 上更新的 Flash。

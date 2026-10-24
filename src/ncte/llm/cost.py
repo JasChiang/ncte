@@ -46,8 +46,10 @@ class Pricing:
         prompt = f("prompt")
         completion = f("completion")
         if prompt is None or completion is None or prompt < 0 or completion < 0:
-            # OpenRouter uses -1 for "variable" pricing (routers). We refuse to guess.
-            raise FatalAPIError(f"Model {m.get('id')} has no fixed per-token pricing; choose an explicit model")
+            # OpenRouter uses -1 for "variable" pricing (routers); a Gemini API model OpenRouter does not list has no
+            # price at all (ADR-105). We refuse to guess.
+            raise FatalAPIError(str(m.get("pricing_missing") or
+                                    f"Model {m.get('id')} has no fixed per-token pricing; choose an explicit model"))
         r = m.get("reasoning") or {}
         return cls(m["id"], prompt, completion, f("internal_reasoning") or completion, f("input_cache_read"),
                    m.get("context_length"), tuple(m.get("supported_parameters") or ()),
@@ -56,9 +58,13 @@ class Pricing:
     def per_million(self) -> tuple[float, float]:
         return self.prompt * 1e6, self.completion * 1e6
 
-    def cost(self, prompt_tokens: int, completion_tokens: int, reasoning_tokens: int = 0) -> float:
-        # OpenRouter's completion_tokens already include reasoning tokens.
-        return prompt_tokens * self.prompt + completion_tokens * self.completion
+    def cost(self, prompt_tokens: int, completion_tokens: int, reasoning_tokens: int = 0,
+             cached_tokens: int = 0) -> float:
+        # OpenRouter's completion_tokens already include reasoning tokens. ``cached_tokens`` (part of prompt_tokens)
+        # are read from the cache: at the cache-read price when the catalog gives one, else at the input price
+        cached = min(max(cached_tokens, 0), prompt_tokens) if self.cache_read is not None else 0
+        return ((prompt_tokens - cached) * self.prompt + cached * (self.cache_read or 0.0)
+                + completion_tokens * self.completion)
 
     @property
     def structured_mode(self) -> str:
@@ -83,7 +89,8 @@ def estimate_request_cost(pricing: Pricing, prompt_text: str, expected_output_ch
 
 def save_snapshot(conn: sqlite3.Connection, models: list[dict[str, Any]], source: str) -> None:
     slim = [{k: m.get(k) for k in ("id", "name", "pricing", "context_length", "supported_parameters",
-                                    "canonical_slug", "reasoning")} for m in models]
+                                    "canonical_slug", "reasoning", "price_source", "pricing_missing")
+             if k in m or k not in ("price_source", "pricing_missing")} for m in models]
     conn.execute("INSERT INTO model_snapshots(fetched_at, source, models_json) VALUES (?,?,?)",
                  (utcnow(), source, json.dumps(slim, ensure_ascii=False)))
 

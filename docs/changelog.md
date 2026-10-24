@@ -1256,3 +1256,11 @@ open workspace/eval/<timestamp>/report.html
 - `_known_from_attributed`：卡的第一次出現往前移時，記下模型在這一場給它、那時已出現的字（顯示用，`character_forms`）；`visibility.form_positions` 的第三項改為每張卡的寫法表，`character_view` 把顯示用的寫法也列入；`entities._drop_alias` 一併刪掉寫法紀錄。
 - `gender_gaps.candidates`：加上以 id 指到這張卡的事實、關係、稱呼、動作的段落（`referred`）。覆核：讀場景的疑問的候選加上所有看得到的人物。提示詞 `scene_analyze`、`scene_read`（時期的用法）、`gender_gaps` 更新。
 - 測試：`tests/integration/test_unconfirmed_realrun3.py`（新，5 個；用上一版的程式都失敗）；`test_certainty.py` 2 個、`test_entities.py` 3 個、`test_unconfirmed_cards.py` 1 個改成新行為（時期不再是標籤；有時期的卡也是「可能是誰」的對象）。903 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-105：停用 agy、新增 Gemini API 來源（2026-10-24，分支 gemini-api-2026-10-24）
+- 停用 agy（政策見 ADR-105）：`config.AGY_DISABLED`、`agy_selected`；`PROVIDERS` 拿掉 agy、加 gemini；`make_client` 遇到 agy（來源、步驟模型、交叉校稿）在建 client 前停下；`cli._agy_client` 拿掉；網頁連線方式、交叉校稿選項沒有 agy，還設著 agy 時顯示停用說明；dry-run 的 agy 說明拿掉。`llm/agy_cli.py` 與 `test_agy_cli.py` 保留。
+- Gemini API：`llm/gemini.py`（`GeminiClient`：generateContent、responseFormat、thinkingLevel／thinkingBudget、usageMetadata、重試、內容審查、空答案、models.list＋OpenRouter 公開價目）；`config.GEMINI_MODEL`、`use_gemini_models`、`key_name`（`GEMINI_API_KEY`）、`redact` 遮 Google 金鑰；`cli._gemini_client` 與 `gemini/` 路由；`Pricing.cost(cached_tokens=)`、`Pricing.from_model_json` 對沒有價格的模型說明原因；`DbRecorder.success` 估價算快取；試算說明與 Gemini 的歷史校準；網頁連線方式、金鑰、說明、交叉校稿選項；`.env.example`、`config.example.yaml`。
+- README：來源清單拿掉 agy、加 Gemini API 與 agy 停用的說明（FAQ 連結、日期）；網頁用法、模型、安裝、隱私、已知限制、專案結構都更新。agy 的整本實測結果**留在〈測試結果〉並標為歷史紀錄**（是 Gemini Flash 在這套流程上的唯一整本資料），「時間與費用」裡的 agy 一行拿掉（不是可選的來源了）。
+- 測試：新增 `tests/unit/test_gemini.py`（37：請求形狀、結構化輸出、思考程度對應、用量含思考與快取、思考部分不算答案、429／5xx 重試與 Retry-After、放棄、不重試的錯誤、金鑰不進錯誤訊息、提示被擋、候選被擋、帳號受限、空答案、MAX_TOKENS、沒有金鑰、目錄與分頁、OpenRouter 不收任何金鑰、沒有價格就拒絕、價目讀不到、resolve_pricing 與快照、快取價、環境設定、make_client 與路由、agy 在三處都停下）；`test_agy_cli.py` 改成 CLI 不會建 agy；`test_gui_manage.py` 交叉校稿改 Gemini API、新增 Gemini 金鑰與 agy 停用的網頁測試。全部離線（MockTransport），沒有呼叫任何模型或 API。
+- 重現：`PYTHONPATH=src pytest`、`ruff check src tests`、`mypy src`。
+- 限制：沒有金鑰、沒有線上實測；見 ADR-105。

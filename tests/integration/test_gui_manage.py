@@ -247,18 +247,22 @@ def test_cross_proofreading_is_off_until_chosen_and_offers_only_tools_found_here
     call, app, _, _ = site
     monkeypatch.setenv("NCTE_LLM_PROVIDER", "openrouter")
     monkeypatch.setenv("NCTE_CROSS_PROOFREAD", "off")  # restored after the test (the server writes it)
-    fake_agy = tmp_path / "agy"
+    fake_agy = tmp_path / "agy"  # found on this computer, still never offered (ADR-105)
     fake_agy.write_text("#!/bin/sh\n", encoding="utf-8")
     fake_agy.chmod(0o755)
     monkeypatch.setenv("NCTE_AGY_BIN", str(fake_agy))
     monkeypatch.setenv("NCTE_CODEX_BIN", str(tmp_path / "no-codex"))
     monkeypatch.setenv("NCTE_CLAUDE_BIN", str(tmp_path / "no-claude"))
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     app.ws.cfg.review.cross_proofread_model = None
+    assert call("/api/settings")[1]["cross"]["options"] == []  # no Gemini key, no tool found
+    monkeypatch.setenv("GEMINI_API_KEY", "AIza" + "k" * 35)
     cross = call("/api/settings")[1]["cross"]
-    assert cross["model"] is None and [o["model"] for o in cross["options"]] == ["agy/gemini-flash"]
+    assert cross["model"] is None and [o["model"] for o in cross["options"]] == ["gemini/gemini-3.8-flash"]
     assert call("/api/settings/cross", {"model": "codex/gpt-6.1-sol"})[0] == 400  # not found here
-    assert call("/api/settings/cross", {"model": "agy/gemini-flash"})[1]["model"] == "agy/gemini-flash"
-    assert app.ws.cfg.review.cross_proofread_model == "agy/gemini-flash"
+    assert call("/api/settings/cross", {"model": "agy/gemini-flash"})[0] == 400  # never offered
+    assert call("/api/settings/cross", {"model": "gemini/gemini-3.8-flash"})[1]["model"] == "gemini/gemini-3.8-flash"
+    assert app.ws.cfg.review.cross_proofread_model == "gemini/gemini-3.8-flash"
     assert call("/api/settings/cross", {"model": ""})[1]["model"] is None
 
 
@@ -266,7 +270,31 @@ def test_the_cross_setting_is_read_from_the_environment(monkeypatch, tmp_path):
     from ncte.config import load_config
 
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("NCTE_CROSS_PROOFREAD", "agy/gemini-flash")
-    assert load_config().review.cross_proofread_model == "agy/gemini-flash"
+    monkeypatch.setenv("NCTE_CROSS_PROOFREAD", "gemini/gemini-3.8-flash")
+    assert load_config().review.cross_proofread_model == "gemini/gemini-3.8-flash"
     monkeypatch.setenv("NCTE_CROSS_PROOFREAD", "off")
     assert load_config().review.cross_proofread_model is None
+
+
+def test_the_gemini_api_takes_a_google_ai_studio_key_and_agy_is_not_offered(site, monkeypatch):
+    from ncte.config import DEFAULT_MODEL, GEMINI_MODEL
+
+    call, app, _, tmp = site
+    monkeypatch.setenv("NCTE_LLM_PROVIDER", "openrouter")  # restored after the test (the server writes it)
+    monkeypatch.setenv("GEMINI_API_KEY", "")
+    out = call("/api/settings/provider", {"provider": "gemini"})[1]
+    assert out["provider"] == "gemini" and not out["set"]
+    assert app.ws.cfg.openrouter.model == GEMINI_MODEL
+    assert call("/api/settings/key", {"key": "not a key"})[0] == 400
+    key = "AIza" + "g" * 35
+    st, out = call("/api/settings/key", {"key": key})
+    assert st == 200 and out["set"] and out["hint"] == "…gggg" and key not in json.dumps(call("/api/settings")[1])
+    env = (tmp / ".env").read_text()
+    assert f"GEMINI_API_KEY={key}" in env and "OPENROUTER_API_KEY" not in env
+    # agy: never chosen here; a connection still set to it says why
+    assert call("/api/settings/provider", {"provider": "agy"})[0] == 400
+    app.ws.cfg.openrouter.provider = "agy"
+    s = call("/api/settings")[1]
+    assert s["provider"] == "agy" and not s["set"] and "Gemini API" in s["disabled"]
+    assert call("/api/settings/provider", {"provider": "openrouter"})[0] == 200
+    assert app.ws.cfg.openrouter.model == DEFAULT_MODEL
