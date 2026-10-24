@@ -852,6 +852,12 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             stats["human_kept"] += 1
             resolutions[uid_key] = Resolution(old["speaker_id_nullable"], "human_verified", "human")
             continue
+        if parsed is not None and uid_key not in claims and not res.speaker_id and q.continuation_of is None:
+            # a line the reading said nothing about, also when asked again: for the second look (ADR-103 實測四)
+            from .speaker import TO_LOOK_AT
+
+            res.notes = [*res.notes, f"no answer from the reading {TO_LOOK_AT}"]
+            stats["unanswered_lines"] = stats.get("unanswered_lines", 0) + 1
         resolutions[uid_key] = res
         stats[res.status] += 1
         cont = repo.utterance_id_for(*q.continuation_of) if q.continuation_of else None

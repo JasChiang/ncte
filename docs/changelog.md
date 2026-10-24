@@ -1269,3 +1269,8 @@ open workspace/eval/<timestamp>/report.html
 - `scene.apply_scene_analysis` 的其他寫法：別的卡已有的寫法照收（每張卡從模型給它的位置起有，`character_forms`），這種寫法不建名稱連結、不改 `alias_map` 原本的卡；拿掉「這個寫法已經是別的人物的」拒絕。
 - `address.name_forms(upto)`：只看在那個位置看得到的寫法；`entities.character_for_form`：幾張卡有這個寫法就回 None。
 - 測試：`tests/integration/test_form_changes_meaning.py`（新，1 個；改之前失敗）。943 passed、5 skipped；ruff、mypy 通過。合併了 main（ADR-105）。
+
+## ADR-103 實測四修正（2026-10-24，分支 unnamed-placeholders-2026-10-23）
+- `memory_update`：帶 `character_ref` 的名稱連結只在 `same_as` 的字正好只屬於那張卡時才連實體（`_owners_of`），否則只給那張卡寫法。
+- `ContextOrchestrator._fill_missing_lines`：讀場景（含一次讀完）沒回答的台詞再問一次（`only_quotes`）；`apply_scene_analysis`：仍沒回答的台詞記「(to look at)」交覆核。提示詞 `scene_analyze`、`scene_read`：每一句都要回答，`only_quotes` 的補問。`FakeLLM(complete_lines=True)` 預設每句都回答。
+- 測試：`tests/integration/test_unconfirmed_realrun4.py`（新，2 個；改之前都失敗）。945 passed、5 skipped；ruff、mypy 通過。

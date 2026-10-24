@@ -122,6 +122,12 @@ def forget_scene(conn: sqlite3.Connection, book_id: str, sid: str, *, summaries:
         conn.execute("DELETE FROM memory_rejections WHERE book_id=? AND scene_id=?", (book_id, sid))
 
 
+def _owners_of(chars: dict[str, Any], words: str) -> set[str]:
+    """The cards that have these words as their name or an alias."""
+    return {cid for cid, c in chars.items()
+            if words and (words == c["canonical_name"] or words in json.loads(c["aliases_json"] or "[]"))}
+
+
 def _card_for(conn: sqlite3.Connection, book_id: str, term: str, ref: str, chars: dict[str, Any], unit_id: str,
               ordinal: int, *, also: str = "") -> tuple[str | None, str | None]:
     """Which card a person's name the memory step reports belongs to (ADR-103): (card or None, reason it cannot be
@@ -271,6 +277,12 @@ def apply_memory_update(conn: sqlite3.Connection, book_id: str, scene: sqlite3.R
         if who is not None and not repo.findable(chars.get(who) or conn.execute(
                 "SELECT * FROM characters WHERE id=?", (who,)).fetchone()):
             stats["name_links"] += 1  # the form is that card's now (by id); the entity named by the words is not it
+            continue
+        if who is not None and nl.character_ref and _owners_of(chars, same_as) != {who}:
+            # the link is about the card the model named: the form is that card's (above). The entity the words
+            # 「母親」 name is another card's (the present mother's) or several cards': joining it would move the form
+            # — and the card itself, through the entity — onto someone else (ADR-103 實測四)
+            stats["name_links"] += 1
             continue
         if link(conn, book_id, term, same_as, nl.form_type, origin="llm", unit_id=first,
                 quote=source_form(nl.evidence_quote), ordinal=ordinal[first], note=nl.note[:200] or None) == "accepted":

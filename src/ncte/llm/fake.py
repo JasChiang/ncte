@@ -202,13 +202,29 @@ DEFAULTS: dict[str, Responder] = {
 }
 
 
+def _answer_every_line(payload: dict[str, Any], out: dict[str, Any]) -> None:
+    """The lines of the request the answer says nothing about, answered ``unknown`` (the rest of a speech follows its
+    start and is not answered on its own)."""
+    if not isinstance(out, dict) or not isinstance(out.get("utterances"), list):
+        return
+    got = {(u.get("unit_id"), u.get("quote_index", u.get("qi"))) for u in out["utterances"] if isinstance(u, dict)}
+    for q in payload.get("quotes") or []:
+        if (q["unit_id"], q["quote_index"]) not in got and not q.get("continues_previous_quote"):
+            out["utterances"].append({"unit_id": q["unit_id"], "quote_index": q["quote_index"],
+                                      "speaker_candidates": [], "resolution_status": "unknown", "speaker_ref": None,
+                                      "contradictions": []})
+
+
 class FakeLLM:
     name = "fake"
 
     def __init__(self, *, models: list[str] | None = None, responders: dict[str, Responder] | None = None,
                  faults: dict[str, list[str]] | None = None, structured: bool = True,
-                 blocked_terms: list[str] | None = None, temperature: bool = True):
+                 blocked_terms: list[str] | None = None, temperature: bool = True, complete_lines: bool = True):
         self.temperature = temperature
+        # a reading answers every line it is given, as the prompt asks (``unknown`` for one it cannot tell); a test of
+        # a reading that leaves lines out turns this off
+        self.complete_lines = complete_lines
         self.models = models or ["google/gemini-3.8-flash", "fake/model"]
         self.responders = {**DEFAULTS, **(responders or {})}
         self.faults = {k: list(v) for k, v in (faults or {}).items()}
@@ -265,6 +281,8 @@ class FakeLLM:
                                                                                  for m in req.messages),
                                                           "completion_tokens": 40}, latency_ms=7)
         data = self.responders[stage](payload, req)
+        if self.complete_lines and stage in ("scene_analyze", "scene_read"):
+            _answer_every_line(payload, data.get("analysis", data) if stage == "scene_read" else data)
         if stage == "translate" and data.get("translations"):
             tr = data["translations"]
             if fault == "missing_id":
