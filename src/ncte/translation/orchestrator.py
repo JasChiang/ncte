@@ -868,12 +868,18 @@ class Orchestrator:
         with self.lock, Transaction(self.conn):
             got = follow_headings(self.conn, self.book.id, run_id=self.run_id,
                                   meta=self.opts.include_meta and self.cfg.export.translate_nav_titles)
-            # a title whose copy was taken off is translated for itself now, though its job was skipped for the copy
-            # (a book-matter entry has its own translation from its scene to fall back to)
-            self.conn.executemany(
-                "UPDATE jobs SET status='pending', updated_at=? WHERE run_id=? AND stage='translate' AND target_id=? "
-                f"AND status='skipped' AND (SELECT kind FROM units WHERE id=?) IN ({','.join('?' * len(META_KINDS))})",
-                [(utcnow(), self.run_id, u, u, *META_KINDS) for u in got["dropped"]])
+            # a title that follows no heading now and has no text of its own that counts (its copy was taken off, in
+            # this run, an earlier one or an export) is translated for itself, however its job was settled before
+            settled = self.conn.execute(
+                "SELECT u.* FROM jobs j JOIN units u ON u.id=j.target_id WHERE j.run_id=? AND j.stage='translate' AND "
+                f"j.status IN ('skipped','succeeded') AND u.kind IN ({','.join('?' * len(META_KINDS))})",
+                (self.run_id, *META_KINDS)).fetchall()
+            again = [r["id"] for r in settled if r["id"] not in got["followed"] and not is_cached(
+                latest_translation(self.conn, r["id"], r["source_hash"]), prompt_version=self.prompt.version_id,
+                model=self.model, mode=self.opts.mode,
+                gl_hash=glossary_hash(relevant_glossary(self.glossary, r["plain_text"])))]
+            self.conn.executemany("UPDATE jobs SET status='pending', updated_at=? WHERE run_id=? AND stage='translate' "
+                                  "AND target_id=?", [(utcnow(), self.run_id, u) for u in again])
             meta_rows = self.pending_rows(meta=True)
             # a book-matter entry is a body unit (translated with its scene); a title waiting is taken from its heading
             self.conn.executemany("UPDATE jobs SET status='succeeded', checkpoint_json=?, updated_at=? WHERE "
@@ -882,8 +888,8 @@ class Orchestrator:
                                    for r in meta_rows if r["id"] in got["followed"]])
         if got["written"]:
             self.log(f"TOC/title: {got['written']} entries follow their chapter heading")
-        if got["dropped"]:
-            self.log(f"TOC/title: {len(got['dropped'])} entries no longer clearly match a heading and keep their own text")
+        if again:
+            self.log(f"TOC/title: {len(again)} entries no longer follow a heading and are translated for themselves")
         rest = [r for r in meta_rows if r["id"] not in got["followed"]]
         if rest:
             self.run_batches(make_batches(rest, self.cfg.translation.unit_target_japanese_chars))

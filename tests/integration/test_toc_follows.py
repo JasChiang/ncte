@@ -233,3 +233,80 @@ def test_a_title_whose_copy_is_dropped_is_translated_again(conn, cfg, toc_book):
         job = conn.execute("SELECT status FROM jobs WHERE run_id=? AND stage='translate' AND target_id=?",
                            (rid2, r["id"])).fetchone()
         assert job["status"] == "succeeded"
+
+
+def _ambiguous(conn, book_id):
+    """Give the bonus heading 第一章's source and another Chinese: the NAV / NCX labels of 第一章 no longer follow."""
+    ch1 = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='heading' AND plain_text=?", (book_id, CH1)).fetchone()
+    bonus = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='heading' AND plain_text=?",
+                         (book_id, BONUS)).fetchone()
+    conn.execute("UPDATE units SET plain_text=?, source_text=?, source_hash=? WHERE id=?",
+                 (CH1, CH1, ch1["source_hash"], bonus["id"]))
+    apply_human_edit(conn, book_id, bonus["id"], "第一章　另一種譯法")
+    return conn.execute("SELECT * FROM units WHERE book_id=? AND kind IN ('nav','ncx') AND plain_text=?",
+                        (book_id, CH1)).fetchall()
+
+
+def _own(conn, r):
+    tr = latest_translation(conn, r["id"], r["source_hash"])
+    return tr is not None and not (tr["context_hash"] or "").startswith("heading:")
+
+
+def test_a_title_taken_off_its_heading_is_translated_however_its_job_was_settled(conn, cfg, toc_book, tmp_path):
+    """Codex review (third round): the copy taken off by an export while the run is paused, and a title whose job
+    succeeded by the copy, are translated for themselves when the run goes on."""
+    from ncte.translation.orchestrator import RunOptions, create_run
+
+    from ..helpers import orchestrator_for
+
+    book, rid, s = run_book(conn, cfg, toc_book, FakeLLM(responders=RESPONDERS), mode="context")
+    assert s.status == "completed"
+    # a second run whose jobs are made (the titles skipped for their copies), then paused
+    fake = FakeLLM(responders=RESPONDERS)
+    opts = RunOptions(model=cfg.openrouter.model, client="fake", mode="context")
+    rid2 = create_run(conn, cfg, book, opts)
+    orch = orchestrator_for(conn, cfg, book, rid2, opts, fake)
+    orch.prepare()
+    orch.ensure_jobs()
+    labels = _ambiguous(conn, book.id)
+    assert {conn.execute("SELECT status FROM jobs WHERE run_id=? AND stage='translate' AND target_id=?",
+                         (rid2, r["id"])).fetchone()[0] for r in labels} == {"skipped"}
+    export_book(conn, cfg, book, output=tmp_path / "out.epub", run_epubcheck=False)  # takes the copies off
+    assert not any(_own(conn, r) for r in labels)
+    assert resume_run(conn, cfg, rid2, fake).status == "completed"
+    assert all(_own(conn, r) for r in labels)
+
+
+def test_a_title_whose_job_succeeded_by_its_copy_is_translated_on_resume(conn, cfg, toc_book):
+    book, rid, s = run_book(conn, cfg, toc_book, FakeLLM(responders=RESPONDERS), mode="context")
+    assert s.status == "completed"
+    labels = _ambiguous(conn, book.id)
+    assert {conn.execute("SELECT status FROM jobs WHERE run_id=? AND stage='translate' AND target_id=?",
+                         (rid, r["id"])).fetchone()[0] for r in labels} == {"succeeded"}
+    assert resume_run(conn, cfg, rid, FakeLLM(responders=RESPONDERS)).status == "completed"
+    assert all(_own(conn, r) for r in labels)
+
+
+def test_a_person_edited_title_is_not_sent_again_when_its_old_copy_is_taken_off(conn, cfg, toc_book):
+    from ncte.translation.orchestrator import RunOptions, create_run
+
+    from ..helpers import orchestrator_for
+
+    book, rid, s = run_book(conn, cfg, toc_book, FakeLLM(responders=RESPONDERS), mode="context")
+    labels = conn.execute("SELECT * FROM units WHERE book_id=? AND kind IN ('nav','ncx') AND plain_text=?",
+                          (book.id, CH1)).fetchall()
+    for r in labels:
+        apply_human_edit(conn, book.id, r["id"], "⟦1⟧第一章　人工⟦/1⟧" if r["source_text"].startswith("⟦1⟧") else
+                         "第一章　人工")
+    _ambiguous(conn, book.id)
+    fake = FakeLLM(responders=RESPONDERS)
+    opts = RunOptions(model=cfg.openrouter.model, client="fake", mode="context")
+    rid2 = create_run(conn, cfg, book, opts)
+    assert orchestrator_for(conn, cfg, book, rid2, opts, fake).run().status == "completed"
+    for r in labels:
+        assert conn.execute("SELECT status FROM jobs WHERE run_id=? AND stage='translate' AND target_id=?",
+                            (rid2, r["id"])).fetchone()[0] == "skipped"
+        assert "人工" in _text(conn, r)
+    sent = {u for (j,) in conn.execute("SELECT unit_ids_json FROM llm_requests WHERE run_id=? AND stage='translate'",
+                                        (rid2,)) for u in __import__("json").loads(j or "[]")}
+    assert not sent & {r["id"] for r in labels}
