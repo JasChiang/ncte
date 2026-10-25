@@ -310,3 +310,21 @@ def test_a_person_edited_title_is_not_sent_again_when_its_old_copy_is_taken_off(
     sent = {u for (j,) in conn.execute("SELECT unit_ids_json FROM llm_requests WHERE run_id=? AND stage='translate'",
                                         (rid2,)) for u in __import__("json").loads(j or "[]")}
     assert not sent & {r["id"] for r in labels}
+
+
+def test_a_title_waiting_again_and_edited_by_a_person_is_not_sent(conn, cfg, toc_book):
+    """Codex review (fourth round): a title put back to wait (its copy taken off) and then written by a person
+    before the run goes on is not sent to the model."""
+    book, rid, s = run_book(conn, cfg, toc_book, FakeLLM(responders=RESPONDERS), mode="context")
+    labels = _ambiguous(conn, book.id)
+    conn.executemany("UPDATE jobs SET status='pending' WHERE run_id=? AND stage='translate' AND target_id=?",
+                     [(rid, r["id"]) for r in labels])  # as a resume stopped by the budget leaves them
+    for r in labels:
+        apply_human_edit(conn, book.id, r["id"], "⟦1⟧第一章　人工⟦/1⟧" if r["source_text"].startswith("⟦1⟧") else
+                         "第一章　人工")
+    n = conn.execute("SELECT COUNT(*) FROM llm_requests WHERE run_id=?", (rid,)).fetchone()[0]
+    assert resume_run(conn, cfg, rid, FakeLLM(responders=RESPONDERS)).status == "completed"
+    sent = {u for (j,) in conn.execute("SELECT unit_ids_json FROM llm_requests WHERE run_id=? AND stage='translate' "
+                                        "AND id>?", (rid, n)) for u in __import__("json").loads(j or "[]")}
+    assert not sent & {r["id"] for r in labels}
+    assert all("人工" in _text(conn, r) for r in labels)

@@ -868,18 +868,30 @@ class Orchestrator:
         with self.lock, Transaction(self.conn):
             got = follow_headings(self.conn, self.book.id, run_id=self.run_id,
                                   meta=self.opts.include_meta and self.cfg.export.translate_nav_titles)
-            # a title that follows no heading now and has no text of its own that counts (its copy was taken off, in
-            # this run, an earlier one or an export) is translated for itself, however its job was settled before
-            settled = self.conn.execute(
-                "SELECT u.* FROM jobs j JOIN units u ON u.id=j.target_id WHERE j.run_id=? AND j.stage='translate' AND "
-                f"j.status IN ('skipped','succeeded') AND u.kind IN ({','.join('?' * len(META_KINDS))})",
-                (self.run_id, *META_KINDS)).fetchall()
-            again = [r["id"] for r in settled if r["id"] not in got["followed"] and not is_cached(
-                latest_translation(self.conn, r["id"], r["source_hash"]), prompt_version=self.prompt.version_id,
-                model=self.model, mode=self.opts.mode,
-                gl_hash=glossary_hash(relevant_glossary(self.glossary, r["plain_text"])))]
+            # by state, not by what happened: a title of this run that follows no heading is translated for itself
+            # when it has no text that counts now (its copy taken off in this run, an earlier one or an export), and
+            # is not sent when it has one (a person's text written while it waited), however its job stood before
+            jobs = self.conn.execute(
+                "SELECT u.*, j.status AS job_status FROM jobs j JOIN units u ON u.id=j.target_id WHERE j.run_id=? AND "
+                f"j.stage='translate' AND j.status IN ('pending','skipped','succeeded') AND u.kind IN "
+                f"({','.join('?' * len(META_KINDS))})", (self.run_id, *META_KINDS)).fetchall()
+            again, done = [], []
+            reuse = not self.opts.force and self.cfg.translation.skip_already_translated  # as ensure_jobs
+            for r in jobs:
+                if r["id"] in got["followed"]:
+                    continue
+                tr = latest_translation(self.conn, r["id"], r["source_hash"])
+                has = is_cached(tr, prompt_version=self.prompt.version_id, model=self.model, mode=self.opts.mode,
+                                gl_hash=glossary_hash(relevant_glossary(self.glossary, r["plain_text"])))
+                if has and r["job_status"] == "pending" and reuse:
+                    done.append((json.dumps({"reused_translation_id": tr["id"]}), r["id"]))  # type: ignore[index]
+                elif not has and r["job_status"] != "pending":
+                    again.append(r["id"])
             self.conn.executemany("UPDATE jobs SET status='pending', updated_at=? WHERE run_id=? AND stage='translate' "
                                   "AND target_id=?", [(utcnow(), self.run_id, u) for u in again])
+            self.conn.executemany("UPDATE jobs SET status='skipped', checkpoint_json=?, updated_at=? WHERE run_id=? "
+                                  "AND stage='translate' AND target_id=?",
+                                  [(cp, utcnow(), self.run_id, u) for cp, u in done])
             meta_rows = self.pending_rows(meta=True)
             # a book-matter entry is a body unit (translated with its scene); a title waiting is taken from its heading
             self.conn.executemany("UPDATE jobs SET status='succeeded', checkpoint_json=?, updated_at=? WHERE "
