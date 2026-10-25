@@ -1320,3 +1320,10 @@ open workspace/eval/<timestamp>/report.html
 - fix_check 實測（Claude 方案 Opus，資料庫複本，舊／新提示詞）：結果與用量見 ADR-106。葬列在 Opus 上新舊都 `fixed`（原本拒絕的是 Codex，未在 Codex 上重測：該方案在 5 小時上限）；銀河鉄道の夜被拒絕的三個同形詞修正新舊都 `issue_invalid`，看理由判得對（臺灣中文本來就這樣說）。
 - 未重跑說話者 A/B（交由主線決定）。ADR-104 A/B 的 state 兩個 arm 的場面當時都會被丟掉（本 ADR 第 1 點），結論需重看。
 - 測試結果：972 passed、5 skipped（EPUBCheck 不在 worktree；指定 `EPUBCHECK_JAR` 後 `test_roundtrip.py` 13 passed）；ruff、mypy 通過。
+
+## ADR-106 審閱修正與 Codex 實測（2026-10-25，分支 situation-toc-fixcheck-2026-10-24）
+- Codex 審閱（`codex exec -s read-only`，main...7d73848）兩個 P2，都修了：
+  - `headings.heading_texts`：不翻的標題也列入，算沒有譯文（同原文的另一個標題不再被抄到目次）。
+  - `headings.follow_headings`：不再明確對上標題的項目，抄本改 `unfollowed`（回傳 `dropped`）；`run_meta` 記一行。
+- 葬列 fix_check 在 Codex 上重測（資料庫複本、照原請求兩個修正一起問）：舊提示詞 1/3 `fixed`，新提示詞 3/3 `fixed`。腳本與答案在 `workspace/exp/adr106/fixcheck-codex/`（不在 repo）。
+- 測試：`test_toc_follows.py` 新增 2 個（用 7d73848 的程式都失敗）。974 passed、5 skipped；ruff、mypy 通過。

@@ -876,6 +876,8 @@ class Orchestrator:
                                    for r in meta_rows if r["id"] in got["followed"]])
         if got["written"]:
             self.log(f"TOC/title: {got['written']} entries follow their chapter heading")
+        if got["dropped"]:
+            self.log(f"TOC/title: {got['dropped']} entries no longer clearly match a heading and keep their own text")
         rest = [r for r in meta_rows if r["id"] not in got["followed"]]
         if rest:
             self.run_batches(make_batches(rest, self.cfg.translation.unit_target_japanese_chars))

@@ -20,7 +20,7 @@ from typing import Any
 
 from ..epub.units import match_text
 from ..memory.db import utcnow
-from .cache import FOLLOWS_HEADING, latest_translation
+from .cache import FOLLOWS_HEADING, VALID_MACHINE, latest_translation
 from .context_builder import META_KINDS
 
 _WHOLE = re.compile(r"⟦(\d+)⟧(.*)⟦/\1⟧", re.S)  # one placeholder around a whole unit
@@ -41,9 +41,10 @@ def _inner(text: str) -> tuple[str | None, str]:
 
 def heading_texts(conn: sqlite3.Connection, book_id: str, story: set[str]) -> dict[str, tuple[str, sqlite3.Row]]:
     """key → (the Chinese of the story headings with that source, the newest of their translations), only for a key
-    every such heading has a translation for and all read the same, without inline markup left inside."""
+    every such heading has a translation for and all read the same, without inline markup left inside. A heading
+    that is not translated at all (an image in it) counts as one without a translation."""
     rows = conn.execute(
-        "SELECT * FROM units u WHERE book_id=? AND translatable=1 AND spine_index IS NOT NULL AND (kind='heading' OR "
+        "SELECT * FROM units u WHERE book_id=? AND spine_index IS NOT NULL AND (kind='heading' OR "
         f"(kind='text' AND length(plain_text)<={TITLE_CHARS} AND plain_text IN (SELECT plain_text FROM units v WHERE "
         "v.book_id=u.book_id AND v.kind IN ('nav','ncx')))) ORDER BY ordinal", (book_id,)).fetchall()
     seen: dict[str, set[str | None]] = {}
@@ -51,7 +52,7 @@ def heading_texts(conn: sqlite3.Connection, book_id: str, story: set[str]) -> di
     for r in rows:
         if r["resource_href"] not in story or not (k := key(r["plain_text"])):
             continue
-        tr = latest_translation(conn, r["id"], r["source_hash"])
+        tr = latest_translation(conn, r["id"], r["source_hash"]) if r["translatable"] else None
         zh: str | None = None
         if tr is not None and tr["text"]:
             (n_src, src), (n_zh, text) = _inner(r["source_text"]), _inner(tr["text"])
@@ -67,28 +68,32 @@ def follow_headings(conn: sqlite3.Connection, book_id: str, *, meta: bool = True
                     run_id: str | None = None) -> dict[str, Any]:
     """Every TOC entry (book matter's text, and with ``meta`` the NAV / NCX labels and titles) whose source is a
     story heading's takes that heading's current Chinese; the copy keeps the heading translation's prompt and model,
-    ``run_id`` is the run that copies it (none from an export). Returns ``followed`` (unit ids now holding it, written
-    or already so) and ``written`` (how many were changed). The caller holds the transaction."""
+    ``run_id`` is the run that copies it (none from an export). An entry whose heading is no longer a clear match (two
+    headings with its source now read differently) loses its copies (``unfollowed``): it falls back to its own
+    translation, and a title is translated for itself again. Returns ``followed`` (unit ids now holding it, written
+    or already so), ``written`` (how many were changed) and ``dropped`` (entries whose copies were taken off). The
+    caller holds the transaction."""
     from ..epub.matter import story_hrefs
 
     story = story_hrefs(conn, book_id)
     leaders = heading_texts(conn, book_id, story)
-    if not leaders:
-        return {"followed": set(), "written": 0}
     kinds = ("text", "heading", *(META_KINDS if meta else ()))
     rows = conn.execute(f"SELECT * FROM units WHERE book_id=? AND translatable=1 AND kind IN ({','.join('?' * len(kinds))}) "
                         "ORDER BY ordinal", (book_id, *kinds)).fetchall()
     followed: set[str] = set()
-    written = 0
+    written = dropped = 0
     for r in rows:
         if r["kind"] not in META_KINDS and (r["spine_index"] is None or r["resource_href"] in story):
             continue  # the story's own paragraphs and headings are translated in their scene
         got = leaders.get(key(r["plain_text"]))
-        if got is None:
-            continue
         n, src = _inner(r["source_text"])
-        if "⟦" in src:
-            continue  # inline markup inside the entry: there is no place to put the heading's text
+        if got is None or "⟦" in src:  # inline markup inside the entry: there is no place to put the heading's text
+            # a copy of a heading it no longer clearly follows is not its text any more (nor counted as translated)
+            dropped += conn.execute(
+                f"UPDATE translations SET status='unfollowed' WHERE unit_id=? AND context_hash LIKE ? AND status IN "
+                f"({','.join('?' * len(VALID_MACHINE))})", (r["id"], f"{FOLLOWS_HEADING}%", *VALID_MACHINE)
+            ).rowcount > 0
+            continue
         zh, lead = got
         text = f"⟦{n}⟧{zh}⟦/{n}⟧" if n is not None else zh
         cur = latest_translation(conn, r["id"], r["source_hash"])
@@ -105,4 +110,4 @@ def follow_headings(conn: sqlite3.Connection, book_id: str, *, meta: bool = True
              lead["prompt_version"], lead["model_id"], lead["glossary_version"], lead["mode"], "succeeded",
              run_id, utcnow()))
         written += 1
-    return {"followed": followed, "written": written}
+    return {"followed": followed, "written": written, "dropped": dropped}

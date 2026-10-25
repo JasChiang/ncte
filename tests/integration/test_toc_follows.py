@@ -141,3 +141,59 @@ def test_an_entry_follows_only_a_clear_match(conn, cfg, toc_book):
                  (CH1, CH1, ch1["source_hash"], bonus["id"]))
     apply_human_edit(conn, book.id, bonus["id"], "第一章　銀色的鑰匙")
     assert key(CH1) not in heading_texts(conn, book.id, story)
+
+
+def _follow(conn, book_id):
+    from ncte.memory.db import Transaction
+
+    with Transaction(conn):
+        return follow_headings(conn, book_id)
+
+
+def test_a_copy_of_a_heading_no_longer_clear_is_dropped(conn, cfg, toc_book):
+    """Codex review: two headings 「第一章…」 read the same, the entries copy them; one heading is corrected later and
+    the match is no longer clear: the entries' copies are not their text any more, nor counted as translated."""
+    from ncte.translation.cache import is_cached
+
+    book, _ = import_book(conn, cfg, toc_book)
+    ch1 = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='heading' AND plain_text=?", (book.id, CH1)).fetchone()
+    bonus = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='heading' AND plain_text=?",
+                         (book.id, BONUS)).fetchone()
+    nav = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='nav' AND plain_text=?", (book.id, CH1)).fetchone()
+    # the NAV entry's own translation first, as a run makes it
+    conn.execute("INSERT INTO translations(unit_id, target_lang, text, source_hash, prompt_version, model_id, "
+                 "glossary_version, mode, status, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                 (nav["id"], "zh-TW", "⟦1⟧第一章　自己的譯法⟦/1⟧", nav["source_hash"], "translate/v1#x", "m", "g",
+                  "context", "succeeded", "2026-10-25"))
+    conn.execute("UPDATE units SET plain_text=?, source_text=?, source_hash=? WHERE id=?",
+                 (CH1, CH1, ch1["source_hash"], bonus["id"]))
+    apply_human_edit(conn, book.id, ch1["id"], "第一章　銀之鑰")
+    apply_human_edit(conn, book.id, bonus["id"], "第一章　銀之鑰")
+    assert nav["id"] in _follow(conn, book.id)["followed"]
+    assert _inner(_text(conn, nav)) == "第一章　銀之鑰"
+
+    apply_human_edit(conn, book.id, bonus["id"], "第一章　銀色的鑰匙")
+    assert _follow(conn, book.id)["dropped"] >= 1
+    assert _text(conn, nav) == "⟦1⟧第一章　自己的譯法⟦/1⟧"  # its own again
+    tr = latest_translation(conn, nav["id"], nav["source_hash"])
+    assert not (tr["context_hash"] or "").startswith("heading:")
+    copies = conn.execute("SELECT status FROM translations WHERE unit_id=? AND context_hash LIKE 'heading:%'",
+                          (nav["id"],)).fetchall()
+    assert copies and {r["status"] for r in copies} == {"unfollowed"}
+    assert not is_cached(tr, prompt_version="translate/v1#y", model="other", mode="context", gl_hash="g")
+
+
+def test_an_untranslatable_heading_with_the_same_source_blocks_the_copy(conn, cfg, toc_book):
+    """Codex review: of two headings 「第一章…」 one is not translated at all (an image in it): which one an entry
+    means is not clear, so no entry takes the other one's text."""
+    book, _ = import_book(conn, cfg, toc_book)
+    ch1 = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='heading' AND plain_text=?", (book.id, CH1)).fetchone()
+    bonus = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='heading' AND plain_text=?",
+                         (book.id, BONUS)).fetchone()
+    conn.execute("UPDATE units SET plain_text=?, source_text=?, source_hash=?, translatable=0 WHERE id=?",
+                 (CH1, CH1, ch1["source_hash"], bonus["id"]))
+    apply_human_edit(conn, book.id, ch1["id"], "第一章　銀之鑰")
+    from ncte.epub.matter import story_hrefs
+
+    assert key(CH1) not in heading_texts(conn, book.id, story_hrefs(conn, book.id))
+    assert _follow(conn, book.id)["written"] == 0
