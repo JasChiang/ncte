@@ -106,7 +106,8 @@ def chapters(conn: sqlite3.Connection, book: Book) -> list[dict[str, Any]]:
     except Exception:
         labels = {}
     zh_label = {r[0]: plain(r[1]) for r in conn.execute(
-        "SELECT u.plain_text, (SELECT text FROM translations t WHERE t.unit_id=u.id ORDER BY rowid DESC LIMIT 1) "
+        "SELECT u.plain_text, (SELECT text FROM translations t WHERE t.unit_id=u.id AND t.source_hash=u.source_hash AND "
+        "t.status IN ('human','succeeded','needs_review') ORDER BY t.status='human' DESC, t.id DESC LIMIT 1) "
         "FROM units u WHERE u.book_id=? AND u.kind IN ('nav','ncx')", (book.id,)) if r[1]}
     from ..translation.context_builder import heading_hints
 

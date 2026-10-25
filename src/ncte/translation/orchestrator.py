@@ -868,6 +868,12 @@ class Orchestrator:
         with self.lock, Transaction(self.conn):
             got = follow_headings(self.conn, self.book.id, run_id=self.run_id,
                                   meta=self.opts.include_meta and self.cfg.export.translate_nav_titles)
+            # a title whose copy was taken off is translated for itself now, though its job was skipped for the copy
+            # (a book-matter entry has its own translation from its scene to fall back to)
+            self.conn.executemany(
+                "UPDATE jobs SET status='pending', updated_at=? WHERE run_id=? AND stage='translate' AND target_id=? "
+                f"AND status='skipped' AND (SELECT kind FROM units WHERE id=?) IN ({','.join('?' * len(META_KINDS))})",
+                [(utcnow(), self.run_id, u, u, *META_KINDS) for u in got["dropped"]])
             meta_rows = self.pending_rows(meta=True)
             # a book-matter entry is a body unit (translated with its scene); a title waiting is taken from its heading
             self.conn.executemany("UPDATE jobs SET status='succeeded', checkpoint_json=?, updated_at=? WHERE "
@@ -877,7 +883,7 @@ class Orchestrator:
         if got["written"]:
             self.log(f"TOC/title: {got['written']} entries follow their chapter heading")
         if got["dropped"]:
-            self.log(f"TOC/title: {got['dropped']} entries no longer clearly match a heading and keep their own text")
+            self.log(f"TOC/title: {len(got['dropped'])} entries no longer clearly match a heading and keep their own text")
         rest = [r for r in meta_rows if r["id"] not in got["followed"]]
         if rest:
             self.run_batches(make_batches(rest, self.cfg.translation.unit_target_japanese_chars))

@@ -71,7 +71,7 @@ def follow_headings(conn: sqlite3.Connection, book_id: str, *, meta: bool = True
     ``run_id`` is the run that copies it (none from an export). An entry whose heading is no longer a clear match (two
     headings with its source now read differently) loses its copies (``unfollowed``): it falls back to its own
     translation, and a title is translated for itself again. Returns ``followed`` (unit ids now holding it, written
-    or already so), ``written`` (how many were changed) and ``dropped`` (entries whose copies were taken off). The
+    or already so), ``written`` (how many were changed) and ``dropped`` (unit ids whose copies were taken off). The
     caller holds the transaction."""
     from ..epub.matter import story_hrefs
 
@@ -81,7 +81,8 @@ def follow_headings(conn: sqlite3.Connection, book_id: str, *, meta: bool = True
     rows = conn.execute(f"SELECT * FROM units WHERE book_id=? AND translatable=1 AND kind IN ({','.join('?' * len(kinds))}) "
                         "ORDER BY ordinal", (book_id, *kinds)).fetchall()
     followed: set[str] = set()
-    written = dropped = 0
+    written = 0
+    dropped: set[str] = set()
     for r in rows:
         if r["kind"] not in META_KINDS and (r["spine_index"] is None or r["resource_href"] in story):
             continue  # the story's own paragraphs and headings are translated in their scene
@@ -89,10 +90,11 @@ def follow_headings(conn: sqlite3.Connection, book_id: str, *, meta: bool = True
         n, src = _inner(r["source_text"])
         if got is None or "⟦" in src:  # inline markup inside the entry: there is no place to put the heading's text
             # a copy of a heading it no longer clearly follows is not its text any more (nor counted as translated)
-            dropped += conn.execute(
-                f"UPDATE translations SET status='unfollowed' WHERE unit_id=? AND context_hash LIKE ? AND status IN "
-                f"({','.join('?' * len(VALID_MACHINE))})", (r["id"], f"{FOLLOWS_HEADING}%", *VALID_MACHINE)
-            ).rowcount > 0
+            if conn.execute(
+                    f"UPDATE translations SET status='unfollowed' WHERE unit_id=? AND context_hash LIKE ? AND status IN "
+                    f"({','.join('?' * len(VALID_MACHINE))})", (r["id"], f"{FOLLOWS_HEADING}%", *VALID_MACHINE)
+            ).rowcount:
+                dropped.add(r["id"])
             continue
         zh, lead = got
         text = f"⟦{n}⟧{zh}⟦/{n}⟧" if n is not None else zh

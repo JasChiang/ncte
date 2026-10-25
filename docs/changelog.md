@@ -1327,3 +1327,4 @@ open workspace/eval/<timestamp>/report.html
   - `headings.follow_headings`：不再明確對上標題的項目，抄本改 `unfollowed`（回傳 `dropped`）；`run_meta` 記一行。
 - 葬列 fix_check 在 Codex 上重測（資料庫複本、照原請求兩個修正一起問）：舊提示詞 1/3 `fixed`，新提示詞 3/3 `fixed`。腳本與答案在 `workspace/exp/adr106/fixcheck-codex/`（不在 repo）。
 - 測試：`test_toc_follows.py` 新增 2 個（用 7d73848 的程式都失敗）。974 passed、5 skipped；ruff、mypy 通過。
+- Codex 第二輪（審 55d2b95）一個 P2、一個 P3，都修了：`run_meta` 把抄本作廢的 NAV／NCX 項目的略過工作改回待翻（原本整次執行顯示完成、項目卻沒有譯文）；`gui.data.chapters` 的章節名只取有效狀態、原文相同的譯文（人工優先）。`test_toc_follows.py` 再加 1 個、改 1 個（各自在修改前失敗）。975 passed、5 skipped；ruff、mypy 通過。

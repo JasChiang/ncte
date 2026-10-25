@@ -173,8 +173,12 @@ def test_a_copy_of_a_heading_no_longer_clear_is_dropped(conn, cfg, toc_book):
     assert _inner(_text(conn, nav)) == "第一章　銀之鑰"
 
     apply_human_edit(conn, book.id, bonus["id"], "第一章　銀色的鑰匙")
-    assert _follow(conn, book.id)["dropped"] >= 1
+    assert nav["id"] in _follow(conn, book.id)["dropped"]
     assert _text(conn, nav) == "⟦1⟧第一章　自己的譯法⟦/1⟧"  # its own again
+    from ncte.gui.data import chapters
+
+    titles = [c["title"] for c in chapters(conn, book)]  # the web page's chapter list too, not the copy taken off
+    assert "第一章　自己的譯法" in titles and "第一章　銀之鑰" not in titles
     tr = latest_translation(conn, nav["id"], nav["source_hash"])
     assert not (tr["context_hash"] or "").startswith("heading:")
     copies = conn.execute("SELECT status FROM translations WHERE unit_id=? AND context_hash LIKE 'heading:%'",
@@ -197,3 +201,35 @@ def test_an_untranslatable_heading_with_the_same_source_blocks_the_copy(conn, cf
 
     assert key(CH1) not in heading_texts(conn, book.id, story_hrefs(conn, book.id))
     assert _follow(conn, book.id)["written"] == 0
+
+
+def test_a_title_whose_copy_is_dropped_is_translated_again(conn, cfg, toc_book):
+    """Codex review: the NAV / NCX labels only ever held copies; one of two same-source headings is changed: the next
+    run translates those labels for themselves (their jobs were skipped for the copies)."""
+    from ncte.translation.orchestrator import RunOptions, create_run
+
+    from ..helpers import orchestrator_for
+
+    book, _, s = run_book(conn, cfg, toc_book, FakeLLM(responders=RESPONDERS), mode="context")
+    assert s.status == "completed"
+    ch1 = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='heading' AND plain_text=?", (book.id, CH1)).fetchone()
+    bonus = conn.execute("SELECT * FROM units WHERE book_id=? AND kind='heading' AND plain_text=?",
+                         (book.id, BONUS)).fetchone()
+    labels = conn.execute("SELECT * FROM units WHERE book_id=? AND kind IN ('nav','ncx') AND plain_text=?",
+                          (book.id, CH1)).fetchall()
+    assert labels and all(conn.execute("SELECT COUNT(*) FROM translations WHERE unit_id=? AND (context_hash IS NULL OR "
+                                       "context_hash NOT LIKE 'heading:%')", (r["id"],)).fetchone()[0] == 0
+                          for r in labels)  # only copies
+    conn.execute("UPDATE units SET plain_text=?, source_text=?, source_hash=? WHERE id=?",
+                 (CH1, CH1, ch1["source_hash"], bonus["id"]))
+    apply_human_edit(conn, book.id, bonus["id"], "第一章　另一種譯法")
+    fake = FakeLLM(responders=RESPONDERS)
+    opts = RunOptions(model=cfg.openrouter.model, client="fake", mode="context")
+    rid2 = create_run(conn, cfg, book, opts)
+    assert orchestrator_for(conn, cfg, book, rid2, opts, fake).run().status == "completed"
+    for r in labels:
+        tr = latest_translation(conn, r["id"], r["source_hash"])
+        assert tr is not None and not (tr["context_hash"] or "").startswith("heading:"), r["kind"]
+        job = conn.execute("SELECT status FROM jobs WHERE run_id=? AND stage='translate' AND target_id=?",
+                           (rid2, r["id"])).fetchone()
+        assert job["status"] == "succeeded"
