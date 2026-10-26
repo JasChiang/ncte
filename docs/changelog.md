@@ -1336,3 +1336,8 @@ open workspace/eval/<timestamp>/report.html
 - 測試：`test_unconfirmed_review.py` 新增 1 個（用 13d4fcd 的程式失敗）。980 passed、5 skipped；ruff、mypy 通過。
 - 重放 scene_state 實驗開的那組的覆核答案：第 8 章 21→31／31（見 ADR-107）。
 - Codex 審閱（`codex exec -s read-only`，a160031）兩個 P2，都修了：`s:` 答某張卡、群組 `same:` 合併前也查答過「不是同一人」（前一批的合併讓候選變成那張卡）。`test_unconfirmed_review.py` 新增 2 個（用 a160031 的程式都失敗）。982 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-108 一張卡被叫的詞連到另一個人，不合併兩張卡（2026-10-26，分支 shared-title-2026-10-26，基於 main e763526）
+- `memory/entities._cards_of`、`_joins_two_cards`；`link` 遇到會合併兩張連結沒寫到的卡時記成共用寫法（`shared`）。
+- 測試：`test_entities.py` 新增 1 個（用 e763526 的程式失敗）。983 passed、5 skipped；ruff、mypy 通過。
+- 原因來自 scene_state 實驗的分析（麵包店的母親 12 句全錯）：見 ADR-108。

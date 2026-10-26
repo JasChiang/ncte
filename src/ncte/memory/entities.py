@@ -94,6 +94,27 @@ def _joins_two_entities(conn: sqlite3.Connection, book_id: str, term: str, targe
             and _form_count(conn, book_id, s_eid) > 1 and _form_count(conn, book_id, t_eid) > 1)
 
 
+def _cards_of(conn: sqlite3.Connection, book_id: str, eid: str | None) -> set[str]:
+    """The cards (findable characters, the ones ``reconcile_characters`` merges) named by a form of the entity."""
+    if eid is None:
+        return set()
+    return {r[0] for r in conn.execute(
+        f"SELECT canonical_name FROM characters WHERE {SERIES_SCOPE} AND {FINDABLE} AND canonical_name IN "
+        f"(SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND entity_id=?)", (book_id, book_id, eid))}
+
+
+def _joins_two_cards(conn: sqlite3.Connection, book_id: str, term: str, target: str) -> bool:
+    """True when linking would merge two cards no side of the link names: a word one card is known by (「母上」, how
+    one child calls her mother) given to another person (how another child calls his) says the word names that
+    person too, never that the two are one person (ADR-108). Two cards named by the link itself are the model's
+    statement that they are one, and merge as before."""
+    s_eid, t_eid = _entity_of(conn, book_id, term), _entity_of(conn, book_id, target)
+    if s_eid is None or t_eid is None or s_eid == t_eid:
+        return False
+    s_cards, t_cards = _cards_of(conn, book_id, s_eid), _cards_of(conn, book_id, t_eid)
+    return bool(s_cards) and bool(t_cards) and not (term in s_cards and target in t_cards)
+
+
 def add_sense(conn: sqlite3.Connection, book_id: str, term: str, target: str, *, origin: str, note: str | None = None,
               unit_id: str | None = None, quote: str | None = None, ordinal: int | None = None) -> bool:
     """``term`` (keeping its own entity) may also refer to ``target``'s entity: a shared name form (ADR-022)."""
@@ -217,7 +238,8 @@ def link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_ty
     known = {r[0] for r in conn.execute(f"SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND source_term IN (?,?)",
                                         (book_id, term, target))}
     if term in known and target in known:
-        if origin != "human" and _joins_two_entities(conn, book_id, term, target):
+        if origin != "human" and (_joins_two_entities(conn, book_id, term, target)
+                                  or _joins_two_cards(conn, book_id, term, target)):
             # An ambiguous form (「しまちゃん」 was used for both sisters) must not fuse two established
             # entities – merge_into moves every form of the term's entity. The form is recorded as *shared*
             # (it may refer to either); merging stays a human decision (ncte names link).

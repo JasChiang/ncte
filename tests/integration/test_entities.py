@@ -171,6 +171,30 @@ def test_ambiguous_form_does_not_fuse_two_people(conn, cfg, fixtures):
     assert conn.execute("SELECT count(*) FROM form_senses").fetchone()[0] == 0
 
 
+def test_a_word_one_card_is_called_given_to_another_person_does_not_merge_the_cards(conn, cfg, fixtures):
+    """Synthetic-book regression (ADR-108): one child calls the baker's mother 「母上」, another calls his dead birth
+    mother 「母上」. Linking the word to the birth mother's card must not move the baker's mother with it: the word
+    is shared, the two cards stay two. Two cards the link itself names still merge."""
+    from ncte.memory.repository import upsert_character
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal", (book.id,)).fetchall()
+    for name, zh, at in (("トーネの母親", "托涅的母親", u[0]), ("実母", "生母", u[3]), ("ロセト", "蘿瑟特", u[5]),
+                         ("銅の杖の先生", "銅杖老師", u[4])):
+        upsert_character(conn, book.id, name, name_zh=zh, aliases=[], unit_id=at[0], ordinal=at[1], origin="t")
+        set_glossary(conn, book.id, name, zh, category="character")
+    set_glossary(conn, book.id, "母上", "母親大人", category="character")
+    assert link(conn, book.id, "母上", "トーネの母親", "title", origin="llm", ordinal=u[1][1]) == "accepted"
+    assert link(conn, book.id, "母上", "実母", "title", origin="llm", ordinal=u[3][1]) == "shared"
+    names = {r[0] for r in conn.execute("SELECT canonical_name FROM characters")}
+    assert {"トーネの母親", "実母"} <= names
+    groups = sorted(sorted(f["ja"] for f in fs) for fs in entity_forms(conn, book.id).values())
+    assert ["トーネの母親", "母上"] in groups and ["実母"] in groups
+    # the model naming both cards in the link says they are one person
+    assert link(conn, book.id, "ロセト", "銅の杖の先生", "alias", origin="llm") == "accepted"
+    assert conn.execute("SELECT count(*) FROM characters WHERE canonical_name IN ('ロセト','銅の杖の先生')").fetchone()[0] == 1
+
+
 def test_entity_label_follows_official_form_and_unlink_drops_alias(conn, cfg, fixtures):
     book, _ = import_book(conn, cfg, fixtures["basic"])
     ensure_glossary(conn, book.id, "たかぎ（妹）", "高木（妹妹）", category="term", origin="memory_update",
