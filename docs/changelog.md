@@ -1341,3 +1341,4 @@ open workspace/eval/<timestamp>/report.html
 - `memory/entities._cards_of`、`_joins_two_cards`；`link` 遇到會合併兩張連結沒寫到的卡時記成共用寫法（`shared`）。
 - 測試：`test_entities.py` 新增 1 個（用 e763526 的程式失敗）。983 passed、5 skipped；ruff、mypy 通過。
 - 原因來自 scene_state 實驗的分析（麵包店的母親 12 句全錯）：見 ADR-108。
+- Codex 審閱（5c056cc）一個 P1、三個 P2，都修了：`shared_word`（兩張卡的名字互連照樣合併；反向連結記對詞）、`is_shared`、`character_for_form` 不用共用的詞找卡、`backfill_entities` 不經共用的詞合併。`test_unconfirmed_review.py` 新增 4 個（用 5c056cc 的程式都失敗）。987 passed、5 skipped；ruff、mypy 通過。

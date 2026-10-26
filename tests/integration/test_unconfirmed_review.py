@@ -472,3 +472,70 @@ def test_a_group_answer_reaching_a_group_it_is_not_through_a_merge_of_the_same_p
     stats = verify.apply(conn, book.id, items, parsed, lambda *a: None, unapplied=left)
     assert stats["groups_merged"] == 1 and stats["identities_contradicted"] == 1 and f"p:{g1}" in left
     assert _card(conn, g1) is not None and _card(conn, g2) is not None
+
+
+def _two_mothers_called_hahaue(conn, cfg, fixtures):
+    """トーネの母親 (her daughter calls her 「母上」) and 実母 (another child's dead mother, also 「母上」) — ADR-108."""
+    from ncte.memory.entities import link
+    from ncte.memory.repository import set_glossary
+
+    s = _setup(conn, cfg, fixtures)
+    book, at = s["book"], s["intro"]
+    cards = {}
+    for name in ("トーネの母親", "実母"):
+        cards[name] = repo.upsert_character(conn, book.id, name, name_zh=None, aliases=[], unit_id=at["id"],
+                                            ordinal=at["ordinal"], origin="test")[0]
+        set_glossary(conn, book.id, name, name, category="character")
+    set_glossary(conn, book.id, "母上", "母親大人", category="character")
+    assert link(conn, book.id, "母上", "トーネの母親", "title", origin="llm", ordinal=1) == "accepted"
+    return s, cards
+
+
+def test_a_shared_word_finds_no_card_and_a_scene_naming_it_merges_nothing(conn, cfg, fixtures):
+    from ncte.memory.entities import character_for_form, link
+
+    s, cards = _two_mothers_called_hahaue(conn, cfg, fixtures)
+    book = s["book"]
+    assert link(conn, book.id, "母上", "実母", "title", origin="llm", ordinal=2) == "shared"
+    assert character_for_form(conn, book.id, "母上") is None
+    conn.execute("UPDATE units SET plain_text='　路地の奥に、母上が立っていた。' WHERE id=?", (s["intro"]["id"],))
+    _read(conn, book, s["scenes"][1], s["intro"], name_ja="母上", same_as_ref=cards["実母"])
+    assert all(_card(conn, c) is not None for c in cards.values())
+
+
+def test_a_reverse_link_records_the_word_as_shared(conn, cfg, fixtures):
+    from ncte.memory.entities import is_shared, link
+
+    s, cards = _two_mothers_called_hahaue(conn, cfg, fixtures)
+    book = s["book"]
+    assert link(conn, book.id, "実母", "母上", "title", origin="llm", ordinal=2) == "shared"
+    assert is_shared(conn, book.id, "母上") and not is_shared(conn, book.id, "実母")
+    assert all(_card(conn, c) is not None for c in cards.values())
+
+
+def test_backfill_does_not_join_two_cards_by_a_word_both_have(conn, cfg, fixtures):
+    from ncte.memory.entities import backfill_entities, link, reconcile_characters
+
+    s, cards = _two_mothers_called_hahaue(conn, cfg, fixtures)
+    book = s["book"]
+    link(conn, book.id, "母上", "実母", "title", origin="llm", ordinal=2)
+    conn.execute("UPDATE characters SET aliases_json='[\"母上\"]' WHERE id IN (?,?)", tuple(cards.values()))
+    backfill_entities(conn, book.id)
+    reconcile_characters(conn, book.id)
+    assert all(_card(conn, c) is not None for c in cards.values())
+
+
+def test_a_link_naming_two_cards_merges_them_even_when_both_have_other_forms(conn, cfg, fixtures):
+    from ncte.memory.entities import link
+    from ncte.memory.repository import set_glossary
+
+    s = _setup(conn, cfg, fixtures)
+    book, at = s["book"], s["intro"]
+    for name, form in (("ロセト", "ロセト様"), ("銅の杖の先生", "銅の杖")):
+        repo.upsert_character(conn, book.id, name, name_zh=None, aliases=[], unit_id=at["id"], ordinal=at["ordinal"],
+                              origin="test")
+        set_glossary(conn, book.id, name, name, category="character")
+        set_glossary(conn, book.id, form, form, category="character")
+        assert link(conn, book.id, form, name, "alias", origin="llm") == "accepted"
+    assert link(conn, book.id, "ロセト", "銅の杖の先生", "alias", origin="llm") == "accepted"
+    assert conn.execute("SELECT count(*) FROM characters WHERE canonical_name IN ('ロセト','銅の杖の先生')").fetchone()[0] == 1

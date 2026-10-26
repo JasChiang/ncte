@@ -65,7 +65,8 @@ def backfill_entities(conn: sqlite3.Connection, book_id: str) -> int:
 
     # a card a name finds: the aliases of one known only by other cards' words, or of one of another time, are those
     # cards' own words and not forms of the entity named like them (ADR-103)
-    for c in conn.execute(f"SELECT canonical_name, aliases_json FROM characters WHERE {SERIES_SCOPE} AND {FINDABLE}",
+    for c in conn.execute(f"SELECT canonical_name, aliases_json, known_from_ordinal FROM characters WHERE {SERIES_SCOPE} "
+                          f"AND {FINDABLE}",
                           (book_id,)).fetchall():
         target = conn.execute(f"SELECT entity_id FROM glossary WHERE {SERIES_SCOPE} AND source_term=?",
                               (book_id, c[0])).fetchone()
@@ -73,6 +74,10 @@ def backfill_entities(conn: sqlite3.Connection, book_id: str) -> int:
             continue
         for alias in json.loads(c[1]):
             if conn.execute(f"SELECT 1 FROM glossary WHERE {SERIES_SCOPE} AND source_term=?", (book_id, alias)).fetchone():
+                if is_shared(conn, book_id, alias) or shared_word(conn, book_id, alias, c[0]) is not None:
+                    # a word another card has too (ADR-108)
+                    add_sense(conn, book_id, alias, c[0], origin="backfill", ordinal=c[2])
+                    continue
                 n += merge_into(conn, book_id, alias, c[0], "alias")
     return n
 
@@ -103,16 +108,25 @@ def _cards_of(conn: sqlite3.Connection, book_id: str, eid: str | None) -> set[st
         f"(SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND entity_id=?)", (book_id, book_id, eid))}
 
 
-def _joins_two_cards(conn: sqlite3.Connection, book_id: str, term: str, target: str) -> bool:
-    """True when linking would merge two cards no side of the link names: a word one card is known by (「母上」, how
-    one child calls her mother) given to another person (how another child calls his) says the word names that
-    person too, never that the two are one person (ADR-108). Two cards named by the link itself are the model's
-    statement that they are one, and merge as before."""
+def shared_word(conn: sqlite3.Connection, book_id: str, term: str, target: str) -> str | None:
+    """For an automatic link of ``term`` to ``target``: the word to record as shared (it may refer to either), or None
+    when the link merges. A link naming two cards is the model's statement that they are one person and merges;
+    otherwise a link that would fuse two established entities, or two cards, is a shared word — the side that is not a
+    card's name (「母上」 in 「実母 → 母上」), else ``term`` (ADR-108)."""
     s_eid, t_eid = _entity_of(conn, book_id, term), _entity_of(conn, book_id, target)
     if s_eid is None or t_eid is None or s_eid == t_eid:
-        return False
+        return None
     s_cards, t_cards = _cards_of(conn, book_id, s_eid), _cards_of(conn, book_id, t_eid)
-    return bool(s_cards) and bool(t_cards) and not (term in s_cards and target in t_cards)
+    if term in s_cards and target in t_cards:
+        return None
+    if not (_joins_two_entities(conn, book_id, term, target) or (s_cards and t_cards)):
+        return None
+    return target if term in s_cards else term
+
+
+def is_shared(conn: sqlite3.Connection, book_id: str, term: str) -> bool:
+    """A form recorded as possibly referring to more than one entity (ADR-022/108)."""
+    return conn.execute(f"SELECT 1 FROM form_senses WHERE {SERIES_SCOPE} AND term=?", (book_id, term)).fetchone() is not None
 
 
 def add_sense(conn: sqlite3.Connection, book_id: str, term: str, target: str, *, origin: str, note: str | None = None,
@@ -238,13 +252,13 @@ def link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_ty
     known = {r[0] for r in conn.execute(f"SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND source_term IN (?,?)",
                                         (book_id, term, target))}
     if term in known and target in known:
-        if origin != "human" and (_joins_two_entities(conn, book_id, term, target)
-                                  or _joins_two_cards(conn, book_id, term, target)):
-            # An ambiguous form (「しまちゃん」 was used for both sisters) must not fuse two established
-            # entities – merge_into moves every form of the term's entity. The form is recorded as *shared*
-            # (it may refer to either); merging stays a human decision (ncte names link).
-            add_sense(conn, book_id, term, target, origin=origin, note=note, unit_id=unit_id, quote=quote,
-                      ordinal=ordinal)
+        if origin != "human" and (word := shared_word(conn, book_id, term, target)) is not None:
+            # An ambiguous form (「しまちゃん」 was used for both sisters, 「母上」 by two children for two mothers)
+            # must not fuse two established entities or two cards – merge_into moves every form of the term's entity.
+            # The form is recorded as *shared* (it may refer to either); merging stays a decision of the model's
+            # second look or a human (ncte names link)
+            add_sense(conn, book_id, word, target if word == term else term, origin=origin, note=note,
+                      unit_id=unit_id, quote=quote, ordinal=ordinal)
             record_link(conn, book_id, term, target, form_type, origin=origin, status="candidate", unit_id=unit_id,
                         quote=quote, ordinal=ordinal)
             return "shared"
@@ -289,6 +303,8 @@ def character_for_form(conn: sqlite3.Connection, book_id: str, name: str) -> str
     """Character id for any name form of a character entity (official name, full name, nickname …)."""
     import json
 
+    if is_shared(conn, book_id, name):  # a word that may name more than one person finds none (ADR-108)
+        return None
     row = conn.execute(f"SELECT entity_id FROM glossary WHERE {SERIES_SCOPE} AND source_term=?", (book_id, name)).fetchone()
     forms = [name]
     if row and row[0]:
