@@ -573,3 +573,37 @@ def test_backfill_does_not_join_a_card_named_by_another_cards_alias(conn, cfg, f
     backfill_entities(conn, book.id)
     reconcile_characters(conn, book.id)
     assert _card(conn, a) is not None and _card(conn, b) is not None
+
+
+def test_a_link_from_a_card_named_by_a_shared_word_merges_no_one_else(conn, cfg, fixtures):
+    """A card named 「母上」 shares its entity with トーネの母親; the model linking 「母上」 to リリア must not merge
+    トーネの母親 with リリア (ADR-108, third review). A person's link does merge."""
+    from ncte.memory.entities import link
+    from ncte.memory.repository import set_glossary
+
+    s, cards = _two_mothers_called_hahaue(conn, cfg, fixtures)
+    book, at = s["book"], s["intro"]
+    conn.execute("UPDATE characters SET aliases_json='[]' WHERE id=?", (cards["トーネの母親"],))
+    link(conn, book.id, "母上", "実母", "title", origin="llm", ordinal=2)
+    named = repo.upsert_character(conn, book.id, "母上", name_zh=None, aliases=[], unit_id=at["id"], ordinal=at["ordinal"],
+                                  origin="test")[0]
+    lilia = repo.upsert_character(conn, book.id, "リリア", name_zh=None, aliases=[], unit_id=at["id"],
+                                  ordinal=at["ordinal"], origin="test")[0]
+    set_glossary(conn, book.id, "リリア", "莉莉亞", category="character")
+    assert link(conn, book.id, "母上", "リリア", "alias", origin="llm") == "shared"
+    assert all(_card(conn, c) is not None for c in (*cards.values(), named, lilia))
+    assert link(conn, book.id, "母上", "リリア", "alias", origin="human") == "accepted"
+    assert _card(conn, named) is None or _card(conn, lilia) is None
+
+
+def test_a_shared_word_said_to_be_a_known_card_is_that_card_even_when_several_cards_have_it(conn, cfg, fixtures):
+    from ncte.memory.entities import link
+
+    s, cards = _two_mothers_called_hahaue(conn, cfg, fixtures)
+    book = s["book"]
+    link(conn, book.id, "母上", "実母", "title", origin="llm", ordinal=2)
+    conn.execute("UPDATE characters SET aliases_json=? WHERE id=?", (json.dumps(["母上"]), s["b"]))  # 義母 too
+    conn.execute("UPDATE units SET plain_text='　路地の奥に、母上が立っていた。' WHERE id=?", (s["intro"]["id"],))
+    n = conn.execute("SELECT count(*) FROM characters").fetchone()[0]
+    refs = _read(conn, book, s["scenes"][1], s["intro"], name_ja="母上", same_as_ref=cards["実母"])
+    assert refs["new_1"] == cards["実母"] and conn.execute("SELECT count(*) FROM characters").fetchone()[0] == n

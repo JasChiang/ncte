@@ -759,6 +759,15 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 name, nc = said, nc.model_copy(update={"proposed_name_zh": ""})
                 substituted = True
             first = next(t for t in texts if in_source(name, unit_src[t.id]))
+            from ..memory.entities import is_shared
+
+            same = _revealed(known, book_id, nc.same_as_ref)
+            if same and is_shared(conn, book_id, name):
+                # a word that may name more than one person (「母上」 of two mothers), said to be a known card: that
+                # card, merged with no one the word also names (ADR-108)
+                ref_map[nc.temp_id] = same
+                names_of.setdefault(same, []).append(name)
+                continue
             if name not in existing_alias:
                 from ..memory.entities import character_for_form
 
@@ -787,15 +796,6 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             if held is not None and not other and bool(nc.group) != bool(held[0]):
                 rej(nc.model_dump(), "name_ja not found verbatim in evidence units; its words name a known character "
                                      "the model says this is not")
-                continue
-            from ..memory.entities import is_shared
-
-            same = _revealed(known, book_id, nc.same_as_ref)
-            if same and is_shared(conn, book_id, name):
-                # a word that may name more than one person (「母上」 of two mothers), said to be a known card: that
-                # card, merged with no one the word also names (ADR-108)
-                ref_map[nc.temp_id] = same
-                names_of.setdefault(same, []).append(name)
                 continue
             if name in existing_alias:
                 ref_map[nc.temp_id] = existing_alias[name]

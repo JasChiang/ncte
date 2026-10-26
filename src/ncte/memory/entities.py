@@ -119,14 +119,16 @@ def _two_cards(conn: sqlite3.Connection, book_id: str, a: str, b: str) -> bool:
 
 def shared_word(conn: sqlite3.Connection, book_id: str, term: str, target: str) -> str | None:
     """For an automatic link of ``term`` to ``target``: the word to record as shared (it may refer to either), or None
-    when the link merges. A link naming two cards is the model's statement that they are one person and merges;
-    otherwise a link that would fuse two established entities, or two cards, is a shared word — the side that is not a
+    when the link merges. A link naming the only card on each side, by names that name only them, is the model's
+    statement that they are one person and merges; otherwise a link that would fuse two established entities, or two cards, is a shared word — the side that is not a
     card's name (「母上」 in 「実母 → 母上」), else ``term`` (ADR-108)."""
     s_eid, t_eid = _entity_of(conn, book_id, term), _entity_of(conn, book_id, target)
     if s_eid is None or t_eid is None or s_eid == t_eid:
         return None
     s_cards, t_cards = _cards_of(conn, book_id, s_eid), _cards_of(conn, book_id, t_eid)
-    if term in s_cards and target in t_cards:
+    # the link names the one card on each side, by a name that names only it: the model says the two are one
+    if s_cards == {term} and t_cards == {target} and not is_shared(conn, book_id, term) \
+            and not is_shared(conn, book_id, target):
         return None
     if not (_joins_two_entities(conn, book_id, term, target) or (s_cards and t_cards)):
         return None
@@ -271,6 +273,8 @@ def link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_ty
             record_link(conn, book_id, term, target, form_type, origin=origin, status="candidate", unit_id=unit_id,
                         quote=quote, ordinal=ordinal)
             return "shared"
+        if origin == "human":  # a person deciding what the word names settles it: no longer shared
+            conn.execute(f"DELETE FROM form_senses WHERE {SERIES_SCOPE} AND term=?", (book_id, term))
         merge_into(conn, book_id, term, target, form_type, note)
         record_link(conn, book_id, term, target, form_type, origin=origin, status="accepted", unit_id=unit_id,
                     quote=quote, ordinal=ordinal)

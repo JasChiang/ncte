@@ -1343,3 +1343,4 @@ open workspace/eval/<timestamp>/report.html
 - 原因來自 scene_state 實驗的分析（麵包店的母親 12 句全錯）：見 ADR-108。
 - Codex 審閱（5c056cc）一個 P1、三個 P2，都修了：`shared_word`（兩張卡的名字互連照樣合併；反向連結記對詞）、`is_shared`、`character_for_form` 不用共用的詞找卡、`backfill_entities` 不經共用的詞合併。`test_unconfirmed_review.py` 新增 4 個（用 5c056cc 的程式都失敗）。987 passed、5 skipped；ruff、mypy 通過。
 - Codex 第二輪（057371f）三個 P2，都修了：讀場景時共用的詞照模型的 `same_as_ref`、不經別名表合併；`reconcile_characters` 不以共用的詞分組；`backfill_entities` 遇到兩張卡的實體不合併（`_two_cards`）。`test_unconfirmed_review.py` 新增 2 個、改 1 個（用 057371f 的程式都失敗）。989 passed、5 skipped；ruff、mypy 通過。
+- Codex 第三輪（140f357）兩個 P2，都修了：合併的例外只限兩邊各一張卡、不是共用的詞；人工連結清掉共用紀錄；讀場景時共用的詞＋`same_as_ref` 先判斷。`test_unconfirmed_review.py` 新增 2 個（用 140f357 的程式都失敗）。991 passed、5 skipped；ruff、mypy 通過。
