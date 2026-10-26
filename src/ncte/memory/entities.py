@@ -74,7 +74,9 @@ def backfill_entities(conn: sqlite3.Connection, book_id: str) -> int:
             continue
         for alias in json.loads(c[1]):
             if conn.execute(f"SELECT 1 FROM glossary WHERE {SERIES_SCOPE} AND source_term=?", (book_id, alias)).fetchone():
-                if is_shared(conn, book_id, alias) or shared_word(conn, book_id, alias, c[0]) is not None:
+                # no link here: the model never said the two cards are one, so the explicit-link exception does not apply
+                if is_shared(conn, book_id, alias) or shared_word(conn, book_id, alias, c[0]) is not None \
+                        or _two_cards(conn, book_id, alias, c[0]):
                     # a word another card has too (ADR-108)
                     add_sense(conn, book_id, alias, c[0], origin="backfill", ordinal=c[2])
                     continue
@@ -106,6 +108,13 @@ def _cards_of(conn: sqlite3.Connection, book_id: str, eid: str | None) -> set[st
     return {r[0] for r in conn.execute(
         f"SELECT canonical_name FROM characters WHERE {SERIES_SCOPE} AND {FINDABLE} AND canonical_name IN "
         f"(SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND entity_id=?)", (book_id, book_id, eid))}
+
+
+def _two_cards(conn: sqlite3.Connection, book_id: str, a: str, b: str) -> bool:
+    """The two forms belong to different entities that each have a card."""
+    a_eid, b_eid = _entity_of(conn, book_id, a), _entity_of(conn, book_id, b)
+    return a_eid is not None and b_eid is not None and a_eid != b_eid and bool(_cards_of(conn, book_id, a_eid)) \
+        and bool(_cards_of(conn, book_id, b_eid))
 
 
 def shared_word(conn: sqlite3.Connection, book_id: str, term: str, target: str) -> str | None:
@@ -334,7 +343,8 @@ def reconcile_characters(conn: sqlite3.Connection, book_id: str) -> int:
     groups: dict[str, list[tuple[str, str]]] = {}
     for term, eid, form in conn.execute(f"SELECT source_term, entity_id, form_type FROM glossary WHERE {SERIES_SCOPE} "
                                         "AND entity_id IS NOT NULL", (book_id,)):
-        if term in chars:
+        # a card named by a word that may name more than one person is never someone by that word (ADR-108)
+        if term in chars and not is_shared(conn, book_id, term):
             groups.setdefault(eid, []).append((form, chars[term]))
     n = 0
     for members in groups.values():
