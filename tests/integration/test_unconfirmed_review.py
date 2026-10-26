@@ -426,3 +426,49 @@ def test_an_identity_answer_against_a_different_answer_of_the_same_pass_merges_n
     assert _card(conn, s["a"]) is not None and _card(conn, p) is not None
     again = next(i for i in verify.collect(conn, book.id) if i["ref"] == f"i:{s['a']}")
     assert p not in again["candidates"] and s["b"] in again["candidates"]
+
+
+def test_a_same_person_answer_reaching_a_card_it_is_not_through_a_merge_of_the_same_pass_merges_nothing(conn, cfg,
+                                                                                                      fixtures):
+    """Q was answered not to be 母親; the new P may be 母親 and Q may be P. One answer makes P 母親, the next makes Q
+    P — that is 母親 now, which Q is not: Q stays its own card and is asked again (ADR-107, review)."""
+    s = _setup(conn, cfg, fixtures)
+    book, q = s["book"], s["p"]
+    p = repo.upsert_character(conn, book.id, "来訪者", name_zh=None, aliases=["母親"], unit_id=s["intro"]["id"],
+                              ordinal=s["intro"]["ordinal"], origin="test")[0]
+    conn.execute("UPDATE characters SET may_be_json=? WHERE id=?", (json.dumps([s["a"]]), p))
+    conn.execute("UPDATE characters SET may_be_json=?, not_same_json=? WHERE id=?",
+                 (json.dumps([p]), json.dumps([s["a"]]), q))
+    items = verify.collect(conn, book.id)
+    by = {i["ref"]: i for i in items}
+    parsed = VerifyOutput.model_validate({"items": [
+        {"ref": f"s:{r}", "answer": x, "reason": "x", "evidence": [next(iter(by[f"s:{r}"]["_codes"]))]}
+        for r, x in ((p, s["a"]), (q, p))]})
+    left: list[str] = []
+    stats = verify.apply(conn, book.id, items, parsed, lambda *a: None, unapplied=left)
+    assert stats["same_person_merged"] == 1 and stats["identities_contradicted"] == 1 and f"s:{q}" in left
+    assert _card(conn, q) is not None and _card(conn, s["a"]) is not None
+
+
+def test_a_group_answer_reaching_a_group_it_is_not_through_a_merge_of_the_same_pass_merges_nothing(conn, cfg,
+                                                                                                fixtures):
+    """Groups G1 and G2 were answered not to be one; G3 is answered the same as G2, then G1 the same as G3 — that is
+    G2 now: G1 stays its own group and is asked again (ADR-107, review)."""
+    s = _setup(conn, cfg, fixtures)
+    book = s["book"]
+    g1, g2, g3 = (repo.upsert_character(conn, book.id, n, name_zh=None, aliases=[], unit_id=s["intro"]["id"],
+                                        ordinal=s["intro"]["ordinal"], origin="test")[0] for n in ("甲組", "乙組", "丙組"))
+    conn.execute("UPDATE characters SET is_group=1 WHERE id IN (?,?,?)", (g1, g2, g3))
+    conn.execute("UPDATE characters SET not_same_json=? WHERE id=?", (json.dumps([g2]), g1))
+    for g in (g1, g2, g3):  # each has a member, so each is asked
+        conn.execute("INSERT INTO group_members(group_id, member_id, book_id, reason, created_at) VALUES (?,?,?,?,?)",
+                     (g, s["a"], book.id, "x", "t"))
+    items = verify.collect(conn, book.id)
+    assert g2 not in next(i for i in items if i["ref"] == f"p:{g1}")["candidates"]
+    parsed = VerifyOutput.model_validate({"items": [
+        {"ref": f"p:{g3}", "answer": f"same:{g2}", "reason": "x"},
+        {"ref": f"p:{g1}", "answer": f"same:{g3}", "reason": "x"}]})
+    left: list[str] = []
+    stats = verify.apply(conn, book.id, items, parsed, lambda *a: None, unapplied=left)
+    assert stats["groups_merged"] == 1 and stats["identities_contradicted"] == 1 and f"p:{g1}" in left
+    assert _card(conn, g1) is not None and _card(conn, g2) is not None

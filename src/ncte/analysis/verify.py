@@ -667,6 +667,11 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
                     unapplied.append(a.ref)
                 stats["same_person_unapplied"] = stats.get("same_person_unapplied", 0) + 1
                 continue
+            if answer != "different" and repo.not_same(conn, card, other):
+                # the card it names became, through this pass's merges, one it was answered not to be (ADR-107)
+                unanswered(a.ref)
+                stats["identities_contradicted"] = stats.get("identities_contradicted", 0) + 1
+                continue
             if answer == "different":  # holds for the cards it was asked about; a card not asked about is asked later
                 asked = sorted({*json.loads(c["not_same_json"] or "[]"), *(now(x) for x in item["candidates"])})
                 conn.execute("UPDATE characters SET may_be_json='[]', not_same_json=?, updated_at=? WHERE id=?",
@@ -685,6 +690,10 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
                 stats["same_person_merged"] = stats.get("same_person_merged", 0) + 1
         elif kind == "p":
             if answer.startswith("same:") and answer[5:].strip() in item["candidates"] \
+                    and now(answer[5:].strip()) != now(key) and repo.not_same(conn, now(key), now(answer[5:].strip())):
+                unanswered(a.ref)  # as for an identity (ADR-107)
+                stats["identities_contradicted"] = stats.get("identities_contradicted", 0) + 1
+            elif answer.startswith("same:") and answer[5:].strip() in item["candidates"] \
                     and now(answer[5:].strip()) != now(key):
                 merge(now(answer[5:].strip()), now(key))  # one group known by two descriptions
                 stats["groups_merged"] = stats.get("groups_merged", 0) + 1

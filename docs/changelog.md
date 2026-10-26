@@ -1335,3 +1335,4 @@ open workspace/eval/<timestamp>/report.html
 - `memory/repository.not_same`；`analysis/verify.apply` 的 `i`、`r` 遇到答過不是同一人的兩張卡不合併、留待再問（`identities_contradicted`）；`identity_items`、`narrator_items` 的候選排除這些卡。
 - 測試：`test_unconfirmed_review.py` 新增 1 個（用 13d4fcd 的程式失敗）。980 passed、5 skipped；ruff、mypy 通過。
 - 重放 scene_state 實驗開的那組的覆核答案：第 8 章 21→31／31（見 ADR-107）。
+- Codex 審閱（`codex exec -s read-only`，a160031）兩個 P2，都修了：`s:` 答某張卡、群組 `same:` 合併前也查答過「不是同一人」（前一批的合併讓候選變成那張卡）。`test_unconfirmed_review.py` 新增 2 個（用 a160031 的程式都失敗）。982 passed、5 skipped；ruff、mypy 通過。
