@@ -238,7 +238,8 @@ def identity_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
     out = []
     # a card marked as maybe one of a few cards with the same words is asked that (``same_person_items``) instead
     for c in sorted((r for r in rows if r["id"] in cards and (r["n"] or r["k"]) and not repo.may_be(r)), key=order):
-        others = {k: v for k, v in cards.items() if k != c["id"]}
+        # a card answered not to be this one is no candidate (ADR-107)
+        others = {k: v for k, v in cards.items() if k != c["id"] and not repo.not_same(conn, c["id"], k)}
         ctx = _window(conn, book_id, c["known_from_ordinal"])
         called_by = [f"{names.get(a['speaker_id'], '?')}：{a['form_ja']}" for a in conn.execute(
             "SELECT speaker_id, form_ja FROM address_terms WHERE book_id=? AND addressee_id=? LIMIT 5", (book_id, c["id"]))]
@@ -485,6 +486,7 @@ def narrator_items(conn: sqlite3.Connection, book_id: str, names: dict[str, str]
                 others[narr["narrator"]] = others.get(narr["narrator"], 0) + 1
         cands = {r["id"]: names[r["id"]] for r in named if r["id"] in names}
         cands.update({x: names[x] for x in others})
+        cands = {k: v for k, v in cands.items() if not repo.not_same(conn, c["id"], k)}  # ADR-107
         out.append({"ref": f"r:{c['id']}", "kind": "narrator", "facts": facts, "called": called, "lines": lines,
                     "first_scene": _window(conn, book_id, c["known_from_ordinal"])[:6],
                     "narrators_of_other_first_person_scenes": {names[x]: n for x, n in others.items()},
@@ -642,7 +644,12 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
             conn.execute("UPDATE scenes SET state_json=? WHERE book_id=? AND id=?",
                          (json.dumps(state, ensure_ascii=False), book_id, sid))
         elif kind == "i":
-            if answer in item["candidates"] and now(answer) != now(key):  # 「姉ちゃん」 in the sister's story is 高木
+            if answer in item["candidates"] and now(answer) != now(key) and repo.not_same(conn, now(key), now(answer)):
+                # the two were answered not to be one person (this pass or before): the answers disagree, so the
+                # card is asked again without that card among its candidates (ADR-107)
+                unanswered(a.ref)
+                stats["identities_contradicted"] = stats.get("identities_contradicted", 0) + 1
+            elif answer in item["candidates"] and now(answer) != now(key):  # 「姉ちゃん」 in the sister's story is 高木
                 _narrator_is(conn, book_id, now(key), now(answer))
                 went[now(key)] = now(answer)
                 stats["identities_merged"] = stats.get("identities_merged", 0) + 1
@@ -689,7 +696,10 @@ def apply(conn: sqlite3.Connection, book_id: str, items: list[dict[str, Any]], p
                 if members:
                     stats["groups_with_members"] = stats.get("groups_with_members", 0) + 1
         elif kind == "r":
-            if answer in item["candidates"] and now(answer) != now(key):  # the narrator is this named character
+            if answer in item["candidates"] and now(answer) != now(key) and repo.not_same(conn, now(key), now(answer)):
+                unanswered(a.ref)  # as for an identity (ADR-107)
+                stats["identities_contradicted"] = stats.get("identities_contradicted", 0) + 1
+            elif answer in item["candidates"] and now(answer) != now(key):  # the narrator is this named character
                 _narrator_is(conn, book_id, now(key), now(answer))
                 went[now(key)] = now(answer)
                 stats["narrators_matched"] = stats.get("narrators_matched", 0) + 1

@@ -259,6 +259,15 @@ def may_be(c: Any) -> list[str]:
     return [str(x) for x in json.loads((c["may_be_json"] if "may_be_json" in c.keys() else None) or "[]")]
 
 
+def not_same(conn: sqlite3.Connection, a: str, b: str) -> bool:
+    """Was one of the two cards answered not to be the other (``not_same_json``, either side; ADR-107)?"""
+    for x, y in ((a, b), (b, a)):
+        row = conn.execute("SELECT not_same_json FROM characters WHERE id=?", (x,)).fetchone()
+        if row is not None and y in json.loads(row[0] or "[]"):
+            return True
+    return False
+
+
 def ensure_glossary(conn: sqlite3.Connection, book_id: str, source: str, target: str, *, category: str,
                     origin: str, first_unit_id: str | None, verified: bool = False) -> bool:
     if not source or not target:

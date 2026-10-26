@@ -1330,3 +1330,8 @@ open workspace/eval/<timestamp>/report.html
 - Codex 第二輪（審 55d2b95）一個 P2、一個 P3，都修了：`run_meta` 把抄本作廢的 NAV／NCX 項目的略過工作改回待翻（原本整次執行顯示完成、項目卻沒有譯文）；`gui.data.chapters` 的章節名只取有效狀態、原文相同的譯文（人工優先）。`test_toc_follows.py` 再加 1 個、改 1 個（各自在修改前失敗）。975 passed、5 skipped；ruff、mypy 通過。
 - Codex 第三輪（審 42923ec）三個 P2，同一個原因：只在抄本「這次被作廢」時改回待翻。改成看狀態：`run_meta` 把這次執行裡略過或完成的 NAV／NCX 工作，沒跟著標題、目前譯文又不算已翻的改回待翻（暫停時被匯出作廢、工作因抄本已完成、人工改過的都對）。`test_toc_follows.py` 新增 3 個（用 42923ec 的程式都失敗）。978 passed、5 skipped；ruff、mypy 通過。
 - Codex 第四輪（審 582d36f）一個 P2：改回待翻後、續跑前人工寫了標題，仍會送給模型。`run_meta` 的狀態判斷改為兩個方向（待翻但已有算數的譯文 → 略過）。`--force` 時照 ensure_jobs 不略過。`test_toc_follows.py` 新增 1 個（用 582d36f 的程式失敗）。979 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-107 覆核的身分合併不違背「不是同一人」（2026-10-26，分支 verify-not-same-2026-10-26，基於 main 13d4fcd）
+- `memory/repository.not_same`；`analysis/verify.apply` 的 `i`、`r` 遇到答過不是同一人的兩張卡不合併、留待再問（`identities_contradicted`）；`identity_items`、`narrator_items` 的候選排除這些卡。
+- 測試：`test_unconfirmed_review.py` 新增 1 個（用 13d4fcd 的程式失敗）。980 passed、5 skipped；ruff、mypy 通過。
+- 重放 scene_state 實驗開的那組的覆核答案：第 8 章 21→31／31（見 ADR-107）。

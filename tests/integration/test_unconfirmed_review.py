@@ -400,3 +400,29 @@ def test_backfill_groups_only_the_aliases_of_a_card_a_name_finds(conn, cfg, fixt
     ent = {r[0]: r[1] for r in conn.execute("SELECT source_term, entity_id FROM glossary WHERE source_term IN "
                                             "('母親','旧母')")}
     assert ent["母親"] != ent["旧母"]
+
+
+def test_an_identity_answer_against_a_different_answer_of_the_same_pass_merges_nothing(conn, cfg, fixtures):
+    """The new 「母親」 is answered not to be 母親 or 義母, and in the same pass 母親's identity is answered as that new
+    card: the answers disagree, so nothing merges and the identity is asked again without that card (ADR-107)."""
+    s = _setup(conn, cfg, fixtures)
+    book = s["book"]
+    conn.execute("INSERT INTO relation_notes(book_id, scene_id, a_id, b_id, relation_zh, kind, evidence_unit_ids_json, "
+                 "evidence_quote, first_ordinal, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                 (book.id, s["scenes"][0]["id"], s["a"], s["b"], "x", "family", "[]", "", 1, "t"))  # 母親 is asked about
+    p = repo.upsert_character(conn, book.id, "来訪者", name_zh=None, aliases=["母親"], unit_id=s["intro"]["id"],
+                              ordinal=s["intro"]["ordinal"], origin="test")[0]
+    conn.execute("UPDATE characters SET may_be_json=? WHERE id=?", (json.dumps([s["a"], s["b"]]), p))
+    assert p in next(i for i in verify.collect(conn, book.id) if i["ref"] == f"i:{s['a']}")["candidates"]
+    items = verify.collect(conn, book.id)
+    code = next(iter(next(i for i in items if i["ref"] == f"s:{p}")["_codes"]))
+    parsed = VerifyOutput.model_validate({"items": [
+        {"ref": f"s:{p}", "answer": "different", "reason": "x", "evidence": [code]},
+        {"ref": f"i:{s['a']}", "answer": p, "reason": "x"}]})
+    left: list[str] = []
+    stats = verify.apply(conn, book.id, items, parsed, lambda *a: None, unapplied=left)
+    assert stats["same_person_different"] == 1 and stats["identities_contradicted"] == 1
+    assert "identities_merged" not in stats and f"i:{s['a']}" in left
+    assert _card(conn, s["a"]) is not None and _card(conn, p) is not None
+    again = next(i for i in verify.collect(conn, book.id) if i["ref"] == f"i:{s['a']}")
+    assert p not in again["candidates"] and s["b"] in again["candidates"]
