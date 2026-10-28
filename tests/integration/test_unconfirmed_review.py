@@ -528,19 +528,26 @@ def test_backfill_does_not_join_two_cards_by_a_word_both_have(conn, cfg, fixture
     assert all(_card(conn, c) is not None for c in cards.values())
 
 
-def test_a_link_naming_two_cards_merges_them_even_when_both_have_other_forms(conn, cfg, fixtures):
+def test_a_link_naming_two_cards_is_asked_and_the_second_look_merges_them(conn, cfg, fixtures):
+    """The model linking two cards' names may mean they are one person or only that the word names the other here
+    (「母親」, the present mother's card, said of トーネの母親): the later card is marked maybe the other and the second
+    look's answer merges them (ADR-108 spot check)."""
     from ncte.memory.entities import link
     from ncte.memory.repository import set_glossary
 
     s = _setup(conn, cfg, fixtures)
     book, at = s["book"], s["intro"]
-    for name, form in (("ロセト", "ロセト様"), ("銅の杖の先生", "銅の杖")):
-        repo.upsert_character(conn, book.id, name, name_zh=None, aliases=[], unit_id=at["id"], ordinal=at["ordinal"],
-                              origin="test")
+    ids = []
+    for i, (name, form) in enumerate((("ロセト", "ロセト様"), ("銅の杖の先生", "銅の杖"))):
+        ids.append(repo.upsert_character(conn, book.id, name, name_zh=None, aliases=[], unit_id=at["id"],
+                                         ordinal=at["ordinal"] + i, origin="test")[0])
         set_glossary(conn, book.id, name, name, category="character")
         set_glossary(conn, book.id, form, form, category="character")
         assert link(conn, book.id, form, name, "alias", origin="llm") == "accepted"
-    assert link(conn, book.id, "ロセト", "銅の杖の先生", "alias", origin="llm") == "accepted"
+    assert link(conn, book.id, "ロセト", "銅の杖の先生", "alias", origin="llm") == "asked"
+    assert all(_card(conn, c) is not None for c in ids) and repo.may_be(_card(conn, ids[1])) == [ids[0]]
+    stats, _ = _ask(conn, book.id, [(f"s:{ids[1]}", ids[0])])
+    assert stats["same_person_merged"] == 1
     assert conn.execute("SELECT count(*) FROM characters WHERE canonical_name IN ('ロセト','銅の杖の先生')").fetchone()[0] == 1
 
 
@@ -796,3 +803,25 @@ def test_a_nickname_of_one_card_links_to_a_new_full_name(conn, cfg, fixtures):
         set_glossary(conn, book.id, w, w, category="character")
     backfill_entities(conn, book.id)
     assert link(conn, book.id, "ソラっち", "天野ソラ", "full", origin="llm") == "accepted"
+
+
+def test_a_link_of_a_nameless_cards_word_to_another_card_merges_nothing(conn, cfg, fixtures):
+    """Spot-check regression (ADR-108): the present mother's card is named 「母親」 while she has no name; the memory
+    update links 「母親 → トーネの母親」 in the baker's scene. The two mothers stay two cards, the later one marked as
+    maybe the other; the second look's 'different' keeps them apart with their lines."""
+    from ncte.memory.entities import link
+    from ncte.memory.repository import set_glossary
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])  # no other card is called 「母親」
+    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal", (book.id,)).fetchall()
+    present = repo.upsert_character(conn, book.id, "母親", name_zh=None, aliases=["お母様"], unit_id=u[0][0],
+                                    ordinal=u[0][1], origin="test")[0]
+    baker = repo.upsert_character(conn, book.id, "トーネの母親", name_zh=None, aliases=[], unit_id=u[2][0],
+                                  ordinal=u[2][1], origin="test")[0]
+    for name in ("母親", "トーネの母親"):
+        set_glossary(conn, book.id, name, name, category="character")
+    assert link(conn, book.id, "母親", "トーネの母親", "alias", origin="llm", ordinal=u[3][1]) == "asked"
+    assert _card(conn, present) is not None and _card(conn, baker) is not None
+    stats, _ = _ask(conn, book.id, [(f"s:{baker}", "different")])
+    assert stats["same_person_different"] == 1
+    assert _card(conn, present) is not None and _card(conn, baker) is not None and repo.not_same(conn, baker, present)

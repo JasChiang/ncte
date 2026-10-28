@@ -190,9 +190,10 @@ def test_a_word_one_card_is_called_given_to_another_person_does_not_merge_the_ca
     assert {"トーネの母親", "実母"} <= names
     groups = sorted(sorted(f["ja"] for f in fs) for fs in entity_forms(conn, book.id).values())
     assert ["トーネの母親", "母上"] in groups and ["実母"] in groups
-    # the model naming both cards in the link says they are one person
-    assert link(conn, book.id, "ロセト", "銅の杖の先生", "alias", origin="llm") == "accepted"
-    assert conn.execute("SELECT count(*) FROM characters WHERE canonical_name IN ('ロセト','銅の杖の先生')").fetchone()[0] == 1
+    # the model naming both cards in the link: asked (the later card marked maybe the other), not merged here
+    assert link(conn, book.id, "ロセト", "銅の杖の先生", "alias", origin="llm") == "asked"
+    assert conn.execute("SELECT count(*) FROM characters WHERE canonical_name IN ('ロセト','銅の杖の先生')").fetchone()[0] == 2
+    assert conn.execute("SELECT may_be_json FROM characters WHERE canonical_name='ロセト'").fetchone()[0] != "[]"
 
 
 def test_entity_label_follows_official_form_and_unlink_drops_alias(conn, cfg, fixtures):

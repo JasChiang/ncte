@@ -119,9 +119,9 @@ def _two_cards(conn: sqlite3.Connection, book_id: str, a: str, b: str) -> bool:
 
 def shared_word(conn: sqlite3.Connection, book_id: str, term: str, target: str) -> str | None:
     """For an automatic link of ``term`` to ``target``: the word to record as shared (it may refer to either), or None
-    when the link merges. A link naming the only card on each side, by names that name only them, is the model's
-    statement that they are one person and merges; otherwise a link that would fuse two established entities, or two cards, is a shared word — the side that is not a
-    card's name (「母上」 in 「実母 → 母上」), else ``term`` (ADR-108)."""
+    when the link merges. A link that would fuse two established entities, or two cards, is a shared word — the side
+    that is not a card's name (「母上」 in 「実母 → 母上」), else ``term`` (ADR-108). A link of exactly two cards'
+    names is asked instead (``link``)."""
     s_eid, t_eid = _entity_of(conn, book_id, term), _entity_of(conn, book_id, target)
     if s_eid is None or t_eid is None or s_eid == t_eid:
         return None
@@ -139,10 +139,6 @@ def shared_word(conn: sqlite3.Connection, book_id: str, term: str, target: str) 
         if len(cw) > 1 and cs | ct != named:
             return word
     s_cards, t_cards = _cards_of(conn, book_id, s_eid), _cards_of(conn, book_id, t_eid)
-    # the link names the one card on each side, by a name that names only it: the model says the two are one
-    if s_cards == {term} and t_cards == {target} and not is_shared(conn, book_id, term) \
-            and not is_shared(conn, book_id, target):
-        return None
     if not (_joins_two_entities(conn, book_id, term, target) or (s_cards and t_cards)):
         return None
     return target if term in s_cards else term
@@ -166,6 +162,36 @@ def _cards_for(conn: sqlite3.Connection, book_id: str, word: str) -> set[str]:
     """Every findable card the word may be: the cards called so, and the cards of its entity."""
     ids = {n: c for c, n in _findable(conn, book_id)}
     return _holders(conn, book_id, word) | {ids[n] for n in _cards_of(conn, book_id, _entity_of(conn, book_id, word))}
+
+
+def _two_named_cards(conn: sqlite3.Connection, book_id: str, term: str, target: str) -> tuple[str, str] | None:
+    """Two different findable cards named by the two words, not yet one entity: (the card known later, the other)."""
+    if _entity_of(conn, book_id, term) == _entity_of(conn, book_id, target):
+        return None
+    rows = {r["canonical_name"]: r for r in conn.execute(
+        f"SELECT id, canonical_name, known_from_ordinal FROM characters WHERE {SERIES_SCOPE} AND {FINDABLE} AND "
+        "canonical_name IN (?,?)", (book_id, term, target))}
+    if term not in rows or target not in rows or rows[term]["id"] == rows[target]["id"]:
+        return None
+    # a word that may name someone else too is a shared word (shared_word), not a question about these two
+    pair = {str(rows[term]["id"]), str(rows[target]["id"])}
+    if any(is_shared(conn, book_id, w) or _holders(conn, book_id, w) - pair for w in (term, target)):
+        return None
+    a, b = sorted((rows[term], rows[target]), key=lambda r: (r["known_from_ordinal"] or 0, r["id"]))
+    return str(b["id"]), str(a["id"])
+
+
+def _mark_may_be(conn: sqlite3.Connection, card: str, other: str) -> None:
+    """``card`` may be ``other`` (asked by the second look), unless already answered not to be."""
+    import json
+
+    from .repository import may_be, not_same
+
+    row = conn.execute("SELECT * FROM characters WHERE id=?", (card,)).fetchone()
+    if row is None or not_same(conn, card, other) or other in may_be(row):
+        return
+    conn.execute("UPDATE characters SET may_be_json=?, updated_at=? WHERE id=?",
+                 (json.dumps([*may_be(row), other]), utcnow(), card))
 
 
 def _card_for(conn: sqlite3.Connection, book_id: str, word: str) -> str | None:
@@ -305,10 +331,20 @@ def link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_ty
          unit_id: str | None = None, quote: str | None = None, ordinal: int | None = None,
          note: str | None = None) -> str:
     """Link two forms. Returns 'accepted', 'shared' (an automatic link that would fuse two established entities:
-    the form is recorded as possibly referring to either) or 'candidate' (one side has no glossary entry yet)."""
+    the form is recorded as possibly referring to either), 'asked' (an automatic link of two cards' names: the later
+    card is marked as maybe the other, for the second look) or 'candidate' (one side has no glossary entry yet)."""
     known = {r[0] for r in conn.execute(f"SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND source_term IN (?,?)",
                                         (book_id, term, target))}
     if term in known and target in known:
+        if origin != "human" and (pair := _two_named_cards(conn, book_id, term, target)) is not None:
+            # the link's two words are two cards' names: the model may say the two are one person (「ロセト」 is
+            # 「銅の杖の先生」), or only that the word names the other person here (「母親」, the present mother's card
+            # while she has no name, said of トーネの母親 in the baker's scene). Not the program's to tell: the later
+            # card is marked as maybe the earlier and the second look asks (ADR-059; ADR-108 spot check)
+            _mark_may_be(conn, *pair)
+            record_link(conn, book_id, term, target, form_type, origin=origin, status="candidate", unit_id=unit_id,
+                        quote=quote, ordinal=ordinal)
+            return "asked"
         if origin != "human" and (word := shared_word(conn, book_id, term, target)) is not None:
             # An ambiguous form (「しまちゃん」 was used for both sisters, 「母上」 by two children for two mothers)
             # must not fuse two established entities or two cards – merge_into moves every form of the term's entity.
