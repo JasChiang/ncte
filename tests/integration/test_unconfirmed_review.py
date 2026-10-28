@@ -646,3 +646,60 @@ def test_a_persons_link_of_two_cards_merges_them_though_a_word_of_theirs_names_a
     assert link(conn, book.id, "実母", "母上", "alias", origin="human") == "accepted"
     assert (_card(conn, ids["実母"]) is None) != (_card(conn, ids["母上"]) is None)
     assert _card(conn, ids["義母"]) is not None and is_shared(conn, book.id, "母上")
+
+
+def _three_mothers(conn, cfg, fixtures, *, backfill=True):
+    """Cards 母上, 実母 and 義母; 義母 (and 実母 when backfilled) is called 母上 too."""
+    from ncte.memory.entities import backfill_entities
+    from ncte.memory.repository import set_glossary
+
+    s = _setup(conn, cfg, fixtures)
+    book, at = s["book"], s["intro"]
+    ids = {}
+    for name, aliases in (("母上", []), ("実母", ["母上"] if backfill else []), ("義母", ["母上"])):
+        ids[name] = repo.upsert_character(conn, book.id, name, name_zh=None, aliases=aliases, unit_id=at["id"],
+                                          ordinal=at["ordinal"], origin="test")[0]
+        set_glossary(conn, book.id, name, name, category="character")
+    if backfill:
+        backfill_entities(conn, book.id)
+    return s, ids
+
+
+def test_a_word_another_card_has_as_an_alias_linked_to_a_card_merges_nothing(conn, cfg, fixtures):
+    """「母上」 is a card's name and 義母's alias (no shared record yet): the model linking it to 実母 does not merge the
+    「母上」 card into 実母 (ADR-108, fifth review)."""
+    from ncte.memory.entities import link
+
+    s, ids = _three_mothers(conn, cfg, fixtures, backfill=False)
+    assert link(conn, s["book"].id, "母上", "実母", "title", origin="llm", ordinal=2) == "shared"
+    assert all(_card(conn, c) is not None for c in ids.values())
+
+
+def test_a_persons_link_merges_the_cards_of_words_that_are_no_cards_names(conn, cfg, fixtures):
+    """A person's link through a word with no card of its own (リリア, linked to 実母 before) still makes the cards one
+    (ADR-108, fifth review)."""
+    from ncte.memory.entities import link
+    from ncte.memory.repository import set_glossary
+
+    s, ids = _three_mothers(conn, cfg, fixtures)
+    book = s["book"]
+    set_glossary(conn, book.id, "リリア", "莉莉亞", category="character")
+    assert link(conn, book.id, "リリア", "実母", "alias", origin="llm") == "accepted"
+    assert link(conn, book.id, "リリア", "母上", "alias", origin="human") == "accepted"
+    assert (_card(conn, ids["実母"]) is None) != (_card(conn, ids["母上"]) is None)
+    assert _card(conn, ids["義母"]) is not None
+
+
+def test_a_persons_link_merges_cards_a_reconcile_already_folded(conn, cfg, fixtures):
+    from ncte.memory.entities import link
+    from ncte.memory.repository import set_glossary
+
+    s, ids = _three_mothers(conn, cfg, fixtures)
+    book, at = s["book"], s["intro"]
+    set_glossary(conn, book.id, "リリア", "莉莉亞", category="character")
+    assert link(conn, book.id, "実母", "リリア", "alias", origin="llm") == "accepted"
+    lilia = repo.upsert_character(conn, book.id, "リリア", name_zh=None, aliases=[], unit_id=at["id"],
+                                  ordinal=at["ordinal"], origin="test")[0]
+    assert link(conn, book.id, "実母", "母上", "alias", origin="human") == "accepted"
+    left = [c for c in (ids["実母"], ids["母上"], lilia) if _card(conn, c) is not None]
+    assert len(left) == 1 and _card(conn, ids["義母"]) is not None
