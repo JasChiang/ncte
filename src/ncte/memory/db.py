@@ -770,6 +770,9 @@ CREATE TABLE character_forms (
     PRIMARY KEY (character_id, form)
 );
 """),
+    (38, "what the words a card is known by are, as the model read them when it made the card (name, nickname, title, "
+         "description): a card known by a title or a description takes the person's name when the model later gives "
+         "one", "ALTER TABLE characters ADD COLUMN name_kind TEXT;"),
 ]
 # migrations that rebuild a table other tables refer to: run with foreign keys off (they cannot be switched inside a
 # transaction), checked before committing

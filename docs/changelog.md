@@ -1353,3 +1353,8 @@ open workspace/eval/<timestamp>/report.html
 - 修正：模型的連結兩邊正好是兩張卡的卡名時不合併（`link` 回 `asked`）：後出現的卡標記為可能是另一張（`may_be`），由覆核的 same_person 問模型；詞還指別人時照舊記成共用。`test_entities.py` 改 1 個、`test_unconfirmed_review.py` 改 1 個、新增 1 個（用 1fb4311 的程式都失敗）。1002 passed、5 skipped；ruff、mypy 通過。
 - Codex 第九輪（0ff93a5）三個 P2，都修了：詞經由實體還指別張卡時記成共用（`_cards_for`）；只標記本集的卡、先後照系列位置（兩張都不在本集就記成共用）；覆核的 same_person 題附上連結所在的段落（`linked_at`，提示詞說明），同一對名字在別段再被連時另記一筆、題目重新問。`test_unconfirmed_review.py` 新增 2 個（用 0ff93a5 的程式都失敗）。1004 passed、5 skipped；ruff、mypy 通過。
 - Codex 第十輪（aa8c904）一個 P2，修了：`linked_at` 只讀同一系列的連結（別的書同名的連結不會重開題目、也不能當依據）。`test_unconfirmed_review.py` 新增 1 個（用 aa8c904 的程式失敗）。1005 passed、5 skipped；ruff、mypy 通過。
+
+## ADR-109 用稱號或描述建的卡，模型給了名字就改用名字（2026-10-29，分支 card-name-2026-10-29，基於 main 668d9cc）
+- 起因：真書說話者抽測（`workspace/exp/speaker-real`，Claude 方案、預設設定，《英雄と賢者》《悪魔公女》《魔石グルメ》各讀前 450 段，三本 164 個請求、約 20 分鐘，Claude 5h 1%→13%、每週 10%→11%）。對照原文與官方中譯逐句判：模型判出說話者的 407 句沒有錯（英雄と賢者 162、悪魔公女 122、魔石グルメ 123）；答「不知道」19 句（不是台詞的稱號、心聲，只有刪節號的沉默）。順帶發現兩位主角的卡名是「英雄」「賢者」（見 ADR-109）、魔石グルメ的「給仕」卡掛了兩國的兩位女給仕（模型在 `other_forms` 把「年配の給仕」給了舊卡，未修，見 `docs/todo.md`）。
+- `memory/db.py` migration 38 `characters.name_kind`；`analysis/scene.py`：建卡時記 `name_kind`、`NOT_A_NAME`（同一場先寫稱號也用名字建卡）、揭曉名字的合併抽成 `reveal`，`other_forms` 給稱號或描述卡的 `name` 經 `reveal` 改名。`scene_analyze`、`scene_read` 提示詞的別名說明加「或稱號」與之後場景給名字的寫法。
+- 測試：`tests/integration/test_card_name.py`（新，4 個；稱號卡之後改名、名字只從給的那場看得到；同一場稱號＋名字；名字卡不改；名字是別張卡的不改。前兩個用 668d9cc 的程式失敗）。
