@@ -125,6 +125,11 @@ def shared_word(conn: sqlite3.Connection, book_id: str, term: str, target: str) 
     s_eid, t_eid = _entity_of(conn, book_id, term), _entity_of(conn, book_id, target)
     if s_eid is None or t_eid is None or s_eid == t_eid:
         return None
+    # a word already shared may name either person: whichever it is linked to is one more person it may name, never
+    # a reason to move the people it already names (third review: 「母上」 → リリア took トーネの母親 with it)
+    for word in (term, target):
+        if is_shared(conn, book_id, word):
+            return word
     s_cards, t_cards = _cards_of(conn, book_id, s_eid), _cards_of(conn, book_id, t_eid)
     # the link names the one card on each side, by a name that names only it: the model says the two are one
     if s_cards == {term} and t_cards == {target} and not is_shared(conn, book_id, term) \
@@ -279,10 +284,23 @@ def link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_ty
         record_link(conn, book_id, term, target, form_type, origin=origin, status="accepted", unit_id=unit_id,
                     quote=quote, ordinal=ordinal)
         reconcile_characters(conn, book_id)
+        if origin == "human":
+            # the two cards the person named are one, even when a word of theirs still names someone else too
+            # (reconcile_characters skips a card named by a shared word)
+            _merge_named_cards(conn, book_id, target, term)
         return "accepted"
     record_link(conn, book_id, term, target, form_type, origin=origin, status="candidate", unit_id=unit_id,
                 quote=quote, ordinal=ordinal)
     return "candidate"
+
+
+def _merge_named_cards(conn: sqlite3.Connection, book_id: str, keep: str, drop: str) -> None:
+    from .repository import merge_characters
+
+    ids = [conn.execute(f"SELECT id FROM characters WHERE {SERIES_SCOPE} AND {FINDABLE} AND canonical_name=?",
+                        (book_id, name)).fetchone() for name in (keep, drop)]
+    if ids[0] is not None and ids[1] is not None:
+        merge_characters(conn, ids[0][0], ids[1][0])
 
 
 def entity_forms(conn: sqlite3.Connection, book_id: str) -> dict[str, list[dict[str, Any]]]:

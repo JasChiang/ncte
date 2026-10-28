@@ -607,3 +607,42 @@ def test_a_shared_word_said_to_be_a_known_card_is_that_card_even_when_several_ca
     n = conn.execute("SELECT count(*) FROM characters").fetchone()[0]
     refs = _read(conn, book, s["scenes"][1], s["intro"], name_ja="母上", same_as_ref=cards["実母"])
     assert refs["new_1"] == cards["実母"] and conn.execute("SELECT count(*) FROM characters").fetchone()[0] == n
+
+
+def test_a_shared_word_linked_to_a_name_without_a_card_does_not_move_the_card_it_named(conn, cfg, fixtures):
+    """「母上」 already names トーネの母親 and 実母; the model linking it to リリア (only a glossary word) must not move
+    トーネの母親 into リリア, or a later scene saying リリア is 実母 merges the two mothers (ADR-108, fourth review)."""
+    from ncte.memory.entities import is_shared, link
+    from ncte.memory.repository import set_glossary
+
+    s, cards = _two_mothers_called_hahaue(conn, cfg, fixtures)
+    book = s["book"]
+    assert link(conn, book.id, "母上", "実母", "title", origin="llm", ordinal=2) == "shared"
+    set_glossary(conn, book.id, "リリア", "莉莉亞", category="character")
+    assert link(conn, book.id, "母上", "リリア", "alias", origin="llm", ordinal=3) == "shared"
+    assert link(conn, book.id, "リリア", "母上", "alias", origin="llm", ordinal=3) == "shared"
+    assert is_shared(conn, book.id, "母上") and not is_shared(conn, book.id, "リリア")
+    conn.execute("UPDATE units SET plain_text='　路地の奥に、リリアが立っていた。' WHERE id=?", (s["intro"]["id"],))
+    lilia = _read(conn, book, s["scenes"][1], s["intro"], name_ja="リリア", same_as_ref=cards["実母"])["new_1"]
+    # リリア is 実母 (the reveal folds 実母's card into リリア's); トーネの母親 stays her own card
+    assert _card(conn, cards["トーネの母親"]) is not None and lilia != cards["トーネの母親"]
+    assert _card(conn, lilia) is not None
+
+
+def test_a_persons_link_of_two_cards_merges_them_though_a_word_of_theirs_names_a_third(conn, cfg, fixtures):
+    """Cards 母上, 実母 and 義母; 実母 and 義母 are both called 母上. A person linking 実母 to 母上 says those two cards
+    are one; 母上 still names 義母 too (ADR-108, fourth review)."""
+    from ncte.memory.entities import backfill_entities, is_shared, link
+    from ncte.memory.repository import set_glossary
+
+    s = _setup(conn, cfg, fixtures)
+    book, at = s["book"], s["intro"]
+    ids = {}
+    for name, aliases in (("母上", []), ("実母", ["母上"]), ("義母", ["母上"])):
+        ids[name] = repo.upsert_character(conn, book.id, name, name_zh=None, aliases=aliases, unit_id=at["id"],
+                                          ordinal=at["ordinal"], origin="test")[0]
+        set_glossary(conn, book.id, name, name, category="character")
+    backfill_entities(conn, book.id)
+    assert link(conn, book.id, "実母", "母上", "alias", origin="human") == "accepted"
+    assert (_card(conn, ids["実母"]) is None) != (_card(conn, ids["母上"]) is None)
+    assert _card(conn, ids["義母"]) is not None and is_shared(conn, book.id, "母上")
