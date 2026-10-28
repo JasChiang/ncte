@@ -132,8 +132,9 @@ def shared_word(conn: sqlite3.Connection, book_id: str, term: str, target: str) 
             return word
     # nor a word a card the link does not name also has (「母上」, a card's name and 義母's alias, linked to 実母):
     # which of them it names here is not the program's to say (fifth review)
-    named = _holders(conn, book_id, term) & _holders(conn, book_id, target)
-    named |= {c for c, n in _findable(conn, book_id) if n in (term, target)}
+    named = {c for c, n in _findable(conn, book_id) if n in (term, target)}
+    if not named and len(both := _holders(conn, book_id, term) & _holders(conn, book_id, target)) == 1:
+        named = both  # two words of one card (a nickname linked to the full name), no card named by either
     for word in (term, target):
         if _holders(conn, book_id, word) - named:
             return word
@@ -326,7 +327,15 @@ def _merge_entity_cards(conn: sqlite3.Connection, book_id: str, target: str) -> 
     order = [r[0] for r in conn.execute(f"SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND entity_id=? "
                                         "ORDER BY source_term!=?, form_type!='official', id", (book_id, eid, target))]
     cards = {n: c for c, n in _findable(conn, book_id)}
-    ids = list(dict.fromkeys(cards[f] for f in order if f in cards))
+    ids: list[str] = []
+    for f in order:
+        if f in cards:
+            ids.append(cards[f])
+        # a form no card is named by any more (実母, after a reveal folded her into リリア): the one card called so,
+        # never through a word that may name more than one person
+        elif not is_shared(conn, book_id, f) and len(held := _holders(conn, book_id, f)) == 1:
+            ids.append(next(iter(held)))
+    ids = list(dict.fromkeys(ids))
     for drop in ids[1:]:
         merge_characters(conn, ids[0], drop)
 

@@ -1346,3 +1346,4 @@ open workspace/eval/<timestamp>/report.html
 - Codex 第三輪（140f357）兩個 P2，都修了：合併的例外只限兩邊各一張卡、不是共用的詞；人工連結清掉共用紀錄；讀場景時共用的詞＋`same_as_ref` 先判斷。`test_unconfirmed_review.py` 新增 2 個（用 140f357 的程式都失敗）。991 passed、5 skipped；ruff、mypy 通過。
 - Codex 第四輪（ddb2070）兩個 P2，都修了：已共用的詞再連到誰都只多記一個可能指的人，不搬動它的實體（`shared_word`）；人工連結兩張卡時直接合併這兩張卡（`_merge_named_cards`），詞仍可指第三人。`test_unconfirmed_review.py` 新增 2 個（用 ddb2070 的程式都失敗）。993 passed、5 skipped；ruff、mypy 通過。
 - Codex 第五輪（97a7a6c）兩個 P2，都修了：一個詞還有連結沒寫到的卡也叫它（名字或別名，`_holders`）時記成共用、不合併；人工連結後把同一實體的卡都合成一張（`_merge_entity_cards`，詞不必還是卡名）。`test_unconfirmed_review.py` 新增 3 個（用 97a7a6c 的程式都失敗）。996 passed、5 skipped；ruff、mypy 通過。
+- Codex 第六輪（644ccd1）兩個 P2，都修了：連結提到的卡只算卡名是那兩個詞的卡（兩個詞都不是卡名時，才算唯一一張同時有兩個詞的卡）；人工連結合卡時，不再是卡名的寫法找唯一叫它、不是共用的卡。`test_unconfirmed_review.py` 新增 2 個（用 644ccd1 的程式都失敗）。998 passed、5 skipped；ruff、mypy 通過。

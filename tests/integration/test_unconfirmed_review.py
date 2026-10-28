@@ -703,3 +703,38 @@ def test_a_persons_link_merges_cards_a_reconcile_already_folded(conn, cfg, fixtu
     assert link(conn, book.id, "実母", "母上", "alias", origin="human") == "accepted"
     left = [c for c in (ids["実母"], ids["母上"], lilia) if _card(conn, c) is not None]
     assert len(left) == 1 and _card(conn, ids["義母"]) is not None
+
+
+def test_a_third_card_with_both_words_makes_the_link_shared(conn, cfg, fixtures):
+    """先生 and 師匠 are cards, and a third card is called both: linking the two words merges nothing (ADR-108, sixth
+    review). Two words of only one card, no card named by either, still link."""
+    from ncte.memory.entities import link
+    from ncte.memory.repository import set_glossary
+
+    s = _setup(conn, cfg, fixtures)
+    book, at = s["book"], s["intro"]
+    ids = [repo.upsert_character(conn, book.id, name, name_zh=None, aliases=aliases, unit_id=at["id"],
+                                 ordinal=at["ordinal"], origin="test")[0]
+           for name, aliases in (("先生", []), ("師匠", []), ("別の先生", ["先生", "師匠"]),
+                                 ("ソラ", ["ソラっち", "天野ソラ"]))]
+    for name in ("先生", "師匠", "別の先生", "ソラ", "ソラっち", "天野ソラ"):
+        set_glossary(conn, book.id, name, name, category="character")
+    assert link(conn, book.id, "先生", "師匠", "alias", origin="llm") == "shared"
+    assert all(_card(conn, c) is not None for c in ids)
+    assert link(conn, book.id, "ソラっち", "天野ソラ", "nickname", origin="llm") == "accepted"
+
+
+def test_a_persons_link_finds_the_card_a_reveal_folded_the_word_into(conn, cfg, fixtures):
+    from ncte.memory.entities import link
+    from ncte.memory.repository import set_glossary
+
+    s = _setup(conn, cfg, fixtures)
+    book, at = s["book"], s["intro"]
+    ids = {}
+    for name in ("実母", "リリア", "義母"):
+        ids[name] = repo.upsert_character(conn, book.id, name, name_zh=None, aliases=[], unit_id=at["id"],
+                                          ordinal=at["ordinal"], origin="test")[0]
+        set_glossary(conn, book.id, name, name, category="character")
+    repo.merge_characters(conn, ids["リリア"], ids["実母"])  # a scene reveal: 実母 is リリア
+    assert link(conn, book.id, "実母", "義母", "alias", origin="human") == "accepted"
+    assert (_card(conn, ids["リリア"]) is None) != (_card(conn, ids["義母"]) is None)
