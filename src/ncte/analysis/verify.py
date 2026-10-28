@@ -273,12 +273,32 @@ def same_person_items(conn: sqlite3.Connection, book_id: str, names: dict[str, s
                                                  may)}
         # what earlier steps recorded of each, as known where this card is first seen (and the passage shown around it)
         hints = tell_apart(conn, book_id, [c, *rows.values()], c["known_from_ordinal"] + CONTEXT_UNITS)
-        out.append({"ref": f"s:{c['id']}", "kind": "same_person", "name": names[c["id"]],
+        item: dict[str, Any] = {"ref": f"s:{c['id']}", "kind": "same_person", "name": names[c["id"]],
                     "card": {**_card_text(conn, c, codes), **_notes_of(hints, c["id"])},
                     "candidates": {x: names[x] for x in may if x in rows},
                     "candidate_cards": {x: {**_card_text(conn, rows[x], codes), **_notes_of(hints, x)}
                                         for x in may if x in rows},
-                    "_codes": codes, "_version": f"{c['updated_at']}|{','.join(may)}"})
+                    "_codes": codes, "_version": f"{c['updated_at']}|{','.join(may)}"}
+        if linked := _linked_at(conn, c, [rows[x] for x in may if x in rows], codes):
+            item["linked_at"] = linked
+        out.append(item)
+    return out
+
+
+def _linked_at(conn: sqlite3.Connection, c: sqlite3.Row, others: list[sqlite3.Row],
+               codes: dict[str, str]) -> list[dict[str, str]]:
+    """The paragraphs where the reading linked this card's name to a candidate's (a link of two cards' names is asked,
+    not merged; ADR-108): what the link rested on, around it."""
+    names = [o["canonical_name"] for o in others]
+    if not names:
+        return []
+    out: list[dict[str, str]] = []
+    for r in conn.execute(
+            "SELECT DISTINCT un.book_id, un.ordinal FROM entity_links l JOIN units un ON un.id=l.evidence_unit_id "
+            f"WHERE l.status='candidate' AND ((l.term=? AND l.target_term IN ({','.join('?' * len(names))})) OR "
+            f"(l.target_term=? AND l.term IN ({','.join('?' * len(names))}))) ORDER BY un.ordinal",
+            (c["canonical_name"], *names, c["canonical_name"], *names)):
+        out += _coded(conn, r[0], list(range(r[1] - 2, r[1] + 3)), r[1], codes)
     return out
 
 

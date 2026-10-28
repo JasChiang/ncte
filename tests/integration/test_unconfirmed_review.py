@@ -825,3 +825,45 @@ def test_a_link_of_a_nameless_cards_word_to_another_card_merges_nothing(conn, cf
     stats, _ = _ask(conn, book.id, [(f"s:{baker}", "different")])
     assert stats["same_person_different"] == 1
     assert _card(conn, present) is not None and _card(conn, baker) is not None and repo.not_same(conn, baker, present)
+
+
+def test_a_name_link_question_shows_where_the_link_was_read_and_is_asked_again_when_linked_again(conn, cfg, fixtures):
+    from ncte.memory.entities import link
+    from ncte.memory.repository import set_glossary
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal", (book.id,)).fetchall()
+    ids = [repo.upsert_character(conn, book.id, n, name_zh=None, aliases=[], unit_id=u[i][0], ordinal=u[i][1],
+                                 origin="test")[0] for i, n in ((0, "ロセト"), (1, "銅の杖の先生"))]
+    for n in ("ロセト", "銅の杖の先生"):
+        set_glossary(conn, book.id, n, n, category="character")
+    assert link(conn, book.id, "ロセト", "銅の杖の先生", "alias", origin="llm", unit_id=u[-1][0],
+                ordinal=u[-1][1]) == "asked"
+    item = next(i for i in verify.collect(conn, book.id) if i["ref"] == f"s:{ids[1]}")
+    assert u[-1][0] in item["_codes"].values() and item["linked_at"]
+    _ask(conn, book.id, [(f"s:{ids[1]}", "unknown")])
+    assert not any(i["ref"] == f"s:{ids[1]}" for i in verify.collect(conn, book.id))  # answered: not asked again
+    # read again at another paragraph: asked again, shown both places
+    link(conn, book.id, "ロセト", "銅の杖の先生", "alias", origin="llm", unit_id=u[-2][0], ordinal=u[-2][1])
+    again = next(i for i in verify.collect(conn, book.id) if i["ref"] == f"s:{ids[1]}")
+    assert {u[-1][0], u[-2][0]} <= set(again["_codes"].values())
+
+
+def test_a_link_of_two_card_names_one_also_through_its_entity_is_shared(conn, cfg, fixtures):
+    """「母親」 is a card and, through a link, the word of トーネの母親's entity: linking it to 実母 is a shared word,
+    not a question about two cards (ADR-108, ninth review)."""
+    from ncte.memory.entities import link
+    from ncte.memory.repository import set_glossary
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal", (book.id,)).fetchall()
+    set_glossary(conn, book.id, "トーネの母親", "托涅的母親", category="character")
+    set_glossary(conn, book.id, "母親", "母親", category="character")
+    baker = repo.upsert_character(conn, book.id, "トーネの母親", name_zh=None, aliases=[], unit_id=u[0][0],
+                                  ordinal=u[0][1], origin="test")[0]
+    assert link(conn, book.id, "母親", "トーネの母親", "alias", origin="llm") == "accepted"
+    ids = [repo.upsert_character(conn, book.id, n, name_zh=None, aliases=[], unit_id=u[i][0], ordinal=u[i][1],
+                                 origin="test")[0] for i, n in ((1, "母親"), (2, "実母"))]
+    set_glossary(conn, book.id, "実母", "生母", category="character")
+    assert link(conn, book.id, "母親", "実母", "alias", origin="llm") == "shared"
+    assert all(_card(conn, c) is not None for c in (baker, *ids))

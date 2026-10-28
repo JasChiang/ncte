@@ -165,33 +165,40 @@ def _cards_for(conn: sqlite3.Connection, book_id: str, word: str) -> set[str]:
 
 
 def _two_named_cards(conn: sqlite3.Connection, book_id: str, term: str, target: str) -> tuple[str, str] | None:
-    """Two different findable cards named by the two words, not yet one entity: (the card known later, the other)."""
+    """Two different findable cards named by the two words, not yet one entity, at least one of this volume (the second
+    look asks this volume's cards): (the card to mark — this volume's, the later in the story — , the other)."""
+    from ..series import pos
+
     if _entity_of(conn, book_id, term) == _entity_of(conn, book_id, target):
         return None
     rows = {r["canonical_name"]: r for r in conn.execute(
-        f"SELECT id, canonical_name, known_from_ordinal FROM characters WHERE {SERIES_SCOPE} AND {FINDABLE} AND "
-        "canonical_name IN (?,?)", (book_id, term, target))}
+        f"SELECT id, canonical_name, book_id, known_from_ordinal FROM characters WHERE {SERIES_SCOPE} AND {FINDABLE} "
+        "AND canonical_name IN (?,?)", (book_id, term, target))}
     if term not in rows or target not in rows or rows[term]["id"] == rows[target]["id"]:
         return None
     # a word that may name someone else too is a shared word (shared_word), not a question about these two
     pair = {str(rows[term]["id"]), str(rows[target]["id"])}
-    if any(is_shared(conn, book_id, w) or _holders(conn, book_id, w) - pair for w in (term, target)):
+    if any(is_shared(conn, book_id, w) or _cards_for(conn, book_id, w) - pair for w in (term, target)):
         return None
-    a, b = sorted((rows[term], rows[target]), key=lambda r: (r["known_from_ordinal"] or 0, r["id"]))
+    a, b = sorted((rows[term], rows[target]), key=lambda r: (r["book_id"] == book_id,
+                                                             pos(conn, r["book_id"], r["known_from_ordinal"] or 0)))
+    if b["book_id"] != book_id:
+        return None
     return str(b["id"]), str(a["id"])
 
 
 def _mark_may_be(conn: sqlite3.Connection, card: str, other: str) -> None:
-    """``card`` may be ``other`` (asked by the second look), unless already answered not to be."""
+    """``card`` may be ``other`` (asked by the second look), unless already answered not to be; marked again, asked
+    again (the question's version is the card's ``updated_at``)."""
     import json
 
     from .repository import may_be, not_same
 
     row = conn.execute("SELECT * FROM characters WHERE id=?", (card,)).fetchone()
-    if row is None or not_same(conn, card, other) or other in may_be(row):
+    if row is None or not_same(conn, card, other):
         return
     conn.execute("UPDATE characters SET may_be_json=?, updated_at=? WHERE id=?",
-                 (json.dumps([*may_be(row), other]), utcnow(), card))
+                 (json.dumps(list(dict.fromkeys([*may_be(row), other]))), utcnow(), card))
 
 
 def _card_for(conn: sqlite3.Connection, book_id: str, word: str) -> str | None:
@@ -318,8 +325,10 @@ def _drop_alias(conn: sqlite3.Connection, book_id: str, term: str, entity_forms:
 
 def record_link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_type: str, *, origin: str,
                 status: str, unit_id: str | None, quote: str | None, ordinal: int | None) -> None:
-    dup = conn.execute(f"SELECT 1 FROM entity_links WHERE {SERIES_SCOPE} AND term=? AND target_term=? AND status=?",
-                       (book_id, term, target, status)).fetchone()
+    # a candidate read again at another paragraph is kept with that evidence too (the second look is shown each)
+    dup = conn.execute(f"SELECT 1 FROM entity_links WHERE {SERIES_SCOPE} AND term=? AND target_term=? AND status=? "
+                       "AND (status!='candidate' OR evidence_unit_id IS ?)", (book_id, term, target, status, unit_id)
+                       ).fetchone()
     if dup:
         return
     conn.execute("INSERT INTO entity_links(book_id, term, target_term, form_type, evidence_unit_id, evidence_quote, "
