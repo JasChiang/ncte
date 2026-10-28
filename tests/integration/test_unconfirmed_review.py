@@ -867,3 +867,28 @@ def test_a_link_of_two_card_names_one_also_through_its_entity_is_shared(conn, cf
     set_glossary(conn, book.id, "実母", "生母", category="character")
     assert link(conn, book.id, "母親", "実母", "alias", origin="llm") == "shared"
     assert all(_card(conn, c) is not None for c in (baker, *ids))
+
+
+def test_a_name_link_question_reads_no_link_of_another_series(conn, cfg, fixtures, tmp_path):
+    """Another book, not of this series, linking the same two names neither reopens the question nor gives evidence
+    for it (ADR-108, tenth review)."""
+    from ncte.memory.entities import link, record_link
+    from ncte.memory.repository import set_glossary
+
+    from .test_series import vol2_epub
+
+    book, _ = import_book(conn, cfg, fixtures["basic"])
+    other, _ = import_book(conn, cfg, vol2_epub(tmp_path))
+    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal", (book.id,)).fetchall()
+    ids = [repo.upsert_character(conn, book.id, n, name_zh=None, aliases=[], unit_id=u[i][0], ordinal=u[i][1],
+                                 origin="test")[0] for i, n in ((0, "ロセト"), (1, "銅の杖の先生"))]
+    for n in ("ロセト", "銅の杖の先生"):
+        set_glossary(conn, book.id, n, n, category="character")
+    assert link(conn, book.id, "ロセト", "銅の杖の先生", "alias", origin="llm", unit_id=u[-1][0],
+                ordinal=u[-1][1]) == "asked"
+    _ask(conn, book.id, [(f"s:{ids[1]}", "unknown")])
+    ou = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal LIMIT 1",
+                      (other.id,)).fetchone()
+    record_link(conn, other.id, "ロセト", "銅の杖の先生", "alias", origin="llm", status="candidate", unit_id=ou[0],
+                quote=None, ordinal=ou[1])
+    assert not any(i["ref"] == f"s:{ids[1]}" for i in verify.collect(conn, book.id))

@@ -289,15 +289,18 @@ def _linked_at(conn: sqlite3.Connection, c: sqlite3.Row, others: list[sqlite3.Ro
                codes: dict[str, str]) -> list[dict[str, str]]:
     """The paragraphs where the reading linked this card's name to a candidate's (a link of two cards' names is asked,
     not merged; ADR-108): what the link rested on, around it."""
+    from ..series import SERIES_SCOPE
+
     names = [o["canonical_name"] for o in others]
     if not names:
         return []
     out: list[dict[str, str]] = []
+    # this series' links only: a book of another series with the same names says nothing of these cards
     for r in conn.execute(
             "SELECT DISTINCT un.book_id, un.ordinal FROM entity_links l JOIN units un ON un.id=l.evidence_unit_id "
-            f"WHERE l.status='candidate' AND ((l.term=? AND l.target_term IN ({','.join('?' * len(names))})) OR "
-            f"(l.target_term=? AND l.term IN ({','.join('?' * len(names))}))) ORDER BY un.ordinal",
-            (c["canonical_name"], *names, c["canonical_name"], *names)):
+            f"WHERE l.{SERIES_SCOPE} AND l.status='candidate' AND ((l.term=? AND l.target_term IN "
+            f"({','.join('?' * len(names))})) OR (l.target_term=? AND l.term IN ({','.join('?' * len(names))}))) "
+            "ORDER BY un.ordinal", (c["book_id"], c["canonical_name"], *names, c["canonical_name"], *names)):
         out += _coded(conn, r[0], list(range(r[1] - 2, r[1] + 3)), r[1], codes)
     return out
 
