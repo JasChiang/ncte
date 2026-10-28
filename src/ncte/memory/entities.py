@@ -130,13 +130,13 @@ def shared_word(conn: sqlite3.Connection, book_id: str, term: str, target: str) 
     for word in (term, target):
         if is_shared(conn, book_id, word):
             return word
-    # nor a word a card the link does not name also has (「母上」, a card's name and 義母's alias, linked to 実母):
-    # which of them it names here is not the program's to say (fifth review)
+    # nor a word several cards may be (「母上」, a card's name and 義母's alias, linked to 実母), unless those are just
+    # the two cards the link's words name (「銅の杖の先生」, a card and ロセト's alias, linked to ロセト): which of them it
+    # names here is not the program's to say (fifth, seventh review)
     named = {c for c, n in _findable(conn, book_id) if n in (term, target)}
-    if not named and len(both := _holders(conn, book_id, term) & _holders(conn, book_id, target)) == 1:
-        named = both  # two words of one card (a nickname linked to the full name), no card named by either
-    for word in (term, target):
-        if _holders(conn, book_id, word) - named:
+    cs, ct = _cards_for(conn, book_id, term), _cards_for(conn, book_id, target)
+    for word, cw in ((term, cs), (target, ct)):
+        if len(cw) > 1 and cs | ct != named:
             return word
     s_cards, t_cards = _cards_of(conn, book_id, s_eid), _cards_of(conn, book_id, t_eid)
     # the link names the one card on each side, by a name that names only it: the model says the two are one
@@ -160,6 +160,25 @@ def _holders(conn: sqlite3.Connection, book_id: str, word: str) -> set[str]:
     return {str(r[0]) for r in conn.execute(f"SELECT id, canonical_name, aliases_json FROM characters WHERE "
                                             f"{SERIES_SCOPE} AND {FINDABLE}", (book_id,))
             if word == r[1] or word in json.loads(r[2])}
+
+
+def _cards_for(conn: sqlite3.Connection, book_id: str, word: str) -> set[str]:
+    """Every findable card the word may be: the cards called so, and the cards of its entity."""
+    ids = {n: c for c, n in _findable(conn, book_id)}
+    return _holders(conn, book_id, word) | {ids[n] for n in _cards_of(conn, book_id, _entity_of(conn, book_id, word))}
+
+
+def _card_for(conn: sqlite3.Connection, book_id: str, word: str) -> str | None:
+    """The one card a person's link means by ``word``: the card named so, else the one card called so (実母, folded
+    into リリア by a reveal), else the one card of its entity (リリア, a word linked to 実母)."""
+    ids = {n: c for c, n in _findable(conn, book_id)}
+    if word in ids:
+        return ids[word]
+    for cards in (_holders(conn, book_id, word),
+                  {ids[n] for n in _cards_of(conn, book_id, _entity_of(conn, book_id, word))}):
+        if cards:
+            return next(iter(cards)) if len(cards) == 1 else None
+    return None
 
 
 def is_shared(conn: sqlite3.Connection, book_id: str, term: str) -> bool:
@@ -302,42 +321,22 @@ def link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_ty
             return "shared"
         if origin == "human":  # a person deciding what the word names settles it: no longer shared
             conn.execute(f"DELETE FROM form_senses WHERE {SERIES_SCOPE} AND term=?", (book_id, term))
+            # the two cards the person means are one, found before anything moves: never through a word that also
+            # names someone else, and never missed because a word is no card's name any more (fourth–seventh review)
+            reconcile_characters(conn, book_id)  # cards already one by earlier links (リリア, linked to 実母)
+            keep, drop = _card_for(conn, book_id, target), _card_for(conn, book_id, term)
+            if keep and drop:
+                from .repository import merge_characters
+
+                merge_characters(conn, keep, drop)
         merge_into(conn, book_id, term, target, form_type, note)
         record_link(conn, book_id, term, target, form_type, origin=origin, status="accepted", unit_id=unit_id,
                     quote=quote, ordinal=ordinal)
         reconcile_characters(conn, book_id)
-        if origin == "human":
-            # the two cards the person named are one, even when a word of theirs still names someone else too
-            # (reconcile_characters skips a card named by a shared word)
-            _merge_entity_cards(conn, book_id, target)
         return "accepted"
     record_link(conn, book_id, term, target, form_type, origin=origin, status="candidate", unit_id=unit_id,
                 quote=quote, ordinal=ordinal)
     return "candidate"
-
-
-def _merge_entity_cards(conn: sqlite3.Connection, book_id: str, target: str) -> None:
-    """A person's link makes every form of the entity one person: its cards become one, the card named ``target``
-    (else the official form's) kept — the words need not be cards' names any more (fifth review)."""
-    from .repository import merge_characters
-
-    eid = _entity_of(conn, book_id, target)
-    if eid is None:
-        return
-    order = [r[0] for r in conn.execute(f"SELECT source_term FROM glossary WHERE {SERIES_SCOPE} AND entity_id=? "
-                                        "ORDER BY source_term!=?, form_type!='official', id", (book_id, eid, target))]
-    cards = {n: c for c, n in _findable(conn, book_id)}
-    ids: list[str] = []
-    for f in order:
-        if f in cards:
-            ids.append(cards[f])
-        # a form no card is named by any more (実母, after a reveal folded her into リリア): the one card called so,
-        # never through a word that may name more than one person
-        elif not is_shared(conn, book_id, f) and len(held := _holders(conn, book_id, f)) == 1:
-            ids.append(next(iter(held)))
-    ids = list(dict.fromkeys(ids))
-    for drop in ids[1:]:
-        merge_characters(conn, ids[0], drop)
 
 
 def entity_forms(conn: sqlite3.Connection, book_id: str) -> dict[str, list[dict[str, Any]]]:

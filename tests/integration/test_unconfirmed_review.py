@@ -738,3 +738,61 @@ def test_a_persons_link_finds_the_card_a_reveal_folded_the_word_into(conn, cfg, 
     repo.merge_characters(conn, ids["リリア"], ids["実母"])  # a scene reveal: 実母 is リリア
     assert link(conn, book.id, "実母", "義母", "alias", origin="human") == "accepted"
     assert (_card(conn, ids["リリア"]) is None) != (_card(conn, ids["義母"]) is None)
+
+
+def _cards(conn, book, names, aliases=None):
+    from ncte.memory.repository import set_glossary
+
+    at = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? AND kind='text' ORDER BY ordinal LIMIT 1",
+                      (book.id,)).fetchone()
+    ids = {}
+    for name in names:
+        ids[name] = repo.upsert_character(conn, book.id, name, name_zh=None, aliases=(aliases or {}).get(name, []),
+                                          unit_id=at[0], ordinal=at[1], origin="test")[0]
+        set_glossary(conn, book.id, name, name, category="character")
+    return ids
+
+
+def test_a_persons_link_merges_only_the_two_cards_it_means(conn, cfg, fixtures):
+    """先生 linked to ロセト, then 別の先生 also called 先生: a person linking ロセト to 銅の杖の先生 leaves 別の先生 alone
+    (ADR-108, seventh review)."""
+    from ncte.memory.entities import link
+    from ncte.memory.repository import set_glossary
+
+    s = _setup(conn, cfg, fixtures)
+    book = s["book"]
+    ids = _cards(conn, book, ("ロセト", "銅の杖の先生", "別の先生"))
+    set_glossary(conn, book.id, "先生", "老師", category="character")
+    assert link(conn, book.id, "先生", "ロセト", "title", origin="llm") == "accepted"
+    at = s["intro"]
+    repo.upsert_character(conn, book.id, "別の先生", name_zh=None, aliases=["先生"], unit_id=at["id"],
+                          ordinal=at["ordinal"], origin="test")
+    assert link(conn, book.id, "ロセト", "銅の杖の先生", "alias", origin="human") == "accepted"
+    assert (_card(conn, ids["ロセト"]) is None) != (_card(conn, ids["銅の杖の先生"]) is None)
+    assert _card(conn, ids["別の先生"]) is not None
+
+
+def test_a_persons_link_to_a_shared_word_whose_card_was_folded(conn, cfg, fixtures):
+    from ncte.memory.entities import add_sense, link
+
+    s = _setup(conn, cfg, fixtures)
+    book = s["book"]
+    ids = _cards(conn, book, ("実母", "リリア", "義母", "別人"))
+    add_sense(conn, book.id, "実母", "別人", origin="test")
+    repo.merge_characters(conn, ids["リリア"], ids["実母"])
+    assert link(conn, book.id, "義母", "実母", "alias", origin="human") == "accepted"
+    assert (_card(conn, ids["リリア"]) is None) != (_card(conn, ids["義母"]) is None)
+    assert _card(conn, ids["別人"]) is not None
+
+
+def test_a_nickname_of_one_card_links_to_a_new_full_name(conn, cfg, fixtures):
+    from ncte.memory.entities import backfill_entities, link
+    from ncte.memory.repository import set_glossary
+
+    s = _setup(conn, cfg, fixtures)
+    book = s["book"]
+    _cards(conn, book, ("ソラ",), {"ソラ": ["ソラっち"]})
+    for w in ("ソラっち", "天野ソラ"):
+        set_glossary(conn, book.id, w, w, category="character")
+    backfill_entities(conn, book.id)
+    assert link(conn, book.id, "ソラっち", "天野ソラ", "full", origin="llm") == "accepted"
