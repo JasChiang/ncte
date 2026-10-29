@@ -717,6 +717,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             if created:  # what its words are, as the model read them (ADR-109): a second 「給仕」 takes a name later too
                 conn.execute("UPDATE characters SET name_kind=? WHERE id=?",
                              ({source_form(k.ja): k.kind for k in nc.alias_kinds}.get(name), cid))
+                ask_for_words(cid, nc, aliases, first)
             ref_map[nc.temp_id] = ref_map[cid] = cid
             names_of[cid] = [name, *aliases]
             unconfirmed_cards.append({"ref": nc.temp_id, "character_id": cid, "may_be": sorted(cards)})
@@ -755,20 +756,38 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 f"SELECT 1 FROM characters WHERE {SERIES_SCOPE} AND canonical_name=? AND {repo.FINDABLE} AND id IS NOT ?",
                 (book_id, form, who)).fetchone())
 
-        def ask_same(card: str, other: str) -> None:
-            """Two cards the model gave one word that names someone (a name, a nickname, a description: 「執事悪魔」 of
-            two cards each made for the demon): one person or two is not the program's to tell — the later card, of
-            this volume, is marked as maybe the other and the second look asks (ADR-111)."""
-            from ..memory.entities import mark_may_be
+        def ask_same(card: str, word: str, at: UnitText) -> None:
+            """Cards the model gave one word that names someone (a name, a nickname, a description: 「執事悪魔」 of two
+            cards each made for the demon): one person or two is not the program's to tell — for each other card with
+            the word now, the later card, of this volume, is marked as maybe the other and the second look asks, shown
+            the paragraph where the word was given (a candidate link of the two names, as ADR-108's asked links)."""
+            from ..memory.entities import mark_may_be, record_link
             from ..series import pos
 
-            rows = [conn.execute("SELECT * FROM characters WHERE id=?", (x,)).fetchone() for x in (card, other)]
-            if card == other or rows[0] is None or rows[1] is None or any(r["is_group"] for r in rows):
+            mine = conn.execute("SELECT * FROM characters WHERE id=?", (card,)).fetchone()
+            if mine is None or mine["is_group"]:
                 return
-            a, b = sorted(rows, key=lambda r: (r["book_id"] == book_id,
-                                               pos(conn, r["book_id"], r["known_from_ordinal"] or 0)))
-            if b["book_id"] == book_id:
+            for other in conn.execute(
+                    f"SELECT * FROM characters WHERE {SERIES_SCOPE} AND id!=? AND NOT is_group AND (canonical_name=? OR "
+                    "EXISTS (SELECT 1 FROM json_each(aliases_json) WHERE value=?))", (book_id, card, word, word)):
+                a, b = sorted((mine, other), key=lambda r: (r["book_id"] == book_id,  # seen at once: this one later
+                                                            pos(conn, r["book_id"], r["known_from_ordinal"] or 0),
+                                                            r["id"] == card))
+                if b["book_id"] != book_id or repo.not_same(conn, str(a["id"]), str(b["id"])):
+                    continue
                 mark_may_be(conn, str(b["id"]), str(a["id"]))
+                record_link(conn, book_id, b["canonical_name"], a["canonical_name"], "alias", origin="scene_analysis",
+                            status="candidate", unit_id=at.id, quote=None, ordinal=at.ordinal)
+
+        def ask_for_words(cid: str, nc: Any, aliases: list[str], first: UnitText) -> None:
+            """A new card's words that name someone and that other cards have: maybe those people (ADR-111) — unless
+            the model says this is someone else, or a group."""
+            if nc.other_person or nc.group:
+                return
+            kinds = {source_form(k.ja): k.kind for k in nc.alias_kinds}
+            for a in aliases:
+                if kinds.get(a) in ASKED_KINDS:
+                    ask_same(cid, a, next((t for t in texts if in_source(a, unit_src[t.id])), first))
 
         for nc in parsed.new_characters:
             name = source_form(nc.name_ja)  # a name quoted with its reading (婆《ばあ》) is the text's 婆
@@ -899,9 +918,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 # what the words it is known by are, as the model read them: a title or a description gives way to the
                 # person's name when the model gives one later (``other_forms``)
                 conn.execute("UPDATE characters SET name_kind=? WHERE id=?", (kinds.get(name), cid))
-                for a in aliases:  # a word naming someone that a known card has: maybe that person (ADR-111)
-                    if kinds.get(a) in ASKED_KINDS and (owner := existing_alias.get(a)) and not nc.other_person:
-                        ask_same(cid, owner)
+                ask_for_words(cid, nc, aliases, first)
                 if zh and len(name) >= 2:
                     repo.ensure_glossary(conn, book_id, name, zh, category="character", origin="scene_analysis",
                                          first_unit_id=first.id)
@@ -1000,7 +1017,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             conn.execute("UPDATE characters SET aliases_json=?, updated_at=? WHERE id=?",
                          (json.dumps([*json.loads(row[1]), form], ensure_ascii=False), utcnow(), who))
             if shared and of.kind in ASKED_KINDS:  # another card's word that names someone: maybe that one (ADR-111)
-                ask_same(str(who), existing_alias[form])
+                ask_same(str(who), form, first)
             repo.note_forms(conn, str(who), [form], book_id, first.ordinal)  # known from here, wherever the card is
             if not shared:  # a link reveals the form for every card that has it: not for a form another card had
                 record_link(conn, book_id, form, row[0], "alias", origin="scene_analysis", status="accepted",

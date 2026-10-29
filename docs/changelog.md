@@ -1391,3 +1391,8 @@ open workspace/eval/<timestamp>/report.html
 ## ADR-111 兩張卡被給了同一個指認人的詞就問；說話特徵照位置（2026-10-29，分支 todo-cards-2026-10-29，基於 main bf23773）
 - `analysis/scene.py`：`ASKED_KINDS`、`ask_same`（新卡的別名、`other_forms` 的寫法已是另一張卡的，種類是名字／暱稱／描述時，後出現的本集卡標 `may_be`）；`memory/entities.py` `mark_may_be` 改成公開；`memory/visibility.py` `profile_at`，讀場景（`build_analysis_payload`）與翻譯（`retrieval`）附的說話特徵照位置重算。兩份讀場景提示詞：別名不放群體稱呼。
 - 測試：`tests/integration/test_shared_word_cards.py`（新，4 個；新卡別名、`other_forms`、稱號不問、說話特徵照位置。三個用 bf23773 的程式失敗，稱號不問那個本來就通過）。1030 passed、2 skipped；ruff、mypy 通過。
+- Codex 第一輪（7006c31）五個 P2，都修了：
+  - 誰有這個詞改成當下查資料庫（系列裡卡名或別名是它的每一張卡，`json_each`），不再靠讀前建的索引：好幾張卡都有這個詞時每張都問；同一個回答新建兩張都帶這個詞的卡也問；同一個回答先揭曉合併、再把舊別名給別張卡時，問的是合併後的卡。同時出現的兩張，標記這次的這張。
+  - 標了時期、另開有標籤卡的新人物也檢查（時期只是模型的判讀，照樣問）；團體卡不問（原本旗標還沒寫入就檢查）。
+  - 標記時記一筆兩張卡名的候選連結（`entity_links` 的 `candidate`，和 ADR-108 被問的連結一樣），覆核題的 `linked_at` 附上給這個詞的段落。
+  - `test_shared_word_cards.py` 新增 3 個（用 7006c31 的程式都失敗）；測試輔助改挑要翻譯的段落。1033 passed、2 skipped；ruff、mypy 通過。

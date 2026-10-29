@@ -62,3 +62,37 @@ def test_the_speech_profile_shown_is_of_the_lines_before(conn, cfg, fixtures, tm
     assert vis.profile_at(conn, cid, u1["ordinal"] + 1, b1.id)["first_person"] == ["僕"]
     assert vis.profile_at(conn, cid, u1["ordinal"], b1.id) == {}
     assert set(vis.profile_at(conn, cid, u2["ordinal"] + 1, b2.id)["first_person"]) == {"僕", "わたくし"}
+
+
+def _desc(name, unit, temp="new_1", **kw):
+    return {**_new(name, unit, [name, "執事悪魔"], [(name, "description"), ("執事悪魔", "description")]),
+            "temp_id": temp, **kw}
+
+
+def test_every_card_with_the_word_is_asked_about_and_two_new_cards_in_one_answer_too(conn, cfg, fixtures):
+    book, scenes, (u1, u2) = _book(conn, cfg, fixtures, ["　額に傷を持つ執事悪魔と古い個体の執事悪魔。",
+                                                         "　黒い執事悪魔が笑った。"])
+    a, _ = _read(conn, book, scenes[0], new_characters=[_desc("額に傷を持つ", u1), _desc("古い個体", u1, "new_2")])
+    assert _may_be(conn, a["new_2"]) == [a["new_1"]]
+    c, _ = _read(conn, book, scenes[1], new_characters=[_desc("黒い", u2)])
+    assert set(_may_be(conn, c["new_1"])) == {a["new_1"], a["new_2"]}
+
+
+def test_a_group_or_a_card_of_another_time_with_the_word(conn, cfg, fixtures):
+    book, scenes, (u1, u2) = _book(conn, cfg, fixtures, TEXTS)
+    a, _ = _read(conn, book, scenes[0], new_characters=[_new("執事悪魔", u1, ["執事悪魔"], [("執事悪魔", "description")])])
+    b, _ = _read(conn, book, scenes[1], new_characters=[_desc("古い個体", u2, group=True),
+                                                        _desc("古い", u2, "new_2", period="前世")])
+    assert _may_be(conn, b["new_1"]) == []  # a group is not one of the people
+    assert a["new_1"] in _may_be(conn, b["new_2"])  # the model's time is its reading: still asked
+
+
+def test_the_second_look_is_shown_where_the_word_was_given(conn, cfg, fixtures):
+    from ncte.analysis.verify import _names, same_person_items
+
+    book, scenes, (u1, u2) = _book(conn, cfg, fixtures, TEXTS)
+    a, _ = _read(conn, book, scenes[0], new_characters=[_new("執事悪魔", u1, ["執事悪魔"], [("執事悪魔", "description")])])
+    b, _ = _read(conn, book, scenes[1], new_characters=[_desc("古い個体", u2)])
+    item = next(i for i in same_person_items(conn, book.id, _names(conn, book.id)) if i["ref"] == f"s:{b['new_1']}")
+    assert a["new_1"] in item["candidates"]
+    assert any("古い個体――執事悪魔" in p["text"] for p in item["linked_at"])

@@ -19,7 +19,8 @@ def _book(conn, cfg, fixtures, texts):
     scenes = conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq", (book.id,)).fetchall()[:len(texts)]
     units = []
     for sc, text in zip(scenes, texts, strict=True):
-        u = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? AND kind='text' ORDER BY ordinal LIMIT 1",
+        u = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? AND kind='text' AND translatable=1 "
+                         "ORDER BY ordinal LIMIT 1",
                          (book.id, sc["id"])).fetchone()
         conn.execute("UPDATE units SET plain_text=?, source_text=? WHERE id=?", (text, text, u["id"]))
         units.append(conn.execute("SELECT * FROM units WHERE id=?", (u["id"],)).fetchone())
@@ -172,7 +173,8 @@ def _two_volumes(conn, cfg, fixtures, tmp_path, texts):
     out = []
     for b, text in zip((b1, b2), texts, strict=True):
         sc = conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq LIMIT 1", (b.id,)).fetchone()
-        u = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? AND kind='text' ORDER BY ordinal LIMIT 1",
+        u = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? AND kind='text' AND translatable=1 "
+                         "ORDER BY ordinal LIMIT 1",
                          (b.id, sc["id"])).fetchone()
         conn.execute("UPDATE units SET plain_text=?, source_text=? WHERE id=?", (text, text, u["id"]))
         out.append((b, sc, conn.execute("SELECT * FROM units WHERE id=?", (u["id"],)).fetchone()))
