@@ -228,7 +228,8 @@ def tell_apart(conn: sqlite3.Connection, book_id: str, cards: list[Any], upto: i
       model, not the book's words;
     * ``relations_so_far``: relations read by then (「卡伊的母親」), the others named as known at ``upto``.
 
-    Callers give it only for cards whose name another card in the request has, so other requests stay as they were."""
+    Callers give it only for cards whose name another card in the request has, or that are known by a title or a
+    description (ADR-110), so other requests stay as they were."""
     from .repository import impression_at
 
     hz = pos(conn, book_id, upto)

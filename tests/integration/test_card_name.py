@@ -92,3 +92,18 @@ def test_a_title_card_does_not_take_a_name_another_card_has(conn, cfg, fixtures)
                                                "evidence_unit_ids": [u2["id"]]}])
     cards = _cards(conn, book)
     assert set(cards) == {"英雄", "レイド・フリーデン"} and cards["レイド・フリーデン"]["id"] == other
+
+
+def test_a_card_known_by_a_role_word_is_shown_with_where_it_was_first_seen(conn, cfg, fixtures):
+    """ADR-110: 「給仕」 is whoever holds the post. A card known by such words is shown to a later scene's reading with
+    where it was first seen, so the model can tell whether this servant is that one; a card known by a name is not."""
+    from ncte.analysis.scene import build_analysis_payload
+
+    book, scenes, (u1, u2, _) = _book(conn, cfg, fixtures, ["　すれ違った給仕に頭を下げられた。", "　ミナが笑った。",
+                                                            "　給仕が飲み物を運んでくる。"])
+    refs, _ = _read(conn, book, scenes[0], new_characters=[_new("給仕", u1, ["給仕"], [("給仕", "description")])])
+    named, _ = _read(conn, book, scenes[1], new_characters=[_new("ミナ", u2, [], [("ミナ", "name")])])
+    payload = build_analysis_payload(conn, book.id, get_scene(conn, book.id, scenes[2]["id"]), [])
+    known = {c["character_id"]: c for c in payload["known_characters"]}
+    assert known[refs["new_1"]]["first_seen"].startswith("すれ違った給仕")
+    assert "first_seen" not in known[named["new_1"]]

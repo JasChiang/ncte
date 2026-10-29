@@ -345,8 +345,11 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
     if "kind" in scene.keys() and scene["kind"] and scene["kind"] != "present":
         extra["scene_kind"] = scene["kind"]  # flashback / parallel / summary / other, as the scene was cut
     views = [(c, v) for c in known if (v := vis.character_view(conn, book_id, c, scene["start_ordinal"] - 1, forms_at))]
-    # cards the book calls by the same words (two unnamed mothers): told apart by where each was first seen (ADR-103)
-    shared = vis.shared_names({c["id"]: v["name_ja"] for c, v in views})
+    # cards the book calls by the same words (two unnamed mothers): told apart by where each was first seen (ADR-103);
+    # so is a card known by a title or a description (「給仕」): the word may be anyone holding the post, and where the
+    # card was seen is what tells the model whether this is that person (ADR-110)
+    shared = vis.shared_names({c["id"]: v["name_ja"] for c, v in views}) | {
+        c["id"] for c, _ in views if c["name_kind"] in NOT_A_NAME}
     hints = vis.tell_apart(conn, book_id, [c for c, _ in views if c["id"] in shared], scene["start_ordinal"] - 1) \
         if shared else {}
     voice = card_evidence(conn, book_id, scene, rows, views) if card_voice else {}
