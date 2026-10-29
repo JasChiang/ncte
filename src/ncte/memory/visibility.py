@@ -89,6 +89,15 @@ def visible_examples(conn: sqlite3.Connection, character_id: str, horizon: int, 
     return rows[:limit]
 
 
+def profile_at(conn: sqlite3.Connection, character_id: str, horizon: int, book_id: str) -> dict[str, Any]:
+    """A card's speech profile from its verified lines before ``horizon`` of ``book_id`` — placed in the series: the
+    card's stored profile is of every line, a later volume's too (a card of volume 1 named in volume 2 has both)."""
+    from ..analysis.dialogue import speech_profile
+
+    ex = visible_examples(conn, character_id, horizon, limit=1_000_000, book_id=book_id)
+    return speech_profile([r["raw_text"] for r in sorted(ex, key=lambda r: r["id"])]) if ex else {}
+
+
 FormPositions = tuple[dict[str, Pos], dict[str, Pos], dict[str, dict[str, Pos]]]
 
 

@@ -151,6 +151,12 @@ def test_move_book_into_another_series(tmp_path, fixtures):
     assert n_tr > 0
     old_folder = ws.series_dir(ws.series_row(ws.find_book(b2.id)[0])["slug"])
     target = ws.series_row(ws.find_book(b1.id)[0])["title"]
+    # where the reading gave two cards one word (ADR-111) goes with the book and follows a card merged on the move
+    c2 = {r[0]: r[1] for r in conn2.execute("SELECT canonical_name, id FROM characters")}
+    u = conn2.execute("SELECT id, ordinal FROM units WHERE book_id=? LIMIT 1", (b2.id,)).fetchone()
+    conn2.execute("INSERT INTO same_word_asked VALUES (?,?,?,?,?,?,?)",
+                  (c2["リリア"], c2["ミナ"], "x", b2.id, u[0], u[1], "t"))
+    conn2.commit()
     stats = move_book(ws, b2.id, target, volume=2, label="第2集")
     assert stats["characters_merged"] >= 1 and stats["glossary_merged"] >= 1
     sid, _ = ws.find_book(b2.id)
@@ -159,6 +165,10 @@ def test_move_book_into_another_series(tmp_path, fixtures):
     assert dst.execute("SELECT COUNT(*) FROM translations t JOIN units u ON u.id=t.unit_id WHERE u.book_id=?",
                        (b2.id,)).fetchone()[0] == n_tr
     assert [r[0] for r in dst.execute("SELECT book_id FROM characters WHERE canonical_name='ミナ'")] == [b1.id]
+    mina = dst.execute("SELECT id FROM characters WHERE canonical_name='ミナ'").fetchone()[0]
+    assert [r[0] for r in dst.execute("SELECT other_id FROM same_word_asked")] == [mina]
+    assert not ws.series_conn(ws.find_book(b1.id)[0]).execute(
+        "SELECT 1 FROM same_word_asked WHERE book_id!=? AND book_id!=?", (b1.id, b2.id)).fetchone()
     assert dst.execute("SELECT volume_index, volume_label FROM books WHERE id=?", (b2.id,)).fetchone()[:] == (2.0, "第2集")
     assert not old_folder.exists() and list(old_folder.parent.glob(old_folder.name + ".moved-*"))
     # the moved volume now sees volume 1's memory and still exports

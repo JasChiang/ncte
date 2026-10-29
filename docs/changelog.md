@@ -1387,3 +1387,24 @@ open workspace/eval/<timestamp>/report.html
   - 算一個名字給了幾個人時，標了另一個人或時期的新人物不算成卡名相同的那張卡。
   - `test_card_name.py` 新增 2 個（用 8bca653 的程式都失敗）。1026 passed、2 skipped；ruff、mypy 通過。
 - Codex 第五輪（82c5ecf）：沒有新的 P1、P2。合併進 main。
+
+## ADR-111 兩張卡被給了同一個指認人的詞就問；說話特徵照位置（2026-10-29，分支 todo-cards-2026-10-29，基於 main bf23773）
+- `analysis/scene.py`：`ASKED_KINDS`、`ask_same`（新卡的別名、`other_forms` 的寫法已是另一張卡的，種類是名字／暱稱／描述時，後出現的本集卡標 `may_be`）；`memory/entities.py` `mark_may_be` 改成公開；`memory/visibility.py` `profile_at`，讀場景（`build_analysis_payload`）與翻譯（`retrieval`）附的說話特徵照位置重算。兩份讀場景提示詞：別名不放群體稱呼。
+- 測試：`tests/integration/test_shared_word_cards.py`（新，4 個；新卡別名、`other_forms`、稱號不問、說話特徵照位置。三個用 bf23773 的程式失敗，稱號不問那個本來就通過）。1030 passed、2 skipped；ruff、mypy 通過。
+- Codex 第一輪（7006c31）五個 P2，都修了：
+  - 誰有這個詞改成當下查資料庫（系列裡卡名或別名是它的每一張卡，`json_each`），不再靠讀前建的索引：好幾張卡都有這個詞時每張都問；同一個回答新建兩張都帶這個詞的卡也問；同一個回答先揭曉合併、再把舊別名給別張卡時，問的是合併後的卡。同時出現的兩張，標記這次的這張。
+  - 標了時期、另開有標籤卡的新人物也檢查（時期只是模型的判讀，照樣問）；團體卡不問（原本旗標還沒寫入就檢查）。
+  - 標記時記一筆兩張卡名的候選連結（`entity_links` 的 `candidate`，和 ADR-108 被問的連結一樣），覆核題的 `linked_at` 附上給這個詞的段落。
+  - `test_shared_word_cards.py` 新增 3 個（用 7006c31 的程式都失敗）；測試輔助改挑要翻譯的段落。1033 passed、2 skipped；ruff、mypy 通過。
+- Codex 第二輪（651d52d）五個 P2，都修了。後三個都出在把段落記成名字的候選連結（手動連名字會照名字挑錯卡、揭曉合併的覆核題會漏掉、名字改了就找不到）：
+  - 給這個詞的段落改記在自己的表 `same_word_asked`（migration 39，以兩張卡的 id 記；合併時跟著留下的卡），覆核的 `linked_at` 從這裡讀；不再寫 `entity_links`。
+  - 有標籤的卡重讀時照樣檢查（重讀會把它的候選重設）。
+  - `other_forms` 的詞是不是別張卡的，改看資料庫當下的持有者（只有另一時期的卡有、或同一個回答剛給了別張卡時也算），這時只當別名、不記成名字連結。
+  - `test_shared_word_cards.py` 新增 3 個（用 651d52d 的程式都失敗）。1036 passed、2 skipped；ruff、mypy 通過。
+- Codex 第三輪（be5f8a2）三個 P2，修了兩個：
+  - 重讀一場時被收回的卡，連帶刪掉它在 `same_word_asked` 的記錄（`forget_card_records`）；合併卡的記錄改在 `fold_card_records` 跟著留下的卡，搬書時合併重複的卡也一樣。
+  - 把書搬到另一個系列（`move_book`）時，`same_word_asked` 跟著書搬，原系列清掉。
+  - 不修：升級到 migration 39 的舊資料庫裡，前一版留下的候選名字連結（只有這個分支沒合併的 651d52d 會寫；舊書是測試資料，重新匯入即可）。
+  - 測試新增 1 個、`test_series.py` 搬書的測試多檢查這張表（用 be5f8a2 的程式都失敗）。1037 passed、2 skipped；ruff、mypy 通過。
+- 抽測（`workspace/exp/speaker-real/role3-akuma`，跑的是 7006c31，同 ADR-110 的段落，Claude 方案；105 個請求、21 分鐘，Claude 5h 56%→71%（含同時段這個對話的工作）、每週 28%→29%）：這次模型沒有把惡魔拆成兩張卡（一張「執事悪魔」、24 句，別名「お猿さん」對照原文是同一隻），新的詢問沒有機會被觸發；フェル沒有群體別名。
+- Codex 第四輪（7f9134d）：沒有新的 P1、P2。

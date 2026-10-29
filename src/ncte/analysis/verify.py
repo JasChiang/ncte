@@ -302,6 +302,12 @@ def _linked_at(conn: sqlite3.Connection, c: sqlite3.Row, others: list[sqlite3.Ro
             f"({','.join('?' * len(names))})) OR (l.target_term=? AND l.term IN ({','.join('?' * len(names))}))) "
             "ORDER BY un.ordinal", (c["book_id"], c["canonical_name"], *names, c["canonical_name"], *names)):
         out += _coded(conn, r[0], list(range(r[1] - 2, r[1] + 3)), r[1], codes)
+    # where the reading gave this card a word a candidate has, or the other way round (ADR-111)
+    ids = [o["id"] for o in others]
+    for r in conn.execute(
+            f"SELECT DISTINCT book_id, ordinal FROM same_word_asked WHERE (card_id=? AND other_id IN ({','.join('?' * len(ids))})) "
+            f"OR (other_id=? AND card_id IN ({','.join('?' * len(ids))})) ORDER BY ordinal", (c["id"], *ids, c["id"], *ids)):
+        out += _coded(conn, r[0], list(range(r[1] - 2, r[1] + 3)), r[1], codes)
     return out
 
 
