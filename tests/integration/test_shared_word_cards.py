@@ -129,3 +129,14 @@ def test_where_the_word_was_given_follows_a_merge_and_writes_no_name_link(conn, 
     item = next(i for i in same_person_items(conn, book.id, _names(conn, book.id)) if i["ref"] == f"s:{b['new_1']}")
     assert any("古い個体――執事悪魔" in p["text"] for p in item["linked_at"])
     assert not conn.execute("SELECT 1 FROM entity_links WHERE status='candidate'").fetchone()
+
+
+def test_a_card_forgotten_when_its_scene_is_read_again_takes_where_its_word_was_given_with_it(conn, cfg, fixtures):
+    from ncte.analysis.scene import forget_scene_cards, get_scene
+
+    book, scenes, (u1, u2) = _book(conn, cfg, fixtures, TEXTS)
+    _read(conn, book, scenes[0], new_characters=[_new("執事悪魔", u1, ["執事悪魔"], [("執事悪魔", "description")])])
+    _read(conn, book, scenes[1], new_characters=[_desc("古い個体", u2)])
+    assert conn.execute("SELECT COUNT(*) FROM same_word_asked").fetchone()[0] == 1
+    forget_scene_cards(conn, book.id, get_scene(conn, book.id, scenes[1]["id"]), memory_too=True)
+    assert conn.execute("SELECT COUNT(*) FROM same_word_asked").fetchone()[0] == 0

@@ -1401,3 +1401,9 @@ open workspace/eval/<timestamp>/report.html
   - 有標籤的卡重讀時照樣檢查（重讀會把它的候選重設）。
   - `other_forms` 的詞是不是別張卡的，改看資料庫當下的持有者（只有另一時期的卡有、或同一個回答剛給了別張卡時也算），這時只當別名、不記成名字連結。
   - `test_shared_word_cards.py` 新增 3 個（用 651d52d 的程式都失敗）。1036 passed、2 skipped；ruff、mypy 通過。
+- Codex 第三輪（be5f8a2）三個 P2，修了兩個：
+  - 重讀一場時被收回的卡，連帶刪掉它在 `same_word_asked` 的記錄（`forget_card_records`）；合併卡的記錄改在 `fold_card_records` 跟著留下的卡，搬書時合併重複的卡也一樣。
+  - 把書搬到另一個系列（`move_book`）時，`same_word_asked` 跟著書搬，原系列清掉。
+  - 不修：升級到 migration 39 的舊資料庫裡，前一版留下的候選名字連結（只有這個分支沒合併的 651d52d 會寫；舊書是測試資料，重新匯入即可）。
+  - 測試新增 1 個、`test_series.py` 搬書的測試多檢查這張表（用 be5f8a2 的程式都失敗）。1037 passed、2 skipped；ruff、mypy 通過。
+- 抽測（`workspace/exp/speaker-real/role3-akuma`，跑的是 7006c31，同 ADR-110 的段落，Claude 方案；105 個請求、21 分鐘，Claude 5h 56%→71%（含同時段這個對話的工作）、每週 28%→29%）：這次模型沒有把惡魔拆成兩張卡（一張「執事悪魔」、24 句，別名「お猿さん」對照原文是同一隻），新的詢問沒有機會被觸發；フェル沒有群體別名。

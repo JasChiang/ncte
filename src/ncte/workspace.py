@@ -28,7 +28,7 @@ from .series import ensure_series
 
 # tables whose rows belong to one book (used when splitting a legacy multi-book database)
 _BOOK_TABLES = ("jobs", "llm_requests", "qa_findings", "utterances", "memory_rejections", "entity_links", "entities",
-                "facts", "chapter_summaries", "prop_states", "scene_overrides", "scenes", "units", "resources",
+                "same_word_asked", "facts", "chapter_summaries", "prop_states", "scene_overrides", "scenes", "units", "resources",
                 "glossary", "characters", "runs")  # dependents first (foreign keys)
 
 
@@ -298,6 +298,7 @@ _MOVE_PLAN: list[tuple[str, str, bool]] = [
     ("characters", "book_id=:b", False),
     ("character_forms", "character_id IN (SELECT id FROM characters WHERE book_id=:b)", False),
     ("character_notes", "character_id IN (SELECT id FROM characters WHERE book_id=:b)", True),
+    ("same_word_asked", "book_id=:b", False),
     ("entities", "book_id=:b", False), ("entity_links", "book_id=:b", True),
     ("runs", "book_id=:b", False), ("jobs", "book_id=:b", True), ("llm_requests", "book_id=:b", True),
     ("translations", "unit_id IN (SELECT id FROM units WHERE book_id=:b)", True),

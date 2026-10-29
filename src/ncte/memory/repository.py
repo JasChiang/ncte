@@ -144,11 +144,15 @@ def fold_card_records(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> N
             note_forms(conn, keep_id, [f], b, o)
     conn.execute("DELETE FROM character_forms WHERE character_id=?", (drop_id,))
     conn.execute("UPDATE character_notes SET character_id=? WHERE character_id=?", (keep_id, drop_id))
+    for col in ("card_id", "other_id"):  # where a word two cards had was given (ADR-111): follows the kept card
+        conn.execute(f"UPDATE OR IGNORE same_word_asked SET {col}=? WHERE {col}=?", (keep_id, drop_id))
+    conn.execute("DELETE FROM same_word_asked WHERE card_id=? OR other_id=? OR card_id=other_id", (drop_id, drop_id))
 
 
 def forget_card_records(conn: sqlite3.Connection, cid: str) -> None:
     conn.execute("DELETE FROM character_forms WHERE character_id=?", (cid,))
     conn.execute("DELETE FROM character_notes WHERE character_id=?", (cid,))
+    conn.execute("DELETE FROM same_word_asked WHERE card_id=? OR other_id=?", (cid, cid))
 
 
 OTHER_PERSON = "另一人"  # the label of a card for someone of another time whose time the model did not give
@@ -406,9 +410,6 @@ def merge_characters(conn: sqlite3.Connection, keep_id: str, drop_id: str) -> No
                 "UPDATE OR IGNORE group_members SET member_id=? WHERE member_id=?"):
         conn.execute(sql, (keep_id, drop_id))
     conn.execute("DELETE FROM speech_examples WHERE character_id=?", (drop_id,))
-    for col in ("card_id", "other_id"):  # where a word two cards had was given (ADR-111): follows the kept card
-        conn.execute(f"UPDATE OR IGNORE same_word_asked SET {col}=? WHERE {col}=?", (keep_id, drop_id))
-    conn.execute("DELETE FROM same_word_asked WHERE card_id=? OR other_id=? OR card_id=other_id", (drop_id, drop_id))
     conn.execute("DELETE FROM group_members WHERE group_id=? OR member_id=? OR group_id=member_id", (drop_id, drop_id))
     conn.execute("DELETE FROM relations WHERE a_id=? OR b_id=?", (drop_id, drop_id))  # duplicates of kept ones
     # impressions: the kept card's stretches stay; the dropped card's come over only when the kept one has none (two
