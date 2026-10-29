@@ -96,3 +96,36 @@ def test_the_second_look_is_shown_where_the_word_was_given(conn, cfg, fixtures):
     item = next(i for i in same_person_items(conn, book.id, _names(conn, book.id)) if i["ref"] == f"s:{b['new_1']}")
     assert a["new_1"] in item["candidates"]
     assert any("古い個体――執事悪魔" in p["text"] for p in item["linked_at"])
+
+
+def test_a_card_of_another_time_read_again_is_still_asked_about(conn, cfg, fixtures):
+    book, scenes, (u1, u2) = _book(conn, cfg, fixtures, TEXTS)
+    a, _ = _read(conn, book, scenes[0], new_characters=[_new("執事悪魔", u1, ["執事悪魔"], [("執事悪魔", "description")])])
+    answer = [_desc("古い個体", u2, period="前世")]
+    b, _ = _read(conn, book, scenes[1], new_characters=answer)
+    again, _ = _read(conn, book, scenes[1], new_characters=answer)
+    assert again["new_1"] == b["new_1"] and a["new_1"] in _may_be(conn, b["new_1"])
+
+
+def test_another_form_a_card_of_another_time_has_is_asked_about_not_linked(conn, cfg, fixtures):
+    book, scenes, (u1, u2, u3) = _book(conn, cfg, fixtures, [*TEXTS, "　執事悪魔がまた笑った。"])
+    a, _ = _read(conn, book, scenes[0], new_characters=[{**_desc("額に傷を持つ", u1), "period": "前世"}])
+    b, _ = _read(conn, book, scenes[1], new_characters=[_new("古い個体", u2, ["古い個体"], [("古い個体", "description")])])
+    _read(conn, book, scenes[2], other_forms=[{"ref": b["new_1"], "ja": "執事悪魔", "kind": "description",
+                                               "evidence_unit_ids": [u3["id"]]}])
+    assert a["new_1"] in _may_be(conn, b["new_1"])
+    assert not conn.execute("SELECT 1 FROM entity_links WHERE term='執事悪魔' AND status='accepted'").fetchone()
+
+
+def test_where_the_word_was_given_follows_a_merge_and_writes_no_name_link(conn, cfg, fixtures):
+    from ncte.analysis.verify import _names, same_person_items
+
+    book, scenes, (u1, u2, u3) = _book(conn, cfg, fixtures, [*TEXTS, "　執事悪魔――ミナが笑った。"])
+    a, _ = _read(conn, book, scenes[0], new_characters=[_new("執事悪魔", u1, ["執事悪魔"], [("執事悪魔", "description")])])
+    b, _ = _read(conn, book, scenes[1], new_characters=[_desc("古い個体", u2)])
+    _read(conn, book, scenes[2], new_characters=[{**_new("ミナ", u3), "same_as_ref": a["new_1"]}])  # named: merged
+    mina = conn.execute("SELECT id FROM characters WHERE canonical_name='ミナ'").fetchone()[0]
+    assert mina in _may_be(conn, b["new_1"])
+    item = next(i for i in same_person_items(conn, book.id, _names(conn, book.id)) if i["ref"] == f"s:{b['new_1']}")
+    assert any("古い個体――執事悪魔" in p["text"] for p in item["linked_at"])
+    assert not conn.execute("SELECT 1 FROM entity_links WHERE status='candidate'").fetchone()

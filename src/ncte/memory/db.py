@@ -773,6 +773,19 @@ CREATE TABLE character_forms (
     (38, "what the words a card is known by are, as the model read them when it made the card (name, nickname, title, "
          "description): a card known by a title or a description takes the person's name when the model later gives "
          "one", "ALTER TABLE characters ADD COLUMN name_kind TEXT;"),
+    (39, "where the reading gave a card a word that names someone and another card has (ADR-111): the second look asks "
+         "whether the two are one person, shown that paragraph", """
+CREATE TABLE same_word_asked (
+    card_id TEXT NOT NULL,
+    other_id TEXT NOT NULL,
+    word TEXT NOT NULL,
+    book_id TEXT NOT NULL,
+    unit_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (card_id, other_id, unit_id)
+);
+"""),
 ]
 # migrations that rebuild a table other tables refer to: run with foreign keys off (they cannot be switched inside a
 # transaction), checked before committing

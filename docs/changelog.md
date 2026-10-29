@@ -1396,3 +1396,8 @@ open workspace/eval/<timestamp>/report.html
   - 標了時期、另開有標籤卡的新人物也檢查（時期只是模型的判讀，照樣問）；團體卡不問（原本旗標還沒寫入就檢查）。
   - 標記時記一筆兩張卡名的候選連結（`entity_links` 的 `candidate`，和 ADR-108 被問的連結一樣），覆核題的 `linked_at` 附上給這個詞的段落。
   - `test_shared_word_cards.py` 新增 3 個（用 7006c31 的程式都失敗）；測試輔助改挑要翻譯的段落。1033 passed、2 skipped；ruff、mypy 通過。
+- Codex 第二輪（651d52d）五個 P2，都修了。後三個都出在把段落記成名字的候選連結（手動連名字會照名字挑錯卡、揭曉合併的覆核題會漏掉、名字改了就找不到）：
+  - 給這個詞的段落改記在自己的表 `same_word_asked`（migration 39，以兩張卡的 id 記；合併時跟著留下的卡），覆核的 `linked_at` 從這裡讀；不再寫 `entity_links`。
+  - 有標籤的卡重讀時照樣檢查（重讀會把它的候選重設）。
+  - `other_forms` 的詞是不是別張卡的，改看資料庫當下的持有者（只有另一時期的卡有、或同一個回答剛給了別張卡時也算），這時只當別名、不記成名字連結。
+  - `test_shared_word_cards.py` 新增 3 個（用 651d52d 的程式都失敗）。1036 passed、2 skipped；ruff、mypy 通過。
