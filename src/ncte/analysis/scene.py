@@ -586,9 +586,9 @@ def _relations_so_far(conn: sqlite3.Connection, book_id: str, before: int) -> di
 
 def _revealed(known: list[Any], book_id: str, same_as: str | None) -> str | None:
     """The known character a newly named one turns out to be: the model's ``same_as_ref`` (a known character of the
-    series seen by then — 『英雄』 of volume 1 named in volume 2 — but never another volume's narrator placeholder,
-    which stays in its own volume). The program does not match names or descriptions itself (ADR-059)."""
-    mine = {c["id"] for c in known if c["book_id"] == book_id or not c["is_narrator"]}
+    series seen by then — 『英雄』 of volume 1 named in volume 2 — but never another volume's unnamed narrator
+    placeholder, which stays in its own volume). The program does not match names or descriptions itself (ADR-059)."""
+    mine = {c["id"] for c in known if c["book_id"] == book_id or not c["canonical_name"].startswith(NARRATOR_NAME[:-1])}
     return same_as if same_as in mine else None
 
 
@@ -714,13 +714,22 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             unconfirmed_cards.append({"ref": nc.temp_id, "character_id": cid, "may_be": sorted(cards)})
         # who this answer gives each form to (a new person, or the known card it says that person is; a known card's
         # other form): a form given to two is no one's to be named by, whichever the answer lists first
-        person = {x.temp_id: x.same_as_ref or x.temp_id for x in parsed.new_characters}
+        # — counted by who each one is: the known card a new person is said to be, or is by its name; only forms found
+        # in the scene, given to a person the answer may refer to
+        def in_scene(f: str) -> bool:
+            return any(in_source(f, t) for t in unit_src.values())
+
+        known_ids = {c["id"] for c in known}
+        person = {x.temp_id: _revealed(known, book_id, x.same_as_ref) or existing_alias.get(source_form(x.name_ja))
+                  or x.temp_id for x in parsed.new_characters}
         given_to: dict[str, set[str]] = {}
         for x in parsed.new_characters:
             for f in {source_form(x.name_ja), *map(source_form, x.aliases_ja)}:
-                given_to.setdefault(f, set()).add(person[x.temp_id])
+                if in_scene(f):
+                    given_to.setdefault(f, set()).add(person[x.temp_id])
         for y in parsed.other_forms:
-            given_to.setdefault(source_form(y.ja), set()).add(person.get(y.ref, y.ref))
+            if (y.ref in person or y.ref in known_ids) and in_scene(f := source_form(y.ja)):
+                given_to.setdefault(f, set()).add(person.get(y.ref, y.ref))
 
         def taken(form: str, who: str | None) -> bool:
             """A name some other person may have: another card's in the series (its name, or a form of its entity),
@@ -822,7 +831,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             # words still find the person of the present
             # a name the model reveals for a known card (same_as_ref) that no card has yet is that card's name, whatever
             # time the model also gives: the reveal keeps the card's time and what it may be
-            revealing = not seen and _revealed(known, book_id, nc.same_as_ref) is not None
+            revealing = not seen and not nc.other_person and _revealed(known, book_id, nc.same_as_ref) is not None
             if (len(seen) > 1 or (other and seen)) or (nc.period.strip() and not revealing):
                 unconfirmed(nc, name, first, seen, _aliases(nc, name))
                 continue

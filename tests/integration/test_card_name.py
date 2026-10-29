@@ -165,20 +165,25 @@ def test_tell_apart_does_not_show_an_impression_written_in_a_later_volume(conn, 
     assert vis.tell_apart(conn, b2.id, [card], 5)[cid]["earlier_model_reading"] == ["其實是間諜"]
 
 
-def test_a_name_revealed_in_a_later_volume_names_the_title_card(conn, cfg, fixtures, tmp_path):
-    """The prompts send a name given later through the reveal (``same_as_ref``): a card of an earlier volume is one the
-    model may say the named person is."""
+def _two_volumes(conn, cfg, fixtures, tmp_path, texts):
     from tests.integration.test_series import series_of_two
 
     b1, b2 = series_of_two(conn, cfg, fixtures, tmp_path)
-    units = []
-    for b, text in ((b1, "　『英雄』は大剣を担ぎ上げた。"), (b2, "　『英雄』――レイド・フリーデンは笑った。")):
+    out = []
+    for b, text in zip((b1, b2), texts, strict=True):
         sc = conn.execute("SELECT * FROM scenes WHERE book_id=? ORDER BY seq LIMIT 1", (b.id,)).fetchone()
         u = conn.execute("SELECT * FROM units WHERE book_id=? AND scene_id=? AND kind='text' ORDER BY ordinal LIMIT 1",
                          (b.id, sc["id"])).fetchone()
         conn.execute("UPDATE units SET plain_text=?, source_text=? WHERE id=?", (text, text, u["id"]))
-        units.append((b, sc, conn.execute("SELECT * FROM units WHERE id=?", (u["id"],)).fetchone()))
-    (_, s1, u1), (_, s2, u2) = units
+        out.append((b, sc, conn.execute("SELECT * FROM units WHERE id=?", (u["id"],)).fetchone()))
+    return out
+
+
+def test_a_name_revealed_in_a_later_volume_names_the_title_card(conn, cfg, fixtures, tmp_path):
+    """The prompts send a name given later through the reveal (``same_as_ref``): a card of an earlier volume is one the
+    model may say the named person is."""
+    (b1, s1, u1), (b2, s2, u2) = _two_volumes(conn, cfg, fixtures, tmp_path,
+                                              ["　『英雄』は大剣を担ぎ上げた。", "　『英雄』――レイド・フリーデンは笑った。"])
     refs, _ = _read(conn, b1, s1, new_characters=[_new("英雄", u1, ["英雄"], [("英雄", "title")])])
     _read(conn, b2, s2, new_characters=[{**_new("レイド・フリーデン", u2, ["英雄"], [("英雄", "title")]),
                                          "same_as_ref": refs["new_1"]}])
@@ -204,3 +209,45 @@ def test_a_name_one_answer_gives_two_title_cards_names_neither(conn, cfg, fixtur
     waiter = {**_new("給仕", u1, ["給仕", "ミナ"], [("給仕", "description"), ("ミナ", "name")]), "temp_id": "new_2"}
     _read(conn, book, scenes[0], new_characters=[hero, waiter] if hero_first else [waiter, hero])
     assert {"英雄", "給仕"} <= set(_cards(conn, book)) and "ミナ" not in _cards(conn, book)
+
+
+def test_a_name_revealed_for_a_named_narrator_of_an_earlier_volume_is_that_card(conn, cfg, fixtures, tmp_path):
+    """A narrator named in volume 1 (still marked the narrator) is a known person, not the volume's placeholder."""
+    (b1, _, u1), (b2, s2, u2) = _two_volumes(conn, cfg, fixtures, tmp_path,
+                                            ["　俺はレイドだ。", "　レイド・フリーデンは笑った。"])
+    me, _ = repo.upsert_character(conn, b1.id, "レイド", name_zh=None, aliases=[], unit_id=u1["id"],
+                                  ordinal=u1["ordinal"], origin="test")
+    conn.execute("UPDATE characters SET is_narrator=1 WHERE id=?", (me,))
+    _read(conn, b2, s2, new_characters=[{**_new("レイド・フリーデン", u2), "same_as_ref": me}])
+    assert [r[0] for r in conn.execute("SELECT canonical_name FROM characters WHERE book_id IN (?,?)",
+                                       (b1.id, b2.id))] == ["レイド・フリーデン"]
+
+
+def test_a_reveal_the_model_also_calls_another_person_of_another_time_is_a_card_of_its_own(conn, cfg, fixtures):
+    book, scenes, (u1, u2) = _book(conn, cfg, fixtures, TEXTS)
+    refs, _ = _read(conn, book, scenes[0], new_characters=[_new("英雄", u1, ["英雄"], [("英雄", "title")])])
+    _read(conn, book, scenes[1], new_characters=[{**_new("レイド・フリーデン", u2), "same_as_ref": refs["new_1"],
+                                                  "other_person": True, "period": "前世"}])
+    rows = {r[0]: r[1] for r in conn.execute("SELECT canonical_name, period FROM characters WHERE book_id=?", (book.id,))}
+    assert rows == {"英雄": None, "レイド・フリーデン": "前世"}
+
+
+def test_a_name_given_to_one_card_twice_in_an_answer_names_it(conn, cfg, fixtures):
+    """The same person twice — a new person whose name is the card's, and the card's other form — is one owner; a form
+    for a card the answer may not refer to counts for no one."""
+    book, scenes, (u1, u2) = _book(conn, cfg, fixtures, ["　『英雄』は大剣を担ぎ上げた。", "　『英雄』――ミナは笑った。"])
+    refs, _ = _read(conn, book, scenes[0], new_characters=[_new("英雄", u1, ["英雄"], [("英雄", "title")])])
+    hero = refs["new_1"]
+    form = {"ja": "ミナ", "kind": "name", "evidence_unit_ids": [u2["id"]]}
+    _read(conn, book, scenes[1], new_characters=[_new("英雄", u2, ["英雄", "ミナ"], [("英雄", "title"), ("ミナ", "name")])],
+          other_forms=[{**form, "ref": hero}, {**form, "ref": "c_no_such_card"}])
+    assert set(_cards(conn, book)) == {"ミナ"}
+
+
+def test_two_title_cards_said_to_be_one_unknown_card_are_two_people(conn, cfg, fixtures):
+    book, scenes, (u1,) = _book(conn, cfg, fixtures, ["　『英雄』と給仕、どちらがミナなのか。"])
+    hero = {**_new("英雄", u1, ["英雄", "ミナ"], [("英雄", "title"), ("ミナ", "name")]), "same_as_ref": "c_gone"}
+    waiter = {**_new("給仕", u1, ["給仕", "ミナ"], [("給仕", "description"), ("ミナ", "name")]), "temp_id": "new_2",
+              "same_as_ref": "c_gone"}
+    _read(conn, book, scenes[0], new_characters=[hero, waiter])
+    assert "ミナ" not in _cards(conn, book)
