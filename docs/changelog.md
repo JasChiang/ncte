@@ -1371,3 +1371,8 @@ open workspace/eval/<timestamp>/report.html
   - 區分提示的「之前的讀法」照系列位置挑人物印象，後面集數寫的印象不會給前面集數看。
   - 兩份提示詞：之後的場景才寫出名字時，改指向揭曉名字的寫法（`new_characters` 加 `same_as_ref`），不再和 `other_forms`「揭曉身分不要放這裡」矛盾；程式仍接受模型放在 `other_forms` 的名字。
   - `test_card_name.py` 新增 3 個（用 87ce762 的程式都失敗）。1016 passed、2 skipped；ruff、mypy 通過。
+- Codex 第二輪（e07125b）三個 P2，都修了（前兩個是揭曉名字原本就有的限制，提示詞改指向它之後才會碰到）：
+  - 揭曉名字（`same_as_ref`）可以指同一系列前面集數的卡（`_revealed`，別集的敘述者卡除外）：第一集的「英雄」在第二集揭曉名字時合成一張卡。
+  - 揭曉名字時模型又填了 `period`，而名字還沒有卡：照揭曉合併，保留卡的時期與 `may_be`（原本走另開有標籤卡的路，`same_as_ref` 被忽略）。
+  - 同一個回答把同一個名字給了兩個人時，兩張稱號卡都不改名（原本看回答裡的先後，先列的那張改名）。
+  - `test_card_name.py` 新增 4 個（用 e07125b 的程式都失敗）。1020 passed、2 skipped；ruff、mypy 通過。
