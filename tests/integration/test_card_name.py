@@ -107,3 +107,57 @@ def test_a_card_known_by_a_role_word_is_shown_with_where_it_was_first_seen(conn,
     known = {c["character_id"]: c for c in payload["known_characters"]}
     assert known[refs["new_1"]]["first_seen"].startswith("すれ違った給仕")
     assert "first_seen" not in known[named["new_1"]]
+
+
+def test_a_title_card_does_not_take_a_name_another_card_has_through_its_entity(conn, cfg, fixtures):
+    """ロセト・アイン is a form of ロセト's (a link, not a card's name): giving it to 『英雄』 is the model saying the
+    hero is called that, not the program's to decide the two are one — the hero keeps its card."""
+    from ncte.memory.entities import link
+
+    book, scenes, (u1, u2) = _book(conn, cfg, fixtures, ["　『英雄』は大剣を担ぎ上げた。", "　ロセト・アインは笑った。"])
+    rosete, _ = repo.upsert_character(conn, book.id, "ロセト", name_zh=None, aliases=[], unit_id=u1["id"],
+                                      ordinal=u1["ordinal"], origin="test")
+    for term, zh in (("ロセト", "羅塞特"), ("ロセト・アイン", "羅塞特・艾恩")):
+        repo.ensure_glossary(conn, book.id, term, zh, category="character", origin="test", first_unit_id=u1["id"])
+    assert link(conn, book.id, "ロセト・アイン", "ロセト", "alias", origin="test", ordinal=u1["ordinal"]) == "accepted"
+    refs, _ = _read(conn, book, scenes[0], new_characters=[_new("英雄", u1, ["英雄"], [("英雄", "title")])])
+    _read(conn, book, scenes[1], other_forms=[{"ref": refs["new_1"], "ja": "ロセト・アイン", "kind": "name",
+                                               "evidence_unit_ids": [u2["id"]]}])
+    cards = _cards(conn, book)
+    assert set(cards) == {"英雄", "ロセト"} and cards["ロセト"]["id"] == rosete
+
+
+def test_a_second_card_by_a_role_word_takes_the_name_given_later(conn, cfg, fixtures):
+    """ADR-110: another 「給仕」 (``other_person``) is a labelled card; it too takes the name the model gives later."""
+    book, scenes, (u1, u2, u3) = _book(conn, cfg, fixtures, ["　給仕が頭を下げた。", "　別の給仕が飲み物を運んできた。",
+                                                             "　給仕のミナは笑った。"])
+    _read(conn, book, scenes[0], new_characters=[_new("給仕", u1, ["給仕"], [("給仕", "description")])])
+    refs, _ = _read(conn, book, scenes[1], new_characters=[{**_new("給仕", u2, ["給仕"], [("給仕", "description")]),
+                                                            "other_person": True}])
+    second = refs["new_1"]
+    first = conn.execute("SELECT id FROM characters WHERE book_id=? AND canonical_name='給仕' AND label=''",
+                         (book.id,)).fetchone()[0]
+    assert first != second
+    assert conn.execute("SELECT name_kind FROM characters WHERE id=?", (second,)).fetchone()[0] == "description"
+    _read(conn, book, scenes[2], other_forms=[{"ref": second, "ja": "ミナ", "kind": "name",
+                                               "evidence_unit_ids": [u3["id"]]}])
+    mina = _cards(conn, book)["ミナ"]
+    assert "給仕" in json.loads(mina["aliases_json"])
+    assert conn.execute("SELECT COUNT(*) FROM characters WHERE book_id=? AND canonical_name='給仕'",
+                        (book.id,)).fetchone()[0] == 1  # the first servant is still her own card
+
+
+def test_tell_apart_does_not_show_an_impression_written_in_a_later_volume(conn, cfg, fixtures, tmp_path):
+    from ncte.memory.db import utcnow
+    from tests.integration.test_series import series_of_two
+
+    b1, b2 = series_of_two(conn, cfg, fixtures, tmp_path)
+    u = conn.execute("SELECT id, ordinal FROM units WHERE book_id=? ORDER BY ordinal DESC LIMIT 1", (b1.id,)).fetchone()
+    cid, _ = repo.upsert_character(conn, b1.id, "給仕", name_zh=None, aliases=[], unit_id=u["id"], ordinal=0,
+                                   origin="test")
+    conn.execute("INSERT INTO character_impressions(character_id, book_id, since_ordinal, personality, voice, role, "
+                 "evidence_json, revealed_ordinal, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                 (cid, b2.id, 1, "", "", "其實是間諜", "[]", 1, utcnow()))
+    card = conn.execute("SELECT * FROM characters WHERE id=?", (cid,)).fetchone()
+    assert "earlier_model_reading" not in vis.tell_apart(conn, b1.id, [card], u["ordinal"])[cid]
+    assert vis.tell_apart(conn, b2.id, [card], 5)[cid]["earlier_model_reading"] == ["其實是間諜"]

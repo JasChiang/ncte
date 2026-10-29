@@ -230,7 +230,7 @@ def tell_apart(conn: sqlite3.Connection, book_id: str, cards: list[Any], upto: i
 
     Callers give it only for cards whose name another card in the request has, or that are known by a title or a
     description (ADR-110), so other requests stay as they were."""
-    from .repository import impression_at
+    from .repository import impressions_of
 
     hz = pos(conn, book_id, upto)
     names = visible_names(conn, book_id, upto)
@@ -239,8 +239,13 @@ def tell_apart(conn: sqlite3.Connection, book_id: str, cards: list[Any], upto: i
         hint: dict[str, Any] = {"first_seen": first_seen(conn, c)}
         notes = [r["text"] for r in conn.execute("SELECT * FROM character_notes WHERE character_id=? ORDER BY ordinal",
                                                  (c["id"],)) if pos(conn, r["book_id"], r["ordinal"]) <= hz]
-        if (imp := impression_at(conn, c["id"], upto)) and imp.get("role"):
-            notes.append(imp["role"])
+        # the role in the model's impression of the present begun by then, once its evidence is reached — placed in the
+        # series (an impression written in a later volume is not shown to an earlier one)
+        begun = sorted((r for r in impressions_of(conn, c["id"])
+                        if not r["period"] and pos(conn, r["book_id"], r["since_ordinal"]) <= hz),
+                       key=lambda r: pos(conn, r["book_id"], r["since_ordinal"]))
+        if begun and begun[-1]["role"] and pos(conn, begun[-1]["book_id"], begun[-1]["revealed_ordinal"]) <= hz:
+            notes.append(begun[-1]["role"])
         if notes:
             hint["earlier_model_reading"] = list(dict.fromkeys(notes))[:TELL_APART_NOTES]
         rel: list[str] = []
