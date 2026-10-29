@@ -251,3 +251,24 @@ def test_two_title_cards_said_to_be_one_unknown_card_are_two_people(conn, cfg, f
               "same_as_ref": "c_gone"}
     _read(conn, book, scenes[0], new_characters=[hero, waiter])
     assert "ミナ" not in _cards(conn, book)
+
+
+def test_another_person_with_a_title_card_s_words_keeps_the_name_from_the_card(conn, cfg, fixtures):
+    """A second 「給仕」 (``other_person``) is another person: a name the answer gives both is no one's."""
+    book, scenes, (u1, u2) = _book(conn, cfg, fixtures, ["　給仕が頭を下げた。", "　給仕のミナが笑った。"])
+    refs, _ = _read(conn, book, scenes[0], new_characters=[_new("給仕", u1, ["給仕"], [("給仕", "description")])])
+    form = {"ja": "ミナ", "kind": "name", "evidence_unit_ids": [u2["id"]]}
+    _read(conn, book, scenes[1], new_characters=[{**_new("給仕", u2, ["給仕"], [("給仕", "description")]),
+                                                  "other_person": True}],
+          other_forms=[{**form, "ref": refs["new_1"]}, {**form, "ref": "new_1"}])
+    assert "ミナ" not in _cards(conn, book)
+
+
+def test_a_name_said_to_be_a_card_and_another_person_merges_nothing(conn, cfg, fixtures, tmp_path):
+    (b1, _, u1), (b2, s2, u2) = _two_volumes(conn, cfg, fixtures, tmp_path,
+                                            ["　俺はレイドだ。", "　レイド・フリーデンは笑った。"])
+    me, _ = repo.upsert_character(conn, b1.id, "レイド", name_zh=None, aliases=[], unit_id=u1["id"],
+                                  ordinal=u1["ordinal"], origin="test")
+    _read(conn, b2, s2, new_characters=[{**_new("レイド・フリーデン", u2), "same_as_ref": me, "other_person": True}])
+    assert sorted(r[0] for r in conn.execute("SELECT canonical_name FROM characters WHERE book_id IN (?,?)",
+                                             (b1.id, b2.id))) == ["レイド", "レイド・フリーデン"]

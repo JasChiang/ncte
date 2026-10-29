@@ -1382,3 +1382,7 @@ open workspace/eval/<timestamp>/report.html
   - 同一個名字在一個回答裡給了幾個人，按「是誰」算：新人物的名字就是已知卡的名字、或 `same_as_ref` 有效時算那張卡；不存在的 `same_as_ref` 各算各的；指向不存在的卡、或場景裡找不到的寫法不算。
   - 未修，記在 `docs/todo.md`：跨集揭曉合併後，前面集數的請求會看到卡上後面集數的說話特徵（`speech_profile` 是整張卡的，不分位置）。
   - `test_card_name.py` 新增 4 個（用 ae9f020 的程式都失敗）。1024 passed、2 skipped（第一次跑有 1 個沒重現的失敗，重跑通過）；ruff、mypy 通過。
+- Codex 第四輪（8bca653）兩個 P2，都修了：
+  - 模型說是某張卡（`same_as_ref`）又說是另一個人（`other_person`）時，不論有沒有時期都不合併（`said_is`；原本沒給時期就照揭曉合併，跨集放寬後連前面集數有名字的敘述者也會被併）。同一本書裡這種矛盾的回答，以前會合併，現在也一樣不合併。
+  - 算一個名字給了幾個人時，標了另一個人或時期的新人物不算成卡名相同的那張卡。
+  - `test_card_name.py` 新增 2 個（用 8bca653 的程式都失敗）。1026 passed、2 skipped；ruff、mypy 通過。

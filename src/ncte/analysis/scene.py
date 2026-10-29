@@ -674,6 +674,11 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                     and _standalone(a, scene_text, [name, *existing_alias,
                                                     *(source_form(x.name_ja) for x in parsed.new_characters)])]
 
+        def said_is(nc: Any) -> str | None:
+            """The known card the model says this named person is — unless it also says this is another person: the
+            two marks disagree, and which counts is not the program's to pick (no reveal)."""
+            return None if nc.other_person else _revealed(known, book_id, nc.same_as_ref)
+
         def marked(nc: Any) -> bool:
             """The model says this is someone else than a card with the words: another person, or another time."""
             return bool(nc.other_person or nc.period.strip())
@@ -720,7 +725,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             return any(in_source(f, t) for t in unit_src.values())
 
         known_ids = {c["id"] for c in known}
-        person = {x.temp_id: _revealed(known, book_id, x.same_as_ref) or existing_alias.get(source_form(x.name_ja))
+        person = {x.temp_id: said_is(x) or (None if marked(x) else existing_alias.get(source_form(x.name_ja)))
                   or x.temp_id for x in parsed.new_characters}
         given_to: dict[str, set[str]] = {}
         for x in parsed.new_characters:
@@ -831,7 +836,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             # words still find the person of the present
             # a name the model reveals for a known card (same_as_ref) that no card has yet is that card's name, whatever
             # time the model also gives: the reveal keeps the card's time and what it may be
-            revealing = not seen and not nc.other_person and _revealed(known, book_id, nc.same_as_ref) is not None
+            revealing = not seen and said_is(nc) is not None
             if (len(seen) > 1 or (other and seen)) or (nc.period.strip() and not revealing):
                 unconfirmed(nc, name, first, seen, _aliases(nc, name))
                 continue
@@ -851,7 +856,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 names_of[existing_alias[name]] = [name]
                 # the name already has a card and the model says it is the one known so far by a description (or by
                 # words several cards have): the reveal merges that one into it, as for a name new here
-                same = _revealed(known, book_id, nc.same_as_ref)
+                same = said_is(nc)
                 if same and same != existing_alias[name]:
                     reveals.append((existing_alias[name], same, name, first, nc.evidence_unit_ids, False))
                 continue
@@ -885,7 +890,7 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
             existing_alias[name] = cid
             if nc.group:
                 conn.execute("UPDATE characters SET is_group=1 WHERE id=?", (cid,))
-            same = _revealed(known, book_id, nc.same_as_ref)
+            same = said_is(nc)
             if same and same != cid:
                 reveals.append((cid, same, name, first, nc.evidence_unit_ids, True))
         # a name revealed for a character known so far only by a description: one character from here on.
