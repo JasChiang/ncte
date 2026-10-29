@@ -133,7 +133,7 @@ def memory_context(conn: sqlite3.Connection, book_id: str, *, scene: sqlite3.Row
         aliases = [v["name_ja"], *v["aliases_ja"]]
         if c["id"] not in participants and not any(a in (seen_text if fix else scene_text) for a in aliases):
             continue
-        prof = json.loads(c["speech_profile_json"] or "{}")
+        prof = vis.profile_at(conn, c["id"], horizon, book_id)  # from the lines before here, placed in the series
         examples = []
         for e in vis.visible_examples(conn, c["id"], horizon, book_id=book_id,
                                       **({"limit": COMPACT_EXAMPLES} if compact else {})):

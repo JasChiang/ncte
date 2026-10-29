@@ -213,6 +213,9 @@ RECORD_ONLY = ("matched_by_words", "unconfirmed_cards")
 
 _KIND_ORDER = ("name", "nickname", "title", "description")
 NOT_A_NAME = ("title", "description")  # words a card may be known by until the person's name is given
+# words that name one person, as the model read them: two cards given one are maybe one person (ADR-111) — a title
+# (「母上」「給仕」) is anyone in the role, a common word anyone at all
+ASKED_KINDS = ("name", "nickname", "description")
 
 
 def _said_alias(nc: Any, evidence: list[str]) -> str | None:
@@ -362,7 +365,7 @@ def build_analysis_payload(conn: sqlite3.Connection, book_id: str, scene: sqlite
         "task": "scene_analyze", "scene_id": scene["id"],
         "units": [{"unit_id": r["id"], "source": r["plain_text"]} for r in rows],
         "quotes": q_payload,
-        "known_characters": [{"character_id": c["id"], **v, "speech_profile": json.loads(c["speech_profile_json"] or "{}"),
+        "known_characters": [{"character_id": c["id"], **v, "speech_profile": vis.profile_at(conn, c["id"], scene["start_ordinal"], book_id),
                               **({"relations": kin[c["id"]]} if kin.get(c["id"]) else {}),
                               **hints.get(c["id"], {}), **voice.get(c["id"], {})}
                              for c, v in views],
@@ -752,6 +755,21 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 f"SELECT 1 FROM characters WHERE {SERIES_SCOPE} AND canonical_name=? AND {repo.FINDABLE} AND id IS NOT ?",
                 (book_id, form, who)).fetchone())
 
+        def ask_same(card: str, other: str) -> None:
+            """Two cards the model gave one word that names someone (a name, a nickname, a description: 「執事悪魔」 of
+            two cards each made for the demon): one person or two is not the program's to tell — the later card, of
+            this volume, is marked as maybe the other and the second look asks (ADR-111)."""
+            from ..memory.entities import mark_may_be
+            from ..series import pos
+
+            rows = [conn.execute("SELECT * FROM characters WHERE id=?", (x,)).fetchone() for x in (card, other)]
+            if card == other or rows[0] is None or rows[1] is None or any(r["is_group"] for r in rows):
+                return
+            a, b = sorted(rows, key=lambda r: (r["book_id"] == book_id,
+                                               pos(conn, r["book_id"], r["known_from_ordinal"] or 0)))
+            if b["book_id"] == book_id:
+                mark_may_be(conn, str(b["id"]), str(a["id"]))
+
         for nc in parsed.new_characters:
             name = source_form(nc.name_ja)  # a name quoted with its reading (婆《ばあ》) is the text's 婆
             ev_ids = [u for u in nc.evidence_unit_ids if u in unit_text]
@@ -881,6 +899,9 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 # what the words it is known by are, as the model read them: a title or a description gives way to the
                 # person's name when the model gives one later (``other_forms``)
                 conn.execute("UPDATE characters SET name_kind=? WHERE id=?", (kinds.get(name), cid))
+                for a in aliases:  # a word naming someone that a known card has: maybe that person (ADR-111)
+                    if kinds.get(a) in ASKED_KINDS and (owner := existing_alias.get(a)) and not nc.other_person:
+                        ask_same(cid, owner)
                 if zh and len(name) >= 2:
                     repo.ensure_glossary(conn, book_id, name, zh, category="character", origin="scene_analysis",
                                          first_unit_id=first.id)
@@ -978,6 +999,8 @@ def apply_scene_analysis(conn: sqlite3.Connection, book_id: str, scene: sqlite3.
                 continue
             conn.execute("UPDATE characters SET aliases_json=?, updated_at=? WHERE id=?",
                          (json.dumps([*json.loads(row[1]), form], ensure_ascii=False), utcnow(), who))
+            if shared and of.kind in ASKED_KINDS:  # another card's word that names someone: maybe that one (ADR-111)
+                ask_same(str(who), existing_alias[form])
             repo.note_forms(conn, str(who), [form], book_id, first.ordinal)  # known from here, wherever the card is
             if not shared:  # a link reveals the form for every card that has it: not for a form another card had
                 record_link(conn, book_id, form, row[0], "alias", origin="scene_analysis", status="accepted",

@@ -1387,3 +1387,7 @@ open workspace/eval/<timestamp>/report.html
   - 算一個名字給了幾個人時，標了另一個人或時期的新人物不算成卡名相同的那張卡。
   - `test_card_name.py` 新增 2 個（用 8bca653 的程式都失敗）。1026 passed、2 skipped；ruff、mypy 通過。
 - Codex 第五輪（82c5ecf）：沒有新的 P1、P2。合併進 main。
+
+## ADR-111 兩張卡被給了同一個指認人的詞就問；說話特徵照位置（2026-10-29，分支 todo-cards-2026-10-29，基於 main bf23773）
+- `analysis/scene.py`：`ASKED_KINDS`、`ask_same`（新卡的別名、`other_forms` 的寫法已是另一張卡的，種類是名字／暱稱／描述時，後出現的本集卡標 `may_be`）；`memory/entities.py` `mark_may_be` 改成公開；`memory/visibility.py` `profile_at`，讀場景（`build_analysis_payload`）與翻譯（`retrieval`）附的說話特徵照位置重算。兩份讀場景提示詞：別名不放群體稱呼。
+- 測試：`tests/integration/test_shared_word_cards.py`（新，4 個；新卡別名、`other_forms`、稱號不問、說話特徵照位置。三個用 bf23773 的程式失敗，稱號不問那個本來就通過）。1030 passed、2 skipped；ruff、mypy 通過。

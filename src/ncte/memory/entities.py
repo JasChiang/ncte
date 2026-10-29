@@ -187,7 +187,7 @@ def _two_named_cards(conn: sqlite3.Connection, book_id: str, term: str, target: 
     return str(b["id"]), str(a["id"])
 
 
-def _mark_may_be(conn: sqlite3.Connection, card: str, other: str) -> None:
+def mark_may_be(conn: sqlite3.Connection, card: str, other: str) -> None:
     """``card`` may be ``other`` (asked by the second look), unless already answered not to be; marked again, asked
     again (the question's version is the card's ``updated_at``)."""
     import json
@@ -350,7 +350,7 @@ def link(conn: sqlite3.Connection, book_id: str, term: str, target: str, form_ty
             # 「銅の杖の先生」), or only that the word names the other person here (「母親」, the present mother's card
             # while she has no name, said of トーネの母親 in the baker's scene). Not the program's to tell: the later
             # card is marked as maybe the earlier and the second look asks (ADR-059; ADR-108 spot check)
-            _mark_may_be(conn, *pair)
+            mark_may_be(conn, *pair)
             record_link(conn, book_id, term, target, form_type, origin=origin, status="candidate", unit_id=unit_id,
                         quote=quote, ordinal=ordinal)
             return "asked"
