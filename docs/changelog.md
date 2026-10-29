@@ -1358,3 +1358,10 @@ open workspace/eval/<timestamp>/report.html
 - 起因：真書說話者抽測（`workspace/exp/speaker-real`，Claude 方案、預設設定，《英雄と賢者》《悪魔公女》《魔石グルメ》各讀前 450 段，三本 164 個請求、約 20 分鐘，Claude 5h 1%→13%、每週 10%→11%）。對照原文與官方中譯逐句判：模型判出說話者的 407 句沒有錯（英雄と賢者 162、悪魔公女 122、魔石グルメ 123）；答「不知道」19 句（不是台詞的稱號、心聲，只有刪節號的沉默）。順帶發現兩位主角的卡名是「英雄」「賢者」（見 ADR-109）、魔石グルメ的「給仕」卡掛了兩國的兩位女給仕（模型在 `other_forms` 把「年配の給仕」給了舊卡，未修，見 `docs/todo.md`）。
 - `memory/db.py` migration 38 `characters.name_kind`；`analysis/scene.py`：建卡時記 `name_kind`、`NOT_A_NAME`（同一場先寫稱號也用名字建卡）、揭曉名字的合併抽成 `reveal`，`other_forms` 給稱號或描述卡的 `name` 經 `reveal` 改名。`scene_analyze`、`scene_read` 提示詞的別名說明加「或稱號」與之後場景給名字的寫法。
 - 測試：`tests/integration/test_card_name.py`（新，4 個；稱號卡之後改名、名字只從給的那場看得到；同一場稱號＋名字；名字卡不改；名字是別張卡的不改。前兩個用 668d9cc 的程式失敗）。
+
+## ADR-110 職業、身分的詞指當下擔任的人（2026-10-29，同分支）
+- `scene_analyze`、`scene_read` 提示詞加職業詞的通則（見 ADR-110）；`analysis/scene.py` `build_analysis_payload`：卡名是稱號或描述的卡也附 `tell_apart` 的區分提示；`memory/visibility.py` 說明。
+- 測試：`tests/integration/test_card_name.py` 新增 1 個（職業詞卡附 `first_seen`、名字卡不附；用 ab2908c 的程式失敗）。1013 passed、2 skipped；ruff、mypy 通過。
+- 抽測（`workspace/exp/speaker-real/role2-maseki`、`role2-akuma`，對照 `role-*` 改前；只讀含職業詞人物的段落，Claude 方案；兩本 198 個請求、約 39 分鐘，Claude 5h 42%→68%、每週 14%→17%）：
+  - 《魔石グルメ》給仕 8 位：改前「給仕」卡混 6 人、「年配の給仕」卡混 2 人；改後只有王城給仕 1 句掛在年長給仕的卡（模型新建的「老いた給仕」卡吸收了舊卡）；年長給仕 21 句全在同一張卡；其他各一張卡、標 `may_be`，覆核 4 題答看不出來。
+  - 《悪魔公女》沒有錯併；額頭有傷的惡魔被建成「悪魔」「古い個体」兩張卡（相鄰兩個請求各自新建，兩張都有別名「執事悪魔」，沒有出覆核題）；女僕フェル多了群體詞別名「三人メイドさん」。
