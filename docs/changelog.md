@@ -1407,3 +1407,4 @@ open workspace/eval/<timestamp>/report.html
   - 不修：升級到 migration 39 的舊資料庫裡，前一版留下的候選名字連結（只有這個分支沒合併的 651d52d 會寫；舊書是測試資料，重新匯入即可）。
   - 測試新增 1 個、`test_series.py` 搬書的測試多檢查這張表（用 be5f8a2 的程式都失敗）。1037 passed、2 skipped；ruff、mypy 通過。
 - 抽測（`workspace/exp/speaker-real/role3-akuma`，跑的是 7006c31，同 ADR-110 的段落，Claude 方案；105 個請求、21 分鐘，Claude 5h 56%→71%（含同時段這個對話的工作）、每週 28%→29%）：這次模型沒有把惡魔拆成兩張卡（一張「執事悪魔」、24 句，別名「お猿さん」對照原文是同一隻），新的詢問沒有機會被觸發；フェル沒有群體別名。
+- Codex 第四輪（7f9134d）：沒有新的 P1、P2。
