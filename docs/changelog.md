@@ -1428,3 +1428,4 @@ open workspace/eval/<timestamp>/report.html
 - 提示詞：`house_style`（方言、口音的 `render_zh`）、`proofread`／`review`（`habits` 把刻意的說話方式改成標準說法時回報）。
 - 實測（複製 Claude 整本的工作區 `workspace/exp/kaguya/dialect`，`ncte style auto` 重定體例，再重譯 13 段母親與彩葉對爺爺的台詞，Claude 方案，15 個請求）：體例改成「用冷靜、軟中帶刺的口語，如『可以啊』『不行喔』……不換成臺語」；譯文語氣詞變多（喔、啦、哪、多謝），單句仍不太看得出是方言，彩葉對爺爺換腔也幾乎看不出。重譯另有一句誰打誰譯反（§2834「サンドバックにしてええんか」→「妳打算把我當沙包打」，原譯是對的；直接重譯沒經過校稿）。
 - 測試：提示詞渲染測試通過；1040 passed、2 skipped；ruff、mypy 通過。
+- Codex 第一輪（1b4d5bf）：沒有新的 P1、P2。合併進 main。
