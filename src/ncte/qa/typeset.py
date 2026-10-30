@@ -24,8 +24,13 @@ _FULL_ALNUM = str.maketrans({chr(c): chr(c - 0xFEE0) for c in [*range(0xFF10, 0x
 _PLACEHOLDER = re.compile(r"⟦/?\d+/?⟧")
 
 
+_NUMBER_AFTER = re.compile(r"[￥¥$€£]?\d")
+
+
 def _dash(m: re.Match[str]) -> str:
     n = len(m.group(0))
+    if m.group(0) == "－" and _NUMBER_AFTER.match(m.string, m.end()):
+        return "－"  # a minus sign (「－5度」, 「－￥124400」), not a dash
     return "——" * max(1, (n + 1) // 2)  # a dash is two em dashes; a long rule stays long
 
 
@@ -44,14 +49,17 @@ def _chinese(s: str) -> bool:
     return any("぀" <= ch <= "鿿" for ch in s)
 
 
-_LEAD = re.compile(r"^[ \u3000]*")
+_LEAD = re.compile(r"^([ \u3000]*)((?:⟦\d+⟧)*)([ \u3000]*)")
 
 
 def indent_like(text: str, source: str) -> str:
-    """The translation starts with the source paragraph's indent (「　」 or none), whatever the model wrote."""
+    """The translation starts with the source paragraph's indent (「　」 or none), whatever the model wrote; the indent
+    may come after the opening placeholders of a paragraph that is all one styled run (「⟦1⟧　チーム…」)."""
     lead, rest = _LEAD.match(source), _LEAD.match(text)
     assert lead is not None and rest is not None  # the pattern matches any string
-    return lead.group(0) + text[rest.end():]
+    if lead.group(2) == rest.group(2):
+        return lead.group(1) + rest.group(2) + lead.group(3) + text[rest.end():]
+    return lead.group(1) + lead.group(3) + rest.group(2) + text[rest.end():]
 
 
 def typeset(text: str, source: str | None = None) -> str:

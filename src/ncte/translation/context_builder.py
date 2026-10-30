@@ -230,3 +230,26 @@ def heading_hints(conn: sqlite3.Connection, book_id: str) -> list[dict[str, str]
         if "⟦" not in zh and "⟦" not in src:
             out.append({"ja": r["plain_text"], "zh": zh})
     return out
+
+
+REPEAT_MIN = 8  # characters: a short line (「……」「はい」) comes again by itself, not as an echo
+_NOT_WORDS = re.compile(r"[\s　―─—…・「」『』（）()]+")
+
+
+def repeated_earlier(conn: sqlite3.Connection, book_id: str, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    """Paragraphs written word for word as an earlier paragraph of the book (an opening line the author repeats
+    later), each with that paragraph's current translation. Only the match is the program's: whether the echo is
+    meant, and so kept, is the model's to judge."""
+    from ..epub.units import PH_RE
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        if len(_NOT_WORDS.sub("", r["plain_text"])) < REPEAT_MIN:
+            continue
+        for e in conn.execute("SELECT id, ordinal, source_hash FROM units WHERE book_id=? AND plain_text=? AND "
+                              "ordinal<? AND kind IN ('text', 'heading') ORDER BY ordinal",
+                              (book_id, r["plain_text"], r["ordinal"])):
+            if (t := latest_translation(conn, e["id"], e["source_hash"])) is not None:
+                out.append({"unit_id": r["id"], "earlier_translation": PH_RE.sub("", t["text"]).strip()})
+                break
+    return out

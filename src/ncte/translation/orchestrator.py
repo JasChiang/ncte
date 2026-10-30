@@ -41,6 +41,7 @@ from .context_builder import (
     glossary_payload,
     heading_hints,
     neighbor_context,
+    repeated_earlier,
     shown_context,
 )
 from .translator import Translator, UnitInput
@@ -607,6 +608,8 @@ class Orchestrator:
                 if found:  # ADR-026: wordplay / references found while reading this very unit
                     ctx["wordplay"] = [{"unit_id": f["unit_id"], "term": f["term"], "explanation": f["explanation"],
                                         **({"note": f["note_zh"]} if f["note_zh"] else {})} for f in found]
+                if repeats := repeated_earlier(self.conn, self.book.id, batch.rows):
+                    ctx["repeats"] = repeats
             return ctx
 
     def qa_glossary(self) -> list[dict[str, Any]]:

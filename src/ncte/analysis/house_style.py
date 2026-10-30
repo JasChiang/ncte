@@ -28,6 +28,7 @@ from .impressions import main_characters
 
 LINES = 12  # spread through the book
 MAX_RULES = 10  # house rules kept; each main honorific type may take one (ADR-074)
+READER_NOTES = 40  # notes from reading; a book has a few (3 in one 3,300-paragraph book)
 EXAMPLES = 8  # one line for each repeated ending, so a habit is seen whatever the spread picks
 _END = re.compile(r"[」』！？!?…―─。、　 ～ー\s]+$")
 
@@ -123,6 +124,13 @@ def request(conn: sqlite3.Connection, book_id: str) -> tuple[dict[str, Any], dic
     req: dict[str, Any] = {"task": "house_style", "characters": items, "address_forms": forms}
     if names:
         req["names"] = names
+    # what reading found at one paragraph (a style borrowed from a classic, a reference): a device the book uses
+    # again elsewhere, even before that paragraph, can become a rule tied to how those sentences are written
+    found = [{"at": r["ordinal"], "term": r["term"], "explanation": r["explanation"][:200]} for r in conn.execute(
+        "SELECT u.ordinal, n.term, n.explanation FROM reader_notes n JOIN units u ON u.id=n.unit_id WHERE n.book_id=? "
+        "AND n.status!='dropped' ORDER BY u.ordinal LIMIT ?", (book_id, READER_NOTES))]
+    if found:
+        req["reader_notes"] = found
     return req, refs
 
 
