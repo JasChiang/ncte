@@ -132,3 +132,5 @@ def test_the_indent_is_the_source_paragraphs():
     assert typeset("啊...", None) == "啊……"
     assert typeset("⟦1⟧⟦2⟧我低調地回應。⟦/2⟧⟦/1⟧", "⟦1⟧⟦2⟧　控え目に⟦/2⟧⟦/1⟧") == "⟦1⟧⟦2⟧　我低調地回應。⟦/2⟧⟦/1⟧"
     assert typeset("⟦1⟧　『喂。』⟦/1⟧", "⟦1⟧『おい』⟦/1⟧") == "⟦1⟧『喂。』⟦/1⟧"  # the indent after the opening placeholders
+    assert typeset("⟦1⟧　⟦2/⟧喂。⟦/1⟧", "⟦1⟧⟦2/⟧　おい⟦/1⟧") == "⟦1⟧⟦2/⟧　喂。⟦/1⟧"  # an empty anchor among them
+    assert typeset("⟦1⟧喂。⟦/1⟧", "⟦1⟧⟦2/⟧　おい⟦/1⟧") == "　⟦1⟧喂。⟦/1⟧"  # the anchor left out: indent in front

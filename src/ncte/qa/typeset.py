@@ -49,17 +49,19 @@ def _chinese(s: str) -> bool:
     return any("぀" <= ch <= "鿿" for ch in s)
 
 
-_LEAD = re.compile(r"^([ \u3000]*)((?:⟦\d+⟧)*)([ \u3000]*)")
+_LEAD = re.compile(r"^(?:[ \u3000]|⟦\d+/?⟧)*")  # spaces and the opening or empty placeholders before the first word
 
 
 def indent_like(text: str, source: str) -> str:
     """The translation starts with the source paragraph's indent (「　」 or none), whatever the model wrote; the indent
-    may come after the opening placeholders of a paragraph that is all one styled run (「⟦1⟧　チーム…」)."""
+    may come after the opening placeholders of a paragraph that is all one styled run (「⟦1⟧　チーム…」). With the same
+    placeholders in front, the source's front is used as it is; otherwise the indent goes before the translation's."""
     lead, rest = _LEAD.match(source), _LEAD.match(text)
     assert lead is not None and rest is not None  # the pattern matches any string
-    if lead.group(2) == rest.group(2):
-        return lead.group(1) + rest.group(2) + lead.group(3) + text[rest.end():]
-    return lead.group(1) + lead.group(3) + rest.group(2) + text[rest.end():]
+    marks = _PLACEHOLDER.findall(rest.group(0))
+    if _PLACEHOLDER.findall(lead.group(0)) == marks:
+        return lead.group(0) + text[rest.end():]
+    return _PLACEHOLDER.sub("", lead.group(0)) + "".join(marks) + text[rest.end():]
 
 
 def typeset(text: str, source: str | None = None) -> str:

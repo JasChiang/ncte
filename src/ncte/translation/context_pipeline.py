@@ -868,7 +868,7 @@ class ContextOrchestrator(Orchestrator):
             seen = house_style.names_seen(self.conn, self.book.id)  # naming may change them afterwards (2.12)
         stats: dict[str, int] = {}
         unasked: list[str] = []
-        if req["characters"]:
+        if req["characters"] or req.get("reader_notes"):  # a book with no main character may still borrow a style
             try:
                 parsed = self._ask_once_more("house_style", load_prompt("house_style"), req, "house style")
             except FatalAPIError:

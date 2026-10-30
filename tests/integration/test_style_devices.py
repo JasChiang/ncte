@@ -36,3 +36,29 @@ def test_a_repeated_paragraph_comes_with_the_earlier_translation(conn, cfg, fixt
     rows = {r["id"]: r for r in _body(conn, book.id)}
     assert repeated_earlier(conn, book.id, [rows[first["id"]], rows[short["id"]], rows[again["id"]]]) == [
         {"unit_id": again["id"], "earlier_translation": "——從前，有個打電動的女高中生。"}]
+
+
+def test_a_book_with_no_main_character_still_gets_a_house_style_from_its_notes(conn, cfg, fixtures, monkeypatch):
+    """Codex review (35d601c): a dialogue-light book has no main character, and the house style was not asked at all,
+    so a style the book borrows never became a rule."""
+    import re
+
+    from ncte.analysis import house_style
+    from ncte.llm.fake import FakeLLM
+
+    from ..helpers import run_book
+    from ..scripted import RESPONDERS, memory_update
+
+    def mem(payload, req):
+        out = memory_update(payload, req)
+        u = payload["units"][0]
+        quote = re.sub(r"⟦/?\d+/?⟧", "", u["source"]).strip()[:6]
+        out["wordplay"] = [{"unit_id": u["unit_id"], "term": quote, "explanation": "仿古文的開場", "note_zh": "",
+                            "evidence_quote": quote}]
+        return out
+
+    monkeypatch.setattr(house_style, "main_characters", lambda conn, book_id: [])
+    fake = FakeLLM(responders={**RESPONDERS, "memory_update": mem})
+    run_book(conn, cfg, fixtures["basic"], fake, mode="context")
+    asked = [p for p, c in zip(fake.payloads, fake.calls, strict=True) if c.stage == "house_style"]
+    assert asked and asked[0]["characters"] == [] and asked[0]["reader_notes"]
