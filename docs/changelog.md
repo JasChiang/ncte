@@ -1408,3 +1408,18 @@ open workspace/eval/<timestamp>/report.html
   - 測試新增 1 個、`test_series.py` 搬書的測試多檢查這張表（用 be5f8a2 的程式都失敗）。1037 passed、2 skipped；ruff、mypy 通過。
 - 抽測（`workspace/exp/speaker-real/role3-akuma`，跑的是 7006c31，同 ADR-110 的段落，Claude 方案；105 個請求、21 分鐘，Claude 5h 56%→71%（含同時段這個對話的工作）、每週 28%→29%）：這次模型沒有把惡魔拆成兩張卡（一張「執事悪魔」、24 句，別名「お猿さん」對照原文是同一隻），新的詢問沒有機會被觸發；フェル沒有群體別名。
 - Codex 第四輪（7f9134d）：沒有新的 P1、P2。
+
+## ADR-112 負號與標記後的縮排；文體戲仿記進體例；重複段落（2026-10-30，分支 typeset-minus-indent，基於 main c503f19）
+- `qa/typeset.py`：單獨的「－」後接數字或貨幣符號時保留；`indent_like` 跳過開頭的標記。`analysis/house_style.py`：請求附 `reader_notes`（最多 40 條）。`translation/context_builder.py` `repeated_earlier`，`orchestrator.batch_context` 附 `repeats`。提示詞：`memory_update`／`scene_read` 的 `wordplay` 加文體戲仿與它的證據；`house_style` 的輸入與規則原則；`translate` 的 `repeats`。
+- 測試：`test_qa_rules.py` 補負號與標記後縮排；`tests/integration/test_style_devices.py`（新，2 個）。1039 passed、2 skipped（有一次整套跑 `test_proofread.py` 一個失敗，單獨與再跑整套都通過）；ruff、mypy 通過。
+- 2026-10-29／30 的實測（main c503f19，`workspace/exp/kaguya`）：
+  - Claude 整本（3,280 段）：789 個請求，牆上 5 小時 53 分，其中約 3.5 小時在等 5 小時額度（2:40 重置）；每週 43%→53%（含同時段這個對話）。校稿兩輪修 98 處、讀者檢查修 5 處；剩 1 項高程度（上面的負號）。
+  - Codex 序章加前兩章（947 段）：245 個請求，牆上 5 小時 53 分，大半在等 5 小時額度；每週 33%→至少 41%（撞上限後不再回報）。段首縮排掉了 469/496 段（上面第 2 點，`recheck` 補回）；母親的關西腔譯成一般口語，修正時改成台語味，三處修正檢查判未解決。開場的仿古句比 Claude 平。
+  - 同一段比較（序章開頭）：Claude 較順；Codex 主詞交代較散；舊 Gemini 版「……女高中生是也」不自然。
+- 抽測（這個分支，序章加第一章 225 段，Claude 方案；95 個請求、18 分 42 秒，5h 57%→71%（含這個對話）、每週 56%→57%）：體例定出一條「帶文言句尾『～ありけり』的仿《竹取物語》古文句子譯成仿文言，其餘敘述照原文口吻」；序章第 40 段與第一章第 222 段都譯成「有一尋常女高中生，方玩遊戲焉。」，第 22 段「今は昔」→「話說從前」，前後的現代敘述照常；第 221 段重複序章第 36 段，兩次譯得一樣。讀序章時仍沒有記成註記（註記在第 222 段），序章靠的是體例規則。剩 3 項高程度都是修正檢查不採用的修正（把原文留白的否定對象寫死）。
+- 同時 `glossary_mismatch` 把長片假名裡的人名算進去的誤報已記在 `docs/todo.md`（c503f19）。
+- Codex 第一輪（b8bcbd1）兩個 P2，都修了：
+  - 段落開頭的標記之間夾了空的錨點（「⟦1⟧⟦2/⟧　…」），譯文把縮排放在錨點前（「⟦1⟧　⟦2/⟧…」）時，原本會刪掉已經對的縮排。開頭的空白與標記（含空錨點）一起看：標記和原文相同就照原文的開頭，不同就把縮排放在最前面。
+  - 沒有主要角色（台詞少的第三人稱書）時，定體例的步驟原本不問；現在有讀書註記也會問。
+  - 測試新增 2 個斷言與 1 個測試（用 b8bcbd1 的程式都失敗）。1040 passed、2 skipped；ruff、mypy 通過。
+- Codex 第二輪（577603c）：沒有新的 P1、P2。合併進 main。

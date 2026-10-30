@@ -116,6 +116,7 @@ def test_house_punctuation_is_the_same_everywhere():
     assert typeset("啊……⟦1⟧!?⟦/1⟧」") == "啊……⟦1⟧！？⟦/1⟧」" and typeset("「⟦/1⟧⟦2⟧!?⟦/2⟧　是") == "「⟦/1⟧⟦2⟧！？⟦/2⟧　是"
     assert typeset("喂～⟦1⟧!!⟦/1⟧　這") == "喂～⟦1⟧！！⟦/1⟧　這"
     assert typeset("卡拉ＯＫ和２個人") == "卡拉OK和2個人"  # letters and digits half-width
+    assert typeset("較前日　￥－１２４４００") == "較前日　￥－124400" and typeset("氣溫－５度，冷－－") == "氣溫－5度，冷——"  # a minus sign stays
     assert typeset("完美了♡ 對吧♡") == "完美了♡　對吧♡" and typeset("耶！？ 搞什麼") == "耶！？　搞什麼"
     assert typeset("☆ FUSHI，交給妳") == "☆ FUSHI，交給妳" and typeset("我有 3 個") == "我有 3 個"  # beside Latin: kept
     assert typeset("⟦1⟧!?⟦/1⟧") == "⟦1⟧!?⟦/1⟧" and typeset("他說⟦1⟧OK, go!⟦/1⟧") == "他說⟦1⟧OK, go!⟦/1⟧"
@@ -129,3 +130,7 @@ def test_the_indent_is_the_source_paragraphs():
     assert typeset("　『喂。』", "『おい』") == "『喂。』"
     assert typeset("　⟦1⟧啊⟦/1⟧!?", "　⟦1⟧あ⟦/1⟧!?") == "　⟦1⟧啊⟦/1⟧！？"
     assert typeset("啊...", None) == "啊……"
+    assert typeset("⟦1⟧⟦2⟧我低調地回應。⟦/2⟧⟦/1⟧", "⟦1⟧⟦2⟧　控え目に⟦/2⟧⟦/1⟧") == "⟦1⟧⟦2⟧　我低調地回應。⟦/2⟧⟦/1⟧"
+    assert typeset("⟦1⟧　『喂。』⟦/1⟧", "⟦1⟧『おい』⟦/1⟧") == "⟦1⟧『喂。』⟦/1⟧"  # the indent after the opening placeholders
+    assert typeset("⟦1⟧　⟦2/⟧喂。⟦/1⟧", "⟦1⟧⟦2/⟧　おい⟦/1⟧") == "⟦1⟧⟦2/⟧　喂。⟦/1⟧"  # an empty anchor among them
+    assert typeset("⟦1⟧喂。⟦/1⟧", "⟦1⟧⟦2/⟧　おい⟦/1⟧") == "　⟦1⟧喂。⟦/1⟧"  # the anchor left out: indent in front
